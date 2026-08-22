@@ -5,6 +5,7 @@ import {
   medianSmoothPitchFrames,
   midiToFrequency,
   type PitchFrame,
+  type YinPitchFrame,
   smoothPitchFrames,
 } from "../src";
 
@@ -123,5 +124,23 @@ describe("combined frame smoothing", () => {
     });
 
     expect(midiValues(result)).toEqual([69, 81, 69]);
+  });
+
+  it("preserves detector diagnostics while smoothing pitch coordinates", () => {
+    const source: YinPitchFrame[] = [69, 74, 69].map((midi, index) => ({
+      ...frame(midi, index),
+      detector: "yin",
+      periodSamples: 100 + index,
+      yinValue: 0.05 + index / 100,
+      reason: "detected"
+    }));
+
+    const result = smoothPitchFrames(source);
+
+    expect(result[1].midiFloat).toBe(69);
+    expect(result[1].detector).toBe("yin");
+    expect(result[1].periodSamples).toBe(101);
+    expect(result[1].yinValue).toBeCloseTo(0.06, 8);
+    expect(result[1].reason).toBe("detected");
   });
 });

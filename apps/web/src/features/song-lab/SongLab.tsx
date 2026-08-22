@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useAudioInput } from "@/audio/use-audio-input";
 import { pitchClassLabel } from "@/lib/music-display";
 import { useLab } from "@/state/LabContext";
 import { ActionButton, Eyebrow, Panel, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { InputScope } from "@/ui/InputScope";
 
 type PracticePass = "shadow" | "understand" | "mutate";
 
@@ -16,6 +18,10 @@ function formatTime(seconds: number): string {
 
 export function SongLab() {
   const { tonicPitchClass, setTonicPitchClass } = useLab();
+  const input = useAudioInput({
+    detector: { minFrequency: 65, maxFrequency: 1_100, analysisWindowSize: "maximum", minConfidence: .65 },
+    maxFrames: 360
+  });
   const [audioUrl, setAudioUrl] = useState<string>();
   const [fileName, setFileName] = useState("");
   const [duration, setDuration] = useState(0);
@@ -36,11 +42,30 @@ export function SongLab() {
   const audio = useRef<HTMLAudioElement>(null);
   const recorder = useRef<MediaRecorder | undefined>(undefined);
   const chunks = useRef<Blob[]>([]);
+  const mounted = useRef(false);
+  const audioUrlRef = useRef<string | undefined>(undefined);
+  const takesRef = useRef<VoiceTake[]>([]);
+  const managedObjectUrls = useRef(new Set<string>());
 
-  useEffect(() => () => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    takes.forEach((take) => URL.revokeObjectURL(take.url));
-  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const activeRecorder = recorder.current;
+      recorder.current = undefined;
+      if (activeRecorder && activeRecorder.state !== "inactive") {
+        activeRecorder.ondataavailable = null;
+        activeRecorder.onstop = null;
+        try { activeRecorder.stop(); } catch { /* The recorder may have stopped between the state check and cleanup. */ }
+      }
+      chunks.current = [];
+      input.stop();
+      managedObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      managedObjectUrls.current.clear();
+      audioUrlRef.current = undefined;
+      takesRef.current = [];
+    };
+  }, [input.stop]);
 
   useEffect(() => {
     if (!audio.current) return;
@@ -51,8 +76,13 @@ export function SongLab() {
   const loadFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      managedObjectUrls.current.delete(audioUrlRef.current);
+    }
     const url = URL.createObjectURL(file);
+    managedObjectUrls.current.add(url);
+    audioUrlRef.current = url;
     setAudioUrl(url); setFileName(file.name); setCurrentTime(0); setPeaks([]);
     try {
       const buffer = await file.arrayBuffer();
@@ -97,21 +127,58 @@ export function SongLab() {
   const startRecording = async () => {
     setRecordError("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: { ideal: false }, noiseSuppression: { ideal: false }, autoGainControl: { ideal: false } } });
-      chunks.current = [];
+      if (recorder.current) return;
+      let stream = input.getStream();
+      if (!stream?.active) {
+        if (input.state === "ready") input.stop();
+        const info = await input.start();
+        if (!mounted.current) {
+          input.stop();
+          return;
+        }
+        stream = input.getStream();
+        if (!info || !stream?.active) throw new Error("Could not open the microphone. Check the live input panel and browser permission.");
+      }
+
+      const takeChunks: Blob[] = [];
+      chunks.current = takeChunks;
       const next = new MediaRecorder(stream);
       recorder.current = next;
-      next.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
+      next.ondataavailable = (event) => { if (event.data.size) takeChunks.push(event.data); };
       next.onstop = () => {
-        const blob = new Blob(chunks.current, { type: next.mimeType || "audio/webm" });
-        setTakes((current) => [{ id: crypto.randomUUID(), url: URL.createObjectURL(blob), createdAt: new Date() }, ...current].slice(0, 4));
-        stream.getTracks().forEach((track) => track.stop());
+        if (recorder.current === next) {
+          recorder.current = undefined;
+          if (mounted.current) setRecording(false);
+        }
+        if (!mounted.current) return;
+        const blob = new Blob(takeChunks, { type: next.mimeType || "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        managedObjectUrls.current.add(url);
+        const nextTake = { id: crypto.randomUUID(), url, createdAt: new Date() };
+        const previousTakes = takesRef.current;
+        const nextTakes = [nextTake, ...previousTakes].slice(0, 4);
+        previousTakes.slice(3).forEach((take) => {
+          URL.revokeObjectURL(take.url);
+          managedObjectUrls.current.delete(take.url);
+        });
+        takesRef.current = nextTakes;
+        setTakes(nextTakes);
       };
-      next.start(); setRecording(true);
+      next.start();
+      setRecording(true);
       if (audio.current?.paused) void togglePlayback();
-    } catch (error) { setRecordError(error instanceof Error ? error.message : "Could not start recording."); }
+    } catch (error) {
+      recorder.current = undefined;
+      if (mounted.current) setRecordError(error instanceof Error ? error.message : "Could not start recording.");
+    }
   };
-  const stopRecording = () => { recorder.current?.stop(); setRecording(false); audio.current?.pause(); setPlaying(false); };
+  const stopRecording = () => {
+    const activeRecorder = recorder.current;
+    if (activeRecorder && activeRecorder.state !== "inactive") activeRecorder.stop();
+    else setRecording(false);
+    audio.current?.pause();
+    setPlaying(false);
+  };
 
   const passCopy: Record<PracticePass, { title: string; mission: string; detail: string }> = {
     shadow: { title: "Shadow", mission: "Reproduce the original as precisely as you can.", detail: "Borrow timing, contour, vowel, attack, and release before analyzing." },
@@ -138,7 +205,9 @@ export function SongLab() {
           <Panel className="phrase-markers"><Eyebrow>Phrase notebook</Eyebrow><div><ActionButton onClick={() => setMarkers((current) => [...current, { time: currentTime, type: "phrase" }])}>+ Phrase boundary</ActionButton><ActionButton onClick={() => setMarkers((current) => [...current, { time: currentTime, type: "breath" }])}>+ Breath point</ActionButton></div><label className="field"><span>Intended notes / degrees</span><input value={phraseNote} onChange={(event) => setPhraseNote(event.target.value)} placeholder="3 – 2 – 1 · land on E" /></label></Panel>
         </div>
 
-        <Panel className="three-passes"><div className="panel-heading"><div><Eyebrow>One selected phrase · three passes</Eyebrow><h2>{passCopy[practicePass].title}</h2></div><Segmented value={practicePass} onChange={setPracticePass} options={[{ value: "shadow", label: "1 · Shadow" }, { value: "understand", label: "2 · Understand" }, { value: "mutate", label: "3 · Mutate" }]} /></div><div className="pass-mission"><span className={`pass-symbol ${practicePass}`}><Icon name={practicePass === "shadow" ? "mirror" : practicePass === "understand" ? "skills" : "spark"} size={28} /></span><div><small>CURRENT PASS</small><h3>{passCopy[practicePass].mission}</h3><p>{passCopy[practicePass].detail}</p></div></div><div className="record-strip"><div className="headphone-note"><Icon name="headphones" size={20} /><span><b>Use headphones.</b><small>Keep the backing track out of minimally processed mic input.</small></span></div><ActionButton className={recording ? "recording coral" : "primary"} onClick={recording ? stopRecording : startRecording}><Icon name="record" size={17} /> {recording ? "Stop voice take" : "Record voice against loop"}</ActionButton></div>{recordError && <div className="error-banner">{recordError}</div>}</Panel>
+        <InputScope input={input} title="Voice take input" busy={recording} showPitch />
+
+        <Panel className="three-passes"><div className="panel-heading"><div><Eyebrow>One selected phrase · three passes</Eyebrow><h2>{passCopy[practicePass].title}</h2></div><Segmented value={practicePass} onChange={setPracticePass} options={[{ value: "shadow", label: "1 · Shadow" }, { value: "understand", label: "2 · Understand" }, { value: "mutate", label: "3 · Mutate" }]} /></div><div className="pass-mission"><span className={`pass-symbol ${practicePass}`}><Icon name={practicePass === "shadow" ? "mirror" : practicePass === "understand" ? "skills" : "spark"} size={28} /></span><div><small>CURRENT PASS</small><h3>{passCopy[practicePass].mission}</h3><p>{passCopy[practicePass].detail}</p></div></div><div className="record-strip"><div className="headphone-note"><Icon name="headphones" size={20} /><span><b>Use headphones.</b><small>The scope and saved take use the same minimally processed microphone stream.</small></span></div><ActionButton disabled={!recording && (input.state === "starting" || input.calibration.status === "calibrating")} className={recording ? "recording coral" : "primary"} onClick={recording ? stopRecording : startRecording}><Icon name="record" size={17} /> {recording ? "Stop voice take" : "Record voice against loop"}</ActionButton></div>{recordError && <div className="error-banner">{recordError}</div>}</Panel>
 
         {takes.length > 0 && <Panel className="takes-panel"><div className="panel-heading"><div><Eyebrow>Temporary comparison</Eyebrow><h2>Voice takes</h2></div><span className="local-badge">memory only</span></div><div className="takes-list">{takes.map((take, index) => <div key={take.id}><span>TAKE {takes.length - index}</span><audio controls src={take.url} /><small>{take.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></div>)}</div></Panel>}
       </>}

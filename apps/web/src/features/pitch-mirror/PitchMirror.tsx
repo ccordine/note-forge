@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { detectPitch, smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
+import { smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
-import { MicrophoneCapture, type MicrophoneInfo } from "@/audio/microphone";
+import { useAudioInput } from "@/audio/use-audio-input";
 import { playTone } from "@/audio/synth";
 import { useLab } from "@/state/LabContext";
 import { saveAttempt } from "@/storage/database";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { InputScope } from "@/ui/InputScope";
 import { PitchRibbon } from "./PitchRibbon";
 
 type MirrorMode = "glide" | "delayed" | "cold" | "anchor" | "silent";
@@ -29,59 +30,38 @@ function Metric({ label, value, unit, tone }: { label: string; value?: number; u
 export function PitchMirror() {
   const { selectedMidi, setSelectedMidi, centsOffset, timbre, setTimbre, toleranceCents, setToleranceCents, expertMode } = useLab();
   const [mode, setMode] = useState<MirrorMode>("glide");
-  const [micState, setMicState] = useState<"off" | "starting" | "ready" | "error">("off");
-  const [microphoneInfo, setMicrophoneInfo] = useState<MicrophoneInfo | null>(null);
-  const [microphoneError, setMicrophoneError] = useState("");
-  const [rawFrames, setRawFrames] = useState<YinPitchFrame[]>([]);
   const [attemptFrames, setAttemptFrames] = useState<PitchFrame[]>([]);
   const [attempting, setAttempting] = useState(false);
   const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
   const [countdown, setCountdown] = useState<string>("READY");
-  const captureRef = useRef(new MicrophoneCapture());
   const attemptFramesRef = useRef<PitchFrame[]>([]);
   const attemptStartRef = useRef(0);
   const attemptActiveRef = useRef(false);
   const attemptTimersRef = useRef<number[]>([]);
+  const input = useAudioInput({
+    detector: {
+      minFrequency: 65,
+      maxFrequency: 1_100,
+      analysisWindowSize: 2_048,
+      yinThreshold: 0.16,
+      minConfidence: 0.7
+    },
+    bufferSize: 4_096,
+    maxFrames: 240,
+    onFrame: (frame) => {
+      if (attemptStartRef.current > 0) attemptFramesRef.current.push(frame);
+    }
+  });
   const targetFrequency = continuousMidiToHz(selectedMidi, centsOffset);
   const targetMidiFloat = selectedMidi + centsOffset / 100;
-  const displayFrames = useMemo(() => smoothPitchFrames(rawFrames.slice(-180), { correctOctaveJumps: true }), [rawFrames]);
-  const liveFrame = displayFrames.at(-1) as YinPitchFrame | undefined;
+  const displayFrames = useMemo(() => smoothPitchFrames(input.frames.slice(-180), { correctOctaveJumps: true }), [input.frames]);
+  const rawLiveFrame = input.liveFrame;
+  const smoothedLiveFrame = displayFrames.at(-1);
 
   useEffect(() => () => {
-    captureRef.current.stop();
     attemptActiveRef.current = false;
     attemptTimersRef.current.forEach(window.clearTimeout);
   }, []);
-
-  const startMicrophone = async () => {
-    setMicState("starting");
-    setMicrophoneError("");
-    try {
-      const info = await captureRef.current.start(({ samples, capturedAt, sampleRate }) => {
-        const frame = detectPitch(samples, {
-          sampleRate, minFrequency: 65, maxFrequency: 1_100, analysisWindowSize: Math.min(2048, samples.length - Math.ceil(sampleRate / 65) - 2),
-          yinThreshold: 0.16, minConfidence: 0.7, rmsThreshold: 0.004, timeSeconds: capturedAt
-        });
-        setRawFrames((current) => [...current.slice(-239), frame]);
-        if (attemptStartRef.current > 0) attemptFramesRef.current.push(frame);
-      }, 4096);
-      setMicrophoneInfo(info);
-      setMicState("ready");
-    } catch (error) {
-      setMicrophoneError(error instanceof Error ? error.message : "Microphone access failed.");
-      setMicState("error");
-    }
-  };
-
-  const stopMicrophone = () => {
-    captureRef.current.stop();
-    setMicState("off");
-    setAttempting(false);
-    attemptActiveRef.current = false;
-    attemptStartRef.current = 0;
-    attemptTimersRef.current.forEach(window.clearTimeout);
-    attemptTimersRef.current = [];
-  };
 
   const finishAttempt = () => {
     if (!attemptActiveRef.current) return;
@@ -103,12 +83,13 @@ export function PitchMirror() {
   };
 
   const beginAttempt = async () => {
-    if (micState !== "ready") {
-      await startMicrophone();
+    if (input.state !== "ready") {
+      await input.start();
       return;
     }
     setMetrics(null);
     setAttemptFrames([]);
+    input.clearFrames();
     attemptFramesRef.current = [];
     setAttempting(true);
     attemptActiveRef.current = true;
@@ -130,16 +111,14 @@ export function PitchMirror() {
   };
 
   const shownFrames = attempting ? displayFrames : attemptFrames.length ? attemptFrames : displayFrames;
-  const liveError = liveFrame?.midiFloat == null ? null : (liveFrame.midiFloat - targetMidiFloat) * 100;
+  const effectiveTargetMidi = mode === "anchor" ? 69 : targetMidiFloat;
+  const liveError = smoothedLiveFrame?.midiFloat == null ? null : (smoothedLiveFrame.midiFloat - effectiveTargetMidi) * 100;
 
   return (
     <div className="page pitch-mirror-page">
       <div className="lab-intro mirror-intro">
         <div><Eyebrow>Sound → prediction → mechanics</Eyebrow><h1>{modeInfo[mode].instruction}</h1><p>{modeInfo[mode].detail} The ribbon keeps attack, correction, drift, and release visible.</p></div>
-        <div className={`mic-pill ${micState}`}><span className="mic-pulse"><Icon name="mic" size={18} /></span><div><small>MICROPHONE</small><b>{micState === "ready" ? "Listening locally" : micState === "starting" ? "Connecting…" : micState === "error" ? "Needs attention" : "Not connected"}</b></div><button onClick={micState === "ready" ? stopMicrophone : startMicrophone}>{micState === "ready" ? "Stop" : "Enable"}</button></div>
       </div>
-
-      {microphoneError && <div className="error-banner"><strong>Couldn’t open the microphone.</strong><span>{microphoneError} Use localhost or HTTPS and check browser permission.</span></div>}
 
       <Panel className="mirror-mode-panel">
         <Segmented value={mode} onChange={setMode} options={Object.entries(modeInfo).map(([value, item]) => ({ value: value as MirrorMode, label: item.label }))} />
@@ -151,6 +130,14 @@ export function PitchMirror() {
         </div>
       </Panel>
 
+      <InputScope
+        input={input}
+        targetMidiFloat={mode === "anchor" ? 69 : targetMidiFloat}
+        toleranceCents={toleranceCents}
+        busy={attempting}
+        title="Pitch mirror input"
+      />
+
       <Panel className={`mirror-stage ${attempting ? "active" : ""}`}>
         <div className="target-display">
           <span className="target-kicker">TARGET</span>
@@ -158,11 +145,11 @@ export function PitchMirror() {
           <span>{mode === "anchor" ? "440.00" : targetFrequency.toFixed(2)} Hz</span>
           <button className="round-play" onClick={() => playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 })} aria-label="Hear target"><Icon name="play" size={21} /></button>
         </div>
-        <div className="stage-status"><span>{countdown}</span>{liveError != null && <b className={Math.abs(liveError) <= toleranceCents ? "in-band" : ""}>{signed(liveError, 0)}¢</b>}<small>{liveFrame?.voiced ? noteLabel(liveFrame.nearestMidi ?? selectedMidi) : micState === "ready" ? "waiting for voiced sound" : "enable the microphone"}</small></div>
+        <div className="stage-status"><span>{countdown}</span>{liveError != null && <b className={Math.abs(liveError) <= toleranceCents ? "in-band" : ""}>{signed(liveError, 0)}¢</b>}<small>{smoothedLiveFrame?.voiced ? noteLabel(smoothedLiveFrame.nearestMidi ?? selectedMidi) : input.state === "ready" ? "waiting for voiced sound" : "enable the microphone"}</small></div>
         <PitchRibbon frames={shownFrames} targetMidiFloat={mode === "anchor" ? 69 : targetMidiFloat} toleranceCents={toleranceCents} />
         <div className="stage-actions">
           <PlayButton label="Hear target" onClick={() => playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 })} />
-          <ActionButton className={`primary attempt-button ${attempting ? "recording" : ""}`} disabled={attempting || micState === "starting"} onClick={beginAttempt}><Icon name={micState === "ready" ? "mic" : "headphones"} size={18} /> {attempting ? "Measuring…" : micState === "ready" ? "Begin attempt" : "Enable mic to begin"}</ActionButton>
+          <ActionButton className={`primary attempt-button ${attempting ? "recording" : ""}`} disabled={attempting || input.state === "starting"} onClick={beginAttempt}><Icon name={input.state === "ready" ? "mic" : "headphones"} size={18} /> {attempting ? "Measuring…" : input.state === "ready" ? "Begin attempt" : "Enable mic to begin"}</ActionButton>
           {attempting && <ActionButton onClick={finishAttempt}>Finish now</ActionButton>}
         </div>
       </Panel>
@@ -192,7 +179,7 @@ export function PitchMirror() {
         </Panel>
       </div>
 
-      {expertMode && <Panel className="debug-panel"><div className="panel-heading"><div><Eyebrow>Detector evidence</Eyebrow><h2>Expert view</h2></div><span className="debug-live"><i /> live</span></div><dl><div><dt>Raw frequency</dt><dd>{liveFrame?.frequencyHz?.toFixed(3) ?? "—"} Hz</dd></div><div><dt>MIDI float</dt><dd>{liveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Confidence</dt><dd>{liveFrame ? `${(liveFrame.confidence * 100).toFixed(1)}%` : "—"}</dd></div><div><dt>RMS</dt><dd>{liveFrame?.rms.toFixed(5) ?? "—"}</dd></div><div><dt>YIN value</dt><dd>{liveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div><div><dt>Frame status</dt><dd>{liveFrame?.reason ?? "no frame"}</dd></div><div><dt>Window</dt><dd>4096 / 2048 analysis</dd></div><div><dt>Device DSP</dt><dd>{microphoneInfo ? `EC ${String(microphoneInfo.settings.echoCancellation)} · NS ${String(microphoneInfo.settings.noiseSuppression)} · AGC ${String(microphoneInfo.settings.autoGainControl)}` : "not negotiated"}</dd></div></dl></Panel>}
+      {expertMode && <Panel className="debug-panel"><div className="panel-heading"><div><Eyebrow>Detector evidence</Eyebrow><h2>Raw → displayed trace</h2></div><span className="debug-live"><i /> live</span></div><dl><div><dt>Raw MIDI</dt><dd>{rawLiveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Smoothed MIDI</dt><dd>{smoothedLiveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Display correction</dt><dd>{rawLiveFrame?.midiFloat == null || smoothedLiveFrame?.midiFloat == null ? "—" : `${signed((smoothedLiveFrame.midiFloat - rawLiveFrame.midiFloat) * 100, 1)}¢`}</dd></div><div><dt>YIN value</dt><dd>{rawLiveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div><div><dt>Live buffer</dt><dd>{input.frames.length} frames</dd></div><div><dt>Attempt buffer</dt><dd>{attemptFramesRef.current.length} frames</dd></div></dl></Panel>}
     </div>
   );
 }

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { detectPitch, smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
+import { smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
-import { MicrophoneCapture, type MicrophoneInfo } from "@/audio/microphone";
+import { useAudioInput } from "@/audio/use-audio-input";
 import { playTone, type ActiveVoice } from "@/audio/synth";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { useLab } from "@/state/LabContext";
 import { saveAttempt } from "@/storage/database";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { InputScope } from "@/ui/InputScope";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
 
 type HumMode = "anchor" | "match" | "glide" | "sustain";
@@ -89,22 +90,33 @@ export function HumLab() {
   const [mode, setMode] = useState<HumMode>("anchor");
   const [shape, setShape] = useState<HumShape>("m");
   const [phase, setPhase] = useState<Phase>("idle");
-  const [micState, setMicState] = useState<"off" | "starting" | "ready" | "error">("off");
-  const [microphoneInfo, setMicrophoneInfo] = useState<MicrophoneInfo | null>(null);
   const [microphoneError, setMicrophoneError] = useState("");
-  const [rawFrames, setRawFrames] = useState<YinPitchFrame[]>([]);
   const [attemptFrames, setAttemptFrames] = useState<PitchFrame[]>([]);
   const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
   const [anchorResult, setAnchorResult] = useState<AnchorResult | null>(null);
   const [status, setStatus] = useState("READY");
 
-  const captureRef = useRef(new MicrophoneCapture());
   const attemptFramesRef = useRef<YinPitchFrame[]>([]);
   const attemptActiveRef = useRef(false);
   const attemptModeRef = useRef<HumMode>("anchor");
   const attemptStartedAtRef = useRef("");
   const timersRef = useRef<number[]>([]);
   const guideVoiceRef = useRef<ActiveVoice | null>(null);
+  const input = useAudioInput({
+    detector: {
+      minFrequency: 60,
+      maxFrequency: 1_000,
+      analysisWindowSize: "maximum",
+      yinThreshold: 0.18,
+      minConfidence: 0.62
+    },
+    maxFrames: 280,
+    onFrame: (frame) => {
+      if (attemptActiveRef.current) attemptFramesRef.current.push(frame);
+    }
+  });
+  const micState = input.state;
+  const rawFrames = input.frames;
   const targetMidiFloat = selectedMidi + centsOffset / 100;
   const targetFrequency = continuousMidiToHz(selectedMidi, centsOffset);
   const attempting = phase === "listen" || phase === "hum";
@@ -112,7 +124,8 @@ export function HumLab() {
     () => smoothPitchFrames(rawFrames.slice(-220), { correctOctaveJumps: true }),
     [rawFrames]
   );
-  const liveFrame = displayFrames.at(-1) as YinPitchFrame | undefined;
+  const smoothedLiveFrame = displayFrames.at(-1);
+  const liveFrame = input.liveFrame;
 
   const anchorPreview = useMemo(() => {
     const source = phase === "hum" && mode === "anchor" ? displayFrames : attemptFrames.length ? attemptFrames : displayFrames;
@@ -123,7 +136,7 @@ export function HumLab() {
     ? anchorResult?.midiFloat ?? anchorPreview ?? targetMidiFloat
     : targetMidiFloat;
   const shownFrames = attempting ? displayFrames : attemptFrames.length ? attemptFrames : displayFrames;
-  const liveError = liveFrame?.midiFloat == null ? null : (liveFrame.midiFloat - ribbonTarget) * 100;
+  const liveError = smoothedLiveFrame?.midiFloat == null ? null : (smoothedLiveFrame.midiFloat - ribbonTarget) * 100;
 
   const clearTimers = () => {
     timersRef.current.forEach(window.clearTimeout);
@@ -139,46 +152,17 @@ export function HumLab() {
     clearTimers();
     stopGuide();
     attemptActiveRef.current = false;
-    captureRef.current.stop();
   }, []);
 
   const startMicrophone = async () => {
-    setMicState("starting");
     setMicrophoneError("");
-    try {
-      const info = await captureRef.current.start(({ samples, capturedAt, sampleRate }) => {
-        const frame = detectPitch(samples, {
-          sampleRate,
-          minFrequency: 60,
-          maxFrequency: 1_000,
-          analysisWindowSize: Math.min(4096, samples.length - Math.ceil(sampleRate / 60) - 2),
-          yinThreshold: 0.18,
-          minConfidence: 0.62,
-          rmsThreshold: 0.0025,
-          timeSeconds: capturedAt
-        });
-        setRawFrames((current) => [...current.slice(-279), frame]);
-        if (attemptActiveRef.current) attemptFramesRef.current.push(frame);
-      }, 4096);
-      setMicrophoneInfo(info);
-      setMicState("ready");
+    setStatus("CONNECTING");
+    const info = await input.start();
+    if (info) {
       setStatus("MIC READY");
-    } catch (error) {
-      setMicrophoneError(error instanceof Error ? error.message : "Microphone access failed.");
-      setMicState("error");
+    } else {
       setStatus("MIC ERROR");
     }
-  };
-
-  const stopMicrophone = () => {
-    clearTimers();
-    stopGuide();
-    attemptActiveRef.current = false;
-    attemptFramesRef.current = [];
-    captureRef.current.stop();
-    setMicState("off");
-    setPhase("idle");
-    setStatus("READY");
   };
 
   const finishAttempt = () => {
@@ -266,7 +250,7 @@ export function HumLab() {
   const beginRecording = (attemptMode: HumMode) => {
     attemptModeRef.current = attemptMode;
     attemptFramesRef.current = [];
-    setRawFrames([]);
+    input.clearFrames();
     attemptStartedAtRef.current = new Date().toISOString();
     attemptActiveRef.current = true;
     setPhase("hum");
@@ -327,12 +311,15 @@ export function HumLab() {
           <h1>{MODES[mode].headline}</h1>
           <p>{MODES[mode].detail} The contour remains continuous; quiet humming is never snapped to a piano key before scoring.</p>
         </div>
-        <div className={`mic-pill ${micState}`}>
-          <span className="mic-pulse"><Icon name="mic" size={18} /></span>
-          <div><small>MICROPHONE</small><b>{micState === "ready" ? "Listening locally" : micState === "starting" ? "Connecting…" : micState === "error" ? "Needs attention" : "Not connected"}</b></div>
-          <button onClick={micState === "ready" ? stopMicrophone : startMicrophone}>{micState === "ready" ? "Stop" : "Enable"}</button>
-        </div>
       </div>
+
+      <InputScope
+        input={input}
+        title="Hum input scope"
+        targetMidiFloat={mode === "anchor" ? undefined : targetMidiFloat}
+        toleranceCents={toleranceCents}
+        busy={attempting}
+      />
 
       {microphoneError && <div className="error-banner"><strong>Hum signal needs attention.</strong><span>{microphoneError}</span></div>}
 
@@ -436,7 +423,7 @@ export function HumLab() {
             <div><dt>YIN value</dt><dd>{liveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div>
             <div><dt>Frame status</dt><dd>{liveFrame?.reason ?? "no frame"}</dd></div>
             <div><dt>Window</dt><dd>4096 analysis</dd></div>
-            <div><dt>Device DSP</dt><dd>{microphoneInfo ? `EC ${String(microphoneInfo.settings.echoCancellation)} · NS ${String(microphoneInfo.settings.noiseSuppression)} · AGC ${String(microphoneInfo.settings.autoGainControl)}` : "not negotiated"}</dd></div>
+            <div><dt>Detector gate</dt><dd>{input.gateThresholdDbfs.toFixed(1)} dBFS</dd></div>
           </dl>
         </Panel>
       )}

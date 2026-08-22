@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { detectPitch, smoothPitchFrames, type PitchFrame } from "@noteforge/pitch-engine";
+import { smoothPitchFrames, type PitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
-import { MicrophoneCapture } from "@/audio/microphone";
+import { useAudioInput } from "@/audio/use-audio-input";
 import { playTone } from "@/audio/synth";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import { useLab } from "@/state/LabContext";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { InputScope } from "@/ui/InputScope";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
 
 type EnvelopeType = "free" | "steady" | "crescendo" | "decrescendo" | "diamond" | "pulses";
@@ -27,8 +28,19 @@ function interpolateEnvelope(points: readonly number[], progress: number): numbe
   return points[index] * (1 - fraction) + (points[Math.min(index + 1, points.length - 1)] ?? points[index]) * fraction;
 }
 
-function scoreEnvelope(frames: readonly PitchFrame[], points: readonly number[], start: number, duration: number): number | undefined {
-  const data = frames.filter((frame) => frame.timeSeconds >= start && frame.timeSeconds <= start + duration && Number.isFinite(frame.rms));
+function scoreEnvelope(
+  frames: readonly PitchFrame[],
+  points: readonly number[],
+  start: number,
+  duration: number,
+  rmsThreshold: number
+): number | undefined {
+  const data = frames.filter((frame) => (
+    frame.timeSeconds >= start
+    && frame.timeSeconds <= start + duration
+    && Number.isFinite(frame.rms)
+    && frame.rms >= rmsThreshold
+  ));
   if (data.length < 4) return undefined;
   const levels = data.map((frame) => frame.rms);
   const min = Math.min(...levels);
@@ -47,13 +59,11 @@ export function PitchControl() {
   const [envelopeType, setEnvelopeType] = useState<EnvelopeType>("diamond");
   const [vowel, setVowel] = useState("oo");
   const [duration, setDuration] = useState(8);
-  const [micReady, setMicReady] = useState(false);
   const [running, setRunning] = useState(false);
   const [frames, setFrames] = useState<PitchFrame[]>([]);
   const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
   const [volumeScore, setVolumeScore] = useState<number>();
   const [elapsed, setElapsed] = useState(0);
-  const capture = useRef(new MicrophoneCapture());
   const recording = useRef<PitchFrame[]>([]);
   const startTime = useRef(0);
   const displayStartTime = useRef(0);
@@ -62,27 +72,24 @@ export function PitchControl() {
   const startTimer = useRef<number | undefined>(undefined);
   const animation = useRef<number | undefined>(undefined);
   const envelope = envelopes[envelopeType];
+  const input = useAudioInput({
+    detector: { minFrequency: 65, maxFrequency: 1_100, minConfidence: 0.7 },
+    maxFrames: 201,
+    onFrame: (frame) => {
+      setFrames((current) => [...current.slice(-200), frame]);
+      if (recordingActive.current) {
+        if (startTime.current === 0) startTime.current = frame.timeSeconds;
+        recording.current.push(frame);
+      }
+    }
+  });
+  const micReady = input.state === "ready";
 
   useEffect(() => () => {
-    capture.current.stop();
     if (finishTimer.current) window.clearTimeout(finishTimer.current);
     if (startTimer.current) window.clearTimeout(startTimer.current);
     if (animation.current) cancelAnimationFrame(animation.current);
   }, []);
-
-  const enableMic = async () => {
-    try {
-      await capture.current.start(({ samples, capturedAt, sampleRate }) => {
-        const frame = detectPitch(samples, { sampleRate, minFrequency: 65, maxFrequency: 1_100, rmsThreshold: 0.004, minConfidence: 0.7, timeSeconds: capturedAt });
-        setFrames((current) => [...current.slice(-200), frame]);
-        if (recordingActive.current) {
-          if (startTime.current === 0) startTime.current = frame.timeSeconds;
-          recording.current.push(frame);
-        }
-      });
-      setMicReady(true);
-    } catch { setMicReady(false); }
-  };
 
   const finish = () => {
     recordingActive.current = false;
@@ -96,7 +103,7 @@ export function PitchControl() {
     const result = scoreSustainedNote(smooth, { midi: selectedMidi, centsOffset, durationMs: duration * 1000, timbre, amplitude: 0.25 }, { toleranceCents, promptTimeSeconds: startTime.current });
     setFrames(smooth);
     setMetrics(result);
-    setVolumeScore(scoreEnvelope(smooth, envelope.points, startTime.current, duration));
+    setVolumeScore(scoreEnvelope(smooth, envelope.points, startTime.current, duration, input.gateRmsThreshold));
     startTime.current = 0;
     displayStartTime.current = 0;
     setRunning(false);
@@ -104,8 +111,9 @@ export function PitchControl() {
   };
 
   const start = async () => {
-    if (!micReady) { await enableMic(); return; }
+    if (!micReady) { await input.start(); return; }
     recording.current = [];
+    input.clearFrames();
     setFrames([]);
     setMetrics(null);
     setVolumeScore(undefined);
@@ -138,7 +146,6 @@ export function PitchControl() {
     <div className="page control-page">
       <div className="lab-intro">
         <div><Eyebrow>Decouple the controls</Eyebrow><h1>Move the energy. Keep the center.</h1><p>Pitch and loudness are scored as independent dimensions. A crescendo is not an invitation to go sharp.</p></div>
-        <div className={`mic-pill ${micReady ? "ready" : "off"}`}><span className="mic-pulse"><Icon name="mic" size={18} /></span><div><small>MICROPHONE</small><b>{micReady ? "Listening locally" : "Not connected"}</b></div><button onClick={enableMic}>{micReady ? "Ready" : "Enable"}</button></div>
       </div>
 
       <Panel className="control-config">
@@ -151,6 +158,14 @@ export function PitchControl() {
           <Select label="Duration" value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option></Select>
         </div>
       </Panel>
+
+      <InputScope
+        input={input}
+        targetMidiFloat={selectedMidi + centsOffset / 100}
+        toleranceCents={toleranceCents}
+        title="Pitch and level monitor"
+        busy={running}
+      />
 
       <Panel className={`envelope-stage ${running ? "active" : ""}`}>
         <div className="envelope-header"><div><span>MISSION · {vowel.toUpperCase()}</span><h2>{envelope.cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(selectedMidi)}</strong><span>±{toleranceCents}¢</span></div></div>
@@ -167,7 +182,7 @@ export function PitchControl() {
           <div className="envelope-axis"><span>quiet</span><span>VOLUME · RMS</span><span>loud</span></div>
         </div>
         <PitchRibbon frames={frames} targetMidiFloat={selectedMidi + centsOffset / 100} toleranceCents={toleranceCents} durationSeconds={duration} envelope={normalizedRms} />
-        <div className="stage-actions"><PlayButton label="Reference pitch" onClick={() => playTone({ frequencyHz: continuousMidiToHz(selectedMidi, centsOffset), timbre, duration: 1.15 })} /><ActionButton className="primary" onClick={start} disabled={running}><Icon name="mic" size={18} /> {running ? `${Math.max(0, duration - elapsed).toFixed(1)}s` : micReady ? "Begin controlled hold" : "Enable mic to begin"}</ActionButton>{running && <ActionButton onClick={finish}>Finish</ActionButton>}</div>
+        <div className="stage-actions"><PlayButton label="Reference pitch" onClick={() => playTone({ frequencyHz: continuousMidiToHz(selectedMidi, centsOffset), timbre, duration: 1.15 })} /><ActionButton className="primary" onClick={start} disabled={running || input.state === "starting"}><Icon name="mic" size={18} /> {running ? `${Math.max(0, duration - elapsed).toFixed(1)}s` : input.state === "starting" ? "Connecting…" : micReady ? "Begin controlled hold" : "Enable mic to begin"}</ActionButton>{running && <ActionButton onClick={finish}>Finish</ActionButton>}</div>
       </Panel>
 
       <div className="split-score">

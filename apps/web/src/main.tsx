@@ -5,6 +5,7 @@ import { LabProvider } from "./state/LabContext";
 import "./styles.css";
 import "./styles-scale.css";
 import "./styles-hum.css";
+import "./styles-input.css";
 import "./styles-responsive.css";
 
 createRoot(document.getElementById("root")!).render(

@@ -41,13 +41,14 @@ Register or update the running `noteforge-app` container through WorkNet's **Pub
 
 - **Sound Laboratory:** playable keyboard, chromatic wheel, continuous frequency and one-cent detuning, note/dyad/chord playback, drone, multiple synthesized timbres, label hiding, major/minor/pentatonic/blues contexts, and non-prescriptive tension/resolution analysis.
 - **Pitch Mirror:** glide, delayed match, cold attack, memory anchor, and silent-preparation modes; minimally processed microphone requests; AudioWorklet capture; continuous YIN tracking; time-history ribbon; separate attack, center, MAE, in-band, stability, drift, duration, confidence, volume, and vibrato evidence.
+- **Universal Input Scope:** every live-listening workflow shows target-relative cents, detected note and frequency, pitch confidence, dBFS RMS and peak history, clipping, headroom, calibrated room floor, detector gate, signal margin, and negotiated browser processing. Three-second room calibration and adjustable noise rejection persist per microphone.
 - **Hum Laboratory:** comfortable-anchor discovery plus target matching, glide landing, and sustained-hum practice across M, N, and NG gestures, with voiced continuity and pitch evidence kept distinct from unmeasured resonance or placement.
 - **Pitch & Dynamics:** steady, crescendo, decrescendo, diamond, pulse, and free-volume envelopes with pitch and loudness scored independently.
 - **Note Recognition:** same/different, direction, reference-backed navigation, pitch class, octave-only, complete note, octave family, and cross-timbre practice. Pitch-class and octave answers remain separate.
 - **Interval Laboratory:** melodic ascending/descending and harmonic recognition, production missions, comparisons, phrase mutation, and sound-first presentation.
 - **Harmony Laboratory:** chromatic scale-degree recognition/production against an established tonic, chord-tone and tension production, progression missions, voice-leading maps, and fixed-interval versus chord-aware harmony views.
 - **Melody Laboratory:** generated call-and-response phrases, contour isolation, continuous pitch drawing and synthesis, and a small hearing-to-piano-roll-to-voice loop.
-- **Song Laboratory:** local audio loading, waveform overview, manual looping, speed control, rate-based transpose preview, manual key/chord/phrase notes, breath and phrase markers, and opt-in temporary voice takes across Shadow / Understand / Mutate passes.
+- **Song Laboratory:** local audio loading, waveform overview, manual looping, speed control, rate-based transpose preview, manual key/chord/phrase notes, breath and phrase markers, and opt-in temporary voice takes across Shadow / Understand / Mutate passes. Recording and diagnostics consume the same owned microphone stream.
 - **Skill graph:** 38 trainable primitives with explicit prerequisites, representations, difficulty, confusion-aware state updates, and a deterministic 60 / 20 / 20 adaptive scheduler.
 - **Offline/local storage:** production service-worker shell caching and IndexedDB for contours, metrics, settings, and skill state. Normal pitch sessions do not retain microphone audio.
 
@@ -81,6 +82,8 @@ music-core context ────────────────────�
 - `trainer-core` consumes observations and knows nothing about microphone capture or React.
 - the web application owns permissions, audio routing, persistence, and presentation.
 
+The worklet emits lightweight 1,024-sample level windows for a responsive meter and separate 4,096-sample windows for YIN. Noise calibration measures a median room floor plus an upper noise band, then moves the detector gate above both with hysteresis. It never filters, denoises, or rewrites the recorded waveform.
+
 ## Measurement proof
 
 The automated suite exercises every semitone across the intended vocal range, ±10/25/50-cent detuning, vibrato, harmonic-rich signals, amplitude envelopes, deterministic noise, silence, short/invalid buffers, and transient versus sustained octave changes. It also validates music conversions, contextual ninth/tension language, vibrato-aware scoring, the complete primitive graph, confusion tracking, and the 60/20/20 scheduler.
@@ -91,6 +94,7 @@ Detector failures return explicit unvoiced reasons such as `below-rms-threshold`
 
 - No account or backend is required.
 - Audio input requests mono capture with echo cancellation, noise suppression, and automatic gain control ideally disabled, then exposes the negotiated device settings in Expert view.
+- Room calibration stores only derived dBFS levels and gate preferences in IndexedDB, keyed to the negotiated local microphone ID.
 - Standard training stores pitch contours and derived metrics—not raw recordings.
 - Song Lab voice takes are explicit, temporary, and held in browser memory in this milestone.
 - Local song files are decoded in the browser and never uploaded.

@@ -24,10 +24,10 @@ function validMidi(
 /**
  * Apply a short median filter without inventing pitch across unvoiced gaps.
  */
-export function medianSmoothPitchFrames(
-  frames: readonly PitchFrame[],
+export function medianSmoothPitchFrames<T extends PitchFrame>(
+  frames: readonly T[],
   options: MedianSmoothingOptions = {},
-): PitchFrame[] {
+): T[] {
   const radius = options.radius ?? 1;
   const minSamples = options.minSamples ?? 2 * radius + 1;
 
@@ -100,10 +100,10 @@ function octaveRelation(
  * Correct only brief octave-related runs that return to the prior contour.
  * Sustained octave changes are deliberately retained as musically plausible.
  */
-export function correctOctaveJumps(
-  frames: readonly PitchFrame[],
+export function correctOctaveJumps<T extends PitchFrame>(
+  frames: readonly T[],
   options: OctaveCorrectionOptions = {},
-): PitchFrame[] {
+): T[] {
   const octaveToleranceCents = options.octaveToleranceCents ?? 80;
   const maxOutlierFrames = options.maxOutlierFrames ?? 3;
   const maxOctaveShift = options.maxOctaveShift ?? 2;
@@ -233,10 +233,10 @@ export function correctOctaveJumps(
 }
 
 /** Conservative octave repair followed by a short median contour filter. */
-export function smoothPitchFrames(
-  frames: readonly PitchFrame[],
+export function smoothPitchFrames<T extends PitchFrame>(
+  frames: readonly T[],
   options: PitchSmoothingOptions = {},
-): PitchFrame[] {
+): T[] {
   const octaveCorrected = options.correctOctaveJumps === false
     ? frames.map(clonePitchFrame)
     : correctOctaveJumps(frames, options);

@@ -52,34 +52,23 @@ export function pitchValuesFromFrequency(
   };
 }
 
-export function pitchFrameAtMidi(
-  frame: PitchFrame,
+export function pitchFrameAtMidi<T extends PitchFrame>(
+  frame: T,
   midiFloat: number,
   a4Frequency = DEFAULT_A4_FREQUENCY,
-): PitchFrame {
+): T {
   const nearestMidi = Math.round(midiFloat);
 
   return {
-    timeSeconds: frame.timeSeconds,
+    ...frame,
     frequencyHz: midiToFrequency(midiFloat, a4Frequency),
     midiFloat,
     nearestMidi,
     centsFromNearest: 100 * (midiFloat - nearestMidi),
-    rms: frame.rms,
-    confidence: frame.confidence,
     voiced: true,
   };
 }
 
-export function clonePitchFrame(frame: PitchFrame): PitchFrame {
-  return {
-    timeSeconds: frame.timeSeconds,
-    frequencyHz: frame.frequencyHz,
-    midiFloat: frame.midiFloat,
-    nearestMidi: frame.nearestMidi,
-    centsFromNearest: frame.centsFromNearest,
-    rms: frame.rms,
-    confidence: frame.confidence,
-    voiced: frame.voiced,
-  };
+export function clonePitchFrame<T extends PitchFrame>(frame: T): T {
+  return { ...frame };
 }

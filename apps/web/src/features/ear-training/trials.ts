@@ -33,21 +33,20 @@ export const NOTE_FAMILIES = [
 export interface NoteEvidence {
   attempts: number;
   correct: number;
-  /** Once earned, mastery remains earned even if the note is reviewed later. */
-  mastered: boolean;
+  /** Current run of correct answers. Lifetime totals never substitute for this. */
+  correctStreak: number;
 }
 
 export type FamilyEvidence = Record<NoteLetter, NoteEvidence>;
 export type NoteFamilyProgress = Record<NoteFamilyId, FamilyEvidence>;
 
 export interface MasteryRequirement {
-  minimumCorrect: number;
-  minimumAccuracy: number;
+  /** Number of consecutive correct answers required for stability. */
+  requiredCorrectStreak: number;
 }
 
 export const DEFAULT_MASTERY_REQUIREMENT: Readonly<MasteryRequirement> = {
-  minimumCorrect: 3,
-  minimumAccuracy: 0.75,
+  requiredCorrectStreak: 3,
 };
 
 export interface NoteFamilyTrial {
@@ -79,13 +78,31 @@ const familyById = new Map<NoteFamilyId, NoteFamilyDefinition>(
 const emptyNoteEvidence = (): NoteEvidence => ({
   attempts: 0,
   correct: 0,
-  mastered: false,
+  correctStreak: 0,
 });
 
 export function getNoteFamily(familyId: NoteFamilyId): NoteFamilyDefinition {
   const family = familyById.get(familyId);
   if (!family) throw new RangeError(`Unknown note family: ${String(familyId)}`);
   return family;
+}
+
+export function unlockedFamilyIdsThrough(highestUnlockedFamilyId: NoteFamilyId): NoteFamilyId[] {
+  const highestIndex = NOTE_FAMILIES.findIndex((family) => family.id === highestUnlockedFamilyId);
+  return NOTE_FAMILIES.slice(0, highestIndex + 1).map((family) => family.id);
+}
+
+export function advanceHighestUnlockedFamily(
+  highestUnlockedFamilyId: NoteFamilyId,
+  completedFamilyId: NoteFamilyId,
+  familyIsComplete: boolean,
+): NoteFamilyId {
+  if (!familyIsComplete) return highestUnlockedFamilyId;
+  const completedIndex = NOTE_FAMILIES.findIndex((family) => family.id === completedFamilyId);
+  const nextFamily = NOTE_FAMILIES[completedIndex + 1];
+  if (!nextFamily) return highestUnlockedFamilyId;
+  const highestIndex = NOTE_FAMILIES.findIndex((family) => family.id === highestUnlockedFamilyId);
+  return completedIndex + 1 > highestIndex ? nextFamily.id : highestUnlockedFamilyId;
 }
 
 export function pitchClassForLetter(letter: NoteLetter): NaturalPitchClass {
@@ -130,13 +147,47 @@ export function createEmptyNoteFamilyProgress(): NoteFamilyProgress {
   };
 }
 
+interface StoredNoteEvidence {
+  attempts?: unknown;
+  correct?: unknown;
+  correctStreak?: unknown;
+  mastered?: unknown;
+}
+
+type StoredProgress = Partial<Record<NoteFamilyId, Partial<Record<NoteLetter, StoredNoteEvidence>>>>;
+
+/**
+ * Restore locally stored evidence without trusting the old latched `mastered`
+ * flag. V1 totals contain no ordering information, so they cannot prove a
+ * consecutive streak and migrate with a zero streak.
+ */
+export function normalizeFamilyProgress(candidate: unknown, preserveStreak: boolean): NoteFamilyProgress {
+  const result = createEmptyNoteFamilyProgress();
+  const storedProgress = (candidate ?? {}) as StoredProgress;
+  for (const family of NOTE_FAMILIES) {
+    for (const letter of NOTE_LETTERS) {
+      const stored = storedProgress[family.id]?.[letter];
+      if (!stored) continue;
+      const attempts = typeof stored.attempts === "number" && Number.isFinite(stored.attempts)
+        ? Math.max(0, Math.floor(stored.attempts))
+        : 0;
+      const correct = typeof stored.correct === "number" && Number.isFinite(stored.correct)
+        ? Math.max(0, Math.min(attempts, Math.floor(stored.correct)))
+        : 0;
+      const storedStreak = preserveStreak && typeof stored.correctStreak === "number" && Number.isFinite(stored.correctStreak)
+        ? Math.max(0, Math.floor(stored.correctStreak))
+        : 0;
+      result[family.id][letter] = { attempts, correct, correctStreak: Math.min(correct, storedStreak) };
+    }
+  }
+  return result;
+}
+
 export function isNoteMastered(
   evidence: Readonly<NoteEvidence>,
   requirement: Readonly<MasteryRequirement> = DEFAULT_MASTERY_REQUIREMENT,
 ): boolean {
-  if (evidence.mastered) return true;
-  if (evidence.attempts <= 0 || evidence.correct < requirement.minimumCorrect) return false;
-  return evidence.correct / evidence.attempts >= requirement.minimumAccuracy;
+  return evidence.correctStreak >= requirement.requiredCorrectStreak;
 }
 
 export function recordNoteAttempt(
@@ -149,9 +200,8 @@ export function recordNoteAttempt(
   const updated: NoteEvidence = {
     attempts: previous.attempts + 1,
     correct: previous.correct + (wasCorrect ? 1 : 0),
-    mastered: previous.mastered,
+    correctStreak: wasCorrect ? previous.correctStreak + 1 : 0,
   };
-  updated.mastered = isNoteMastered(updated, requirement);
 
   return {
     ...evidence,
@@ -171,28 +221,6 @@ export function isFamilyComplete(
   requirement: Readonly<MasteryRequirement> = DEFAULT_MASTERY_REQUIREMENT,
 ): boolean {
   return masteredNoteCount(evidence, requirement) === NOTE_LETTERS.length;
-}
-
-export function getUnlockedFamilyIds(
-  progress: Readonly<NoteFamilyProgress>,
-  requirement: Readonly<MasteryRequirement> = DEFAULT_MASTERY_REQUIREMENT,
-): NoteFamilyId[] {
-  const unlocked: NoteFamilyId[] = [];
-
-  for (const family of NOTE_FAMILIES) {
-    unlocked.push(family.id);
-    if (!isFamilyComplete(progress[family.id], requirement)) break;
-  }
-
-  return unlocked;
-}
-
-export function isFamilyUnlocked(
-  familyId: NoteFamilyId,
-  progress: Readonly<NoteFamilyProgress>,
-  requirement: Readonly<MasteryRequirement> = DEFAULT_MASTERY_REQUIREMENT,
-): boolean {
-  return getUnlockedFamilyIds(progress, requirement).includes(familyId);
 }
 
 function chooseIndex(length: number, rng: RandomSource): number {

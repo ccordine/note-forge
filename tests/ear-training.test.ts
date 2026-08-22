@@ -3,26 +3,31 @@ import { describe, expect, it } from "vitest";
 import {
   NOTE_FAMILIES,
   NOTE_LETTERS,
+  advanceHighestUnlockedFamily,
   createEmptyFamilyEvidence,
   createEmptyNoteFamilyProgress,
   createNoteFamilyTrial,
   createReferenceTrial,
-  getUnlockedFamilyIds,
   isFamilyComplete,
-  isFamilyUnlocked,
   isNoteMastered,
   masteredNoteCount,
   midiForFamilyLetter,
   naturalMidisInFamily,
+  normalizeFamilyProgress,
   parseNoteLetterKey,
   pitchClassFromLetterKey,
   recordNoteAttempt,
+  unlockedFamilyIdsThrough,
   type FamilyEvidence,
   type NoteFamilyId,
 } from "../apps/web/src/features/ear-training/trials";
 
 const masteredFamily = (): FamilyEvidence => Object.fromEntries(
-  NOTE_LETTERS.map((letter) => [letter, { attempts: 3, correct: 3, mastered: true }]),
+  NOTE_LETTERS.map((letter) => [letter, {
+    attempts: 3,
+    correct: 3,
+    correctStreak: 3,
+  }]),
 ) as FamilyEvidence;
 
 describe("fixed-register note families", () => {
@@ -127,31 +132,63 @@ describe("A–G answer keys", () => {
 });
 
 describe("per-note mastery and family unlocks", () => {
-  it("requires three correct answers and at least 75 percent accuracy", () => {
-    expect(isNoteMastered({ attempts: 2, correct: 2, mastered: false })).toBe(false);
-    expect(isNoteMastered({ attempts: 3, correct: 3, mastered: false })).toBe(true);
-    expect(isNoteMastered({ attempts: 4, correct: 3, mastered: false })).toBe(true);
-    expect(isNoteMastered({ attempts: 5, correct: 3, mastered: false })).toBe(false);
+  it("requires three consecutive correct answers, regardless of lifetime totals", () => {
+    expect(isNoteMastered({ attempts: 2, correct: 2, correctStreak: 2 })).toBe(false);
+    expect(isNoteMastered({ attempts: 3, correct: 3, correctStreak: 3 })).toBe(true);
+    expect(isNoteMastered({ attempts: 20, correct: 18, correctStreak: 2 })).toBe(false);
+    expect(isNoteMastered({ attempts: 20, correct: 3, correctStreak: 3 })).toBe(true);
   });
 
-  it("records immutable evidence and latches mastery once earned", () => {
+  it("records immutable lifetime evidence and a live correct streak", () => {
     const original = createEmptyFamilyEvidence();
     let updated = recordNoteAttempt(original, "C", true);
     updated = recordNoteAttempt(updated, "C", true);
     updated = recordNoteAttempt(updated, "C", true);
 
-    expect(original.C).toEqual({ attempts: 0, correct: 0, mastered: false });
-    expect(updated.C).toEqual({ attempts: 3, correct: 3, mastered: true });
+    expect(original.C).toEqual({ attempts: 0, correct: 0, correctStreak: 0 });
+    expect(updated.C).toEqual({ attempts: 3, correct: 3, correctStreak: 3 });
+  });
 
-    updated = recordNoteAttempt(updated, "C", false);
-    updated = recordNoteAttempt(updated, "C", false);
-    expect(updated.C).toEqual({ attempts: 5, correct: 3, mastered: true });
-    expect(isNoteMastered(updated.C)).toBe(true);
+  it("does not become stable from collective right answers separated by misses", () => {
+    let evidence = createEmptyFamilyEvidence();
+    for (const wasCorrect of [true, true, false, true, true]) {
+      evidence = recordNoteAttempt(evidence, "C", wasCorrect);
+    }
+
+    expect(evidence.C).toEqual({
+      attempts: 5,
+      correct: 4,
+      correctStreak: 2,
+    });
+    expect(isNoteMastered(evidence.C)).toBe(false);
+
+    evidence = recordNoteAttempt(evidence, "C", true);
+    expect(evidence.C.correctStreak).toBe(3);
+    expect(isNoteMastered(evidence.C)).toBe(true);
+  });
+
+  it("immediately removes stability after a post-mastery miss", () => {
+    let evidence = createEmptyFamilyEvidence();
+    evidence = recordNoteAttempt(evidence, "C", true);
+    evidence = recordNoteAttempt(evidence, "C", true);
+    evidence = recordNoteAttempt(evidence, "C", true);
+    expect(isNoteMastered(evidence.C)).toBe(true);
+
+    evidence = recordNoteAttempt(evidence, "C", false);
+    expect(evidence.C).toEqual({
+      attempts: 4,
+      correct: 3,
+      correctStreak: 0,
+    });
+    expect(isNoteMastered(evidence.C)).toBe(false);
   });
 
   it("counts completion independently for every letter", () => {
     const complete = masteredFamily();
-    const incomplete = { ...complete, B: { attempts: 2, correct: 2, mastered: false } };
+    const incomplete = {
+      ...complete,
+      B: { attempts: 2, correct: 2, correctStreak: 2 },
+    };
 
     expect(masteredNoteCount(incomplete)).toBe(6);
     expect(isFamilyComplete(incomplete)).toBe(false);
@@ -159,28 +196,49 @@ describe("per-note mastery and family unlocks", () => {
     expect(isFamilyComplete(complete)).toBe(true);
   });
 
-  it("unlocks families in low, middle, high order", () => {
-    const progress = createEmptyNoteFamilyProgress();
-    expect(getUnlockedFamilyIds(progress)).toEqual(["low"]);
-    expect(isFamilyUnlocked("middle", progress)).toBe(false);
+  it("keeps an earned family unlocked when an earlier note later loses stability", () => {
+    expect(advanceHighestUnlockedFamily("low", "low", true)).toBe("middle");
+    expect(unlockedFamilyIdsThrough("middle")).toEqual(["low", "middle"]);
 
-    progress.low = masteredFamily();
-    expect(getUnlockedFamilyIds(progress)).toEqual(["low", "middle"]);
-    expect(isFamilyUnlocked("middle", progress)).toBe(true);
-    expect(isFamilyUnlocked("high", progress)).toBe(false);
+    expect(advanceHighestUnlockedFamily("middle", "low", false)).toBe("middle");
+    expect(unlockedFamilyIdsThrough("middle")).toEqual(["low", "middle"]);
 
-    progress.middle = masteredFamily();
-    expect(getUnlockedFamilyIds(progress)).toEqual(["low", "middle", "high"]);
-    expect(isFamilyUnlocked("high", progress)).toBe(true);
+    expect(advanceHighestUnlockedFamily("middle", "middle", true)).toBe("high");
+    expect(advanceHighestUnlockedFamily("high", "low", false)).toBe("high");
   });
 
   it("draws only from notes that still need mastery", () => {
     const evidence = createEmptyFamilyEvidence();
-    evidence.C = { attempts: 3, correct: 3, mastered: true };
+    evidence.C = { attempts: 3, correct: 3, correctStreak: 3 };
 
     expect(createNoteFamilyTrial("low", () => 0, evidence)).toMatchObject({
       targetLetter: "D",
       targetMidi: 50,
     });
+  });
+});
+
+describe("stored family evidence migration", () => {
+  it("preserves v1 lifetime totals but revokes unprovable latched stability", () => {
+    const migrated = normalizeFamilyProgress({
+      low: { C: { attempts: 12, correct: 9, mastered: true } },
+    }, false);
+
+    expect(migrated.low.C).toEqual({ attempts: 12, correct: 9, correctStreak: 0 });
+    expect(isNoteMastered(migrated.low.C)).toBe(false);
+  });
+
+  it("restores only valid v2 streak evidence and never trusts a stored badge", () => {
+    const restored = normalizeFamilyProgress({
+      low: {
+        C: { attempts: 10, correct: 8, correctStreak: 2, mastered: true },
+        D: { attempts: 4, correct: 3, correctStreak: 99, mastered: false },
+      },
+    }, true);
+
+    expect(restored.low.C).toEqual({ attempts: 10, correct: 8, correctStreak: 2 });
+    expect(isNoteMastered(restored.low.C)).toBe(false);
+    expect(restored.low.D.correctStreak).toBe(3);
+    expect(isNoteMastered(restored.low.D)).toBe(true);
   });
 });

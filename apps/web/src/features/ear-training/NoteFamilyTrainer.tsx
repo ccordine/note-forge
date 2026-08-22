@@ -8,17 +8,19 @@ import { PianoKeyboard, type PianoKeyMarker } from "@/ui/PianoKeyboard";
 import {
   NOTE_FAMILIES,
   NOTE_LETTERS,
+  advanceHighestUnlockedFamily,
   createEmptyNoteFamilyProgress,
   createNoteFamilyTrial,
   createReferenceTrial,
   getNoteFamily,
-  getUnlockedFamilyIds,
   isFamilyComplete,
-  isFamilyUnlocked,
+  isNoteMastered,
   masteredNoteCount,
   midiForFamilyLetter,
+  normalizeFamilyProgress,
   parseNoteLetterKey,
   recordNoteAttempt,
+  unlockedFamilyIdsThrough,
   type FamilyEvidence,
   type NoteFamilyId,
   type NoteFamilyProgress,
@@ -30,9 +32,10 @@ import {
 export type FoundationEarMode = "letters" | "reference";
 
 interface StoredFamilyState {
-  version: 1;
-  activeFamilyId: NoteFamilyId;
-  progress: NoteFamilyProgress;
+  version?: 1 | 2;
+  activeFamilyId?: NoteFamilyId;
+  highestUnlockedFamilyId?: NoteFamilyId;
+  progress?: unknown;
 }
 
 interface PromptTrial {
@@ -71,18 +74,12 @@ function isReferencePrompt(trial: PromptTrial): trial is PromptTrial & { note: R
   return trial.kind === "reference";
 }
 
-function normalizeProgress(candidate?: Partial<NoteFamilyProgress>): NoteFamilyProgress {
-  const result = createEmptyNoteFamilyProgress();
-  for (const family of NOTE_FAMILIES) {
-    for (const letter of NOTE_LETTERS) {
-      const stored = candidate?.[family.id]?.[letter];
-      if (!stored) continue;
-      const attempts = Number.isFinite(stored.attempts) ? Math.max(0, Math.floor(stored.attempts)) : 0;
-      const correct = Number.isFinite(stored.correct) ? Math.max(0, Math.min(attempts, Math.floor(stored.correct))) : 0;
-      result[family.id][letter] = { attempts, correct, mastered: stored.mastered === true };
-    }
-  }
-  return result;
+function familyIndex(familyId: NoteFamilyId): number {
+  return NOTE_FAMILIES.findIndex((family) => family.id === familyId);
+}
+
+function isKnownFamilyId(value: unknown): value is NoteFamilyId {
+  return NOTE_FAMILIES.some((family) => family.id === value);
 }
 
 function relationshipText(anchorMidi: number, targetMidi: number): string {
@@ -110,6 +107,7 @@ export function NoteFamilyTrainer({
 }) {
   const [progress, setProgress] = useState<NoteFamilyProgress>(createEmptyNoteFamilyProgress);
   const [activeFamilyId, setActiveFamilyId] = useState<NoteFamilyId>("low");
+  const [highestUnlockedFamilyId, setHighestUnlockedFamilyId] = useState<NoteFamilyId>("low");
   const [anchorLetter, setAnchorLetter] = useState<NoteLetter>("A");
   const [trial, setTrial] = useState<PromptTrial>(() => makePromptTrial("letters", "low", createEmptyNoteFamilyProgress().low, "A"));
   const [answerLetter, setAnswerLetter] = useState<NoteLetter>();
@@ -120,8 +118,9 @@ export function NoteFamilyTrainer({
   const family = getNoteFamily(activeFamilyId);
   const evidence = progress[activeFamilyId];
   const familyComplete = isFamilyComplete(evidence);
-  const unlockedFamilyIds = getUnlockedFamilyIds(progress);
-  const currentFamilyIndex = NOTE_FAMILIES.findIndex((candidate) => candidate.id === activeFamilyId);
+  const highestUnlockedIndex = familyIndex(highestUnlockedFamilyId);
+  const unlockedFamilyIds = unlockedFamilyIdsThrough(highestUnlockedFamilyId);
+  const currentFamilyIndex = familyIndex(activeFamilyId);
   const nextFamily = NOTE_FAMILIES[currentFamilyIndex + 1];
 
   const resetTrial = useCallback((nextMode: FoundationEarMode, familyId: NoteFamilyId, nextAnchor = anchorLetter, nextProgress = progress) => {
@@ -167,11 +166,17 @@ export function NoteFamilyTrainer({
     void getSetting<StoredFamilyState>(STORAGE_KEY)
       .then((stored) => {
         if (cancelled) return;
-        const restoredProgress = normalizeProgress(stored?.progress);
+        const restoredProgress = normalizeFamilyProgress(stored?.progress, stored?.version === 2);
+        const restoredHighest = stored?.version === 2 && isKnownFamilyId(stored.highestUnlockedFamilyId)
+          ? stored.highestUnlockedFamilyId
+          : "low";
         const requestedFamily = stored?.activeFamilyId;
-        const restoredFamily = requestedFamily && isFamilyUnlocked(requestedFamily, restoredProgress) ? requestedFamily : "low";
+        const restoredFamily = isKnownFamilyId(requestedFamily) && familyIndex(requestedFamily) <= familyIndex(restoredHighest)
+          ? requestedFamily
+          : "low";
         setProgress(restoredProgress);
         setActiveFamilyId(restoredFamily);
+        setHighestUnlockedFamilyId(restoredHighest);
         setTrial(makePromptTrial(mode, restoredFamily, restoredProgress[restoredFamily], anchorLetter));
       })
       .catch(() => undefined)
@@ -182,11 +187,17 @@ export function NoteFamilyTrainer({
   useEffect(() => {
     if (!hydrated) return;
     void setSetting<StoredFamilyState>(STORAGE_KEY, {
-      version: 1,
+      version: 2,
       activeFamilyId,
+      highestUnlockedFamilyId,
       progress
     }).catch(() => undefined);
-  }, [activeFamilyId, hydrated, progress]);
+  }, [activeFamilyId, highestUnlockedFamilyId, hydrated, progress]);
+
+  useEffect(() => {
+    const nextHighest = advanceHighestUnlockedFamily(highestUnlockedFamilyId, activeFamilyId, familyComplete);
+    if (nextHighest !== highestUnlockedFamilyId) setHighestUnlockedFamilyId(nextHighest);
+  }, [activeFamilyId, familyComplete, highestUnlockedFamilyId]);
 
   useEffect(() => {
     if (!hydrated || trial.kind === mode) return;
@@ -236,7 +247,7 @@ export function NoteFamilyTrainer({
   }, [activeFamilyId, mode, resetTrial, timbre, varyTimbre]);
 
   const selectFamily = useCallback((familyId: NoteFamilyId) => {
-    if (!isFamilyUnlocked(familyId, progress)) return;
+    if (familyIndex(familyId) > highestUnlockedIndex) return;
     setActiveFamilyId(familyId);
     const next = resetTrial(mode, familyId);
     setHeardCurrent(true);
@@ -248,7 +259,7 @@ export function NoteFamilyTrainer({
     } else {
       void playTone({ frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 1.05, amplitude: 0.26 });
     }
-  }, [mode, progress, resetTrial, timbre, varyTimbre]);
+  }, [highestUnlockedIndex, mode, resetTrial, timbre, varyTimbre]);
 
   const changeAnchor = (nextAnchor: NoteLetter) => {
     setAnchorLetter(nextAnchor);
@@ -305,6 +316,12 @@ export function NoteFamilyTrainer({
 
   const resultCorrect = submitted && answerLetter === trial.note.targetLetter;
   const targetFrequency = continuousMidiToHz(trial.note.targetMidi);
+  const targetEvidence = evidence[trial.note.targetLetter];
+  const targetStreak = Math.min(targetEvidence.correctStreak, 3);
+  const targetStable = isNoteMastered(targetEvidence);
+  const streakFeedback = resultCorrect
+    ? targetStable ? "Stable now: three correct in a row." : `Current streak: ${targetStreak}/3 correct in a row.`
+    : "Miss: this note's stability streak reset to 0/3.";
   const attemptCount = NOTE_LETTERS.reduce((sum, letter) => sum + evidence[letter].attempts, 0);
   const correctCount = NOTE_LETTERS.reduce((sum, letter) => sum + evidence[letter].correct, 0);
 
@@ -314,7 +331,7 @@ export function NoteFamilyTrainer({
         <div className="family-path-copy">
           <Eyebrow>One register at a time</Eyebrow>
           <b>No octave changes happen automatically.</b>
-          <small>Master all seven letters here, then choose when to move upward.</small>
+          <small>Each note needs three correct answers in a row; any miss resets that note to 0/3. Earned registers remain available.</small>
         </div>
         <div className="family-stages">
           {NOTE_FAMILIES.map((candidate) => {
@@ -322,7 +339,8 @@ export function NoteFamilyTrainer({
             const complete = isFamilyComplete(progress[candidate.id]);
             const active = candidate.id === activeFamilyId;
             const mastered = masteredNoteCount(progress[candidate.id]);
-            const status = complete ? "Complete" : active ? "Active" : unlocked ? "Ready" : "Locked";
+            const previouslyPassed = familyIndex(candidate.id) < highestUnlockedIndex;
+            const status = complete ? "Complete" : active ? "Active" : previouslyPassed ? "Review" : unlocked ? "Ready" : "Locked";
             return (
               <button
                 key={candidate.id}
@@ -335,7 +353,7 @@ export function NoteFamilyTrainer({
                 <span>{status}{!unlocked && <Icon name="lock" size={11} />}</span>
                 <strong>{candidate.label}</strong>
                 <small>{candidate.rangeLabel}</small>
-                <i>{NOTE_LETTERS.map((letter) => <em key={letter} className={progress[candidate.id][letter].mastered ? "earned" : ""} />)}</i>
+                <i>{NOTE_LETTERS.map((letter) => <em key={letter} className={isNoteMastered(progress[candidate.id][letter]) ? "earned" : ""} />)}</i>
                 <b>{mastered}/7 stable</b>
               </button>
             );
@@ -397,7 +415,8 @@ export function NoteFamilyTrainer({
           <div className="letter-answer-grid">
             {NOTE_LETTERS.map((letter) => {
               const item = evidence[letter];
-              const accuracy = item.attempts ? Math.round(item.correct / item.attempts * 100) : 0;
+              const stable = isNoteMastered(item);
+              const streak = Math.min(item.correctStreak, 3);
               const isTarget = submitted && letter === trial.note.targetLetter;
               const isWrong = submitted && letter === answerLetter && letter !== trial.note.targetLetter;
               return (
@@ -405,13 +424,13 @@ export function NoteFamilyTrainer({
                   key={letter}
                   type="button"
                   disabled={!heardCurrent || submitted}
-                  className={`${item.mastered ? "mastered" : ""} ${isTarget ? "correct" : ""} ${isWrong ? "incorrect" : ""}`}
+                  className={`${stable ? "mastered" : ""} ${isTarget ? "correct" : ""} ${isWrong ? "incorrect" : ""}`}
                   onClick={() => commitLetter(letter)}
-                  aria-label={`Answer ${letter}. ${item.mastered ? "Stable" : `${item.correct} correct of ${item.attempts} attempts`}`}
+                  aria-label={`Answer ${letter}. ${stable ? "Stable with three consecutive correct answers" : `${streak} of 3 consecutive correct answers`}. ${item.correct} correct of ${item.attempts} lifetime attempts.`}
                 >
                   <kbd>{letter}</kbd>
-                  <span>{item.mastered ? "STABLE" : `${Math.min(item.correct, 3)}/3 · ${accuracy}%`}</span>
-                  <i>{[0, 1, 2].map((index) => <em key={index} className={item.mastered || index < item.correct ? "earned" : ""} />)}</i>
+                  <span>{stable ? "STABLE · 3/3" : `${streak}/3 IN A ROW`}</span>
+                  <i>{[0, 1, 2].map((index) => <em key={index} className={index < streak ? "earned" : ""} />)}</i>
                 </button>
               );
             })}
@@ -423,7 +442,7 @@ export function NoteFamilyTrainer({
               <div>
                 <span>{resultCorrect ? "CORRECT MAP" : `YOU PRESSED ${answerLetter}`}</span>
                 <b>{noteLabel(trial.note.targetMidi)} · {targetFrequency.toFixed(2)} Hz</b>
-                <small>{isReferencePrompt(trial) ? relationshipText(trial.note.anchorMidi, trial.note.targetMidi) : resultCorrect ? "Letter and register now agree." : `The sound was ${trial.note.targetLetter}${family.octave}; compare the two marked keys.`}</small>
+                <small>{isReferencePrompt(trial) ? relationshipText(trial.note.anchorMidi, trial.note.targetMidi) : resultCorrect ? "Letter and register now agree." : `The sound was ${trial.note.targetLetter}${family.octave}; compare the two marked keys.`} {streakFeedback}</small>
               </div>
             </div>
           )}
@@ -431,7 +450,7 @@ export function NoteFamilyTrainer({
           {familyComplete && (
             <div className="family-complete-banner">
               <Icon name="spark" size={22} />
-              <div><b>{family.label} family complete.</b><small>Every letter is stable. You stay here until you choose otherwise.</small></div>
+              <div><b>{family.label} family complete.</b><small>Every letter has three correct answers in a row. You stay here until you choose otherwise.</small></div>
               {nextFamily && <ActionButton onClick={() => selectFamily(nextFamily.id)}>Move to {nextFamily.label} when ready <Icon name="arrow" size={15} /></ActionButton>}
             </div>
           )}

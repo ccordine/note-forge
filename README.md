@@ -27,6 +27,16 @@ npm run typecheck
 npm run build
 ```
 
+## WorkNet deployment
+
+NoteForge runs as a static, unprivileged Nginx container on the external `worknet_net` network. It publishes no host port; WorkNet's Published Apps flow owns DNS, trusted HTTPS, and edge routing for `https://noteforge.worknet`.
+
+```bash
+docker --context default compose up -d --build
+```
+
+Register or update the running `noteforge-app` container through WorkNet's **Published Apps** flow. Use Docker-network ingress, upstream `noteforge-app:8080`, hostname `noteforge.worknet`, and the WorkNet CA. Trusted HTTPS is required because browsers do not allow microphone capture or service workers on an insecure custom hostname.
+
 ## What is working
 
 - **Sound Laboratory:** playable keyboard, chromatic wheel, continuous frequency and one-cent detuning, note/dyad/chord playback, drone, multiple synthesized timbres, label hiding, major/minor/pentatonic/blues contexts, and non-prescriptive tension/resolution analysis.
@@ -88,4 +98,3 @@ Detector failures return explicit unvoiced reasons such as `below-rms-threshold`
 ## Next engineering edges
 
 The current build establishes the application and the useful measurement loop. Deeper follow-on work should focus on recorded-voice fixtures and calibration, overlapping worklet windows, rhythm/note segmentation, phrase scoring and dynamic time warping, persistent adaptive sessions across every exercise, pitch-preserving Song Lab transposition, and then creative MIDI/export tools. Neural pitch detection, source separation, full-song transcription, accounts, and cloud synchronization remain deliberately outside the first system.
-# note-forge

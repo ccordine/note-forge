@@ -1,0 +1,10 @@
+{
+  "name": "NoteForge",
+  "short_name": "NoteForge",
+  "description": "A local-first auditory-motor music laboratory.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#11120f",
+  "theme_color": "#d8ff3e",
+  "icons": [{ "src": "/noteforge-mark.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

@@ -1,0 +1,37 @@
+name: noteforge
+
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    image: noteforge:local
+    container_name: noteforge-app
+    expose:
+      - "8080"
+    networks:
+      - worknet
+    labels:
+      com.cordine.worknet.publishable: "true"
+      com.cordine.worknet.hostname: "noteforge.worknet"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+networks:
+  worknet:
+    external: true
+    name: worknet_net

@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "@noteforge/music-core": ["packages/music-core/src/index.ts"],
+      "@noteforge/pitch-engine": ["packages/pitch-engine/src/index.ts"],
+      "@noteforge/trainer-core": ["packages/trainer-core/src/index.ts"],
+      "@/*": ["apps/web/src/*"]
+    }
+  },
+  "include": ["apps/web/src", "packages/*/src", "packages/*/test", "tests"]
+}

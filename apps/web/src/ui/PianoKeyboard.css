@@ -1,0 +1,172 @@
+.piano-keyboard {
+  --piano-white-key-count: 7;
+  --piano-black-key-width: 9.15%;
+  position: relative;
+  height: 168px;
+  overflow: hidden;
+  border: 7px solid #10120f;
+  border-radius: 11px;
+  background: #090a08;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, .23) inset;
+}
+
+.piano-keyboard__white-keys {
+  display: flex;
+  height: 100%;
+}
+
+.piano-keyboard__key {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: background .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+
+.piano-keyboard__key:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.piano-keyboard__key--white {
+  flex: 1 1 calc(100% / var(--piano-white-key-count));
+  min-width: 0;
+  border: 0;
+  border-right: 1px solid #99998c;
+  background: linear-gradient(#f4f3e8, #d6d5c8);
+  color: #4d5049;
+}
+
+.piano-keyboard__key--white:last-child {
+  border-right: 0;
+}
+
+.piano-keyboard__key--black {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  width: var(--piano-black-key-width);
+  height: 62%;
+  transform: translateX(-50%);
+  border: 1px solid #030303;
+  border-radius: 0 0 5px 5px;
+  background: linear-gradient(90deg, #171914, #2b2d27 55%, #0b0c0a);
+  box-shadow: 0 5px 8px rgba(0, 0, 0, .55);
+  color: #e6e8dc;
+}
+
+.piano-keyboard__key:not(:disabled):hover {
+  filter: brightness(1.11);
+}
+
+.piano-keyboard__key:not(:disabled):active {
+  filter: brightness(.92);
+}
+
+.piano-keyboard__key--white.piano-keyboard__key--has-anchor {
+  box-shadow: inset 0 -7px var(--blue);
+}
+
+.piano-keyboard__key--white.piano-keyboard__key--has-guess {
+  background: linear-gradient(#fff9e8, #eadbb7);
+}
+
+.piano-keyboard__key--white.piano-keyboard__key--has-target {
+  background: linear-gradient(#efffb3, #cbe84e);
+}
+
+.piano-keyboard__key--white.piano-keyboard__key--has-wrong {
+  box-shadow: inset 0 0 0 3px var(--danger), inset 0 -7px var(--danger);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-anchor {
+  box-shadow: 0 5px 8px rgba(0, 0, 0, .55), inset 0 -6px var(--blue);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-guess {
+  background: linear-gradient(#62583d, #2b2d27 60%, #0b0c0a);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-target {
+  background: linear-gradient(#68831f, #b5d93d 78%, #29320f);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-wrong {
+  box-shadow: 0 5px 8px rgba(0, 0, 0, .55), inset 0 0 0 2px var(--danger), inset 0 -6px var(--danger);
+}
+
+.piano-keyboard__label {
+  position: absolute;
+  right: 1px;
+  bottom: 9px;
+  left: 1px;
+  overflow: hidden;
+  font: 7px var(--mono);
+  text-align: center;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.piano-keyboard__key--black .piano-keyboard__label {
+  bottom: 8px;
+  color: rgba(240, 241, 231, .75);
+  font-size: 6px;
+}
+
+.piano-keyboard__markers {
+  position: absolute;
+  right: 4px;
+  bottom: 10px;
+  left: 4px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.piano-keyboard--labels .piano-keyboard__markers {
+  bottom: 26px;
+}
+
+.piano-keyboard__key--black .piano-keyboard__markers {
+  right: 2px;
+  bottom: 8px;
+  left: 2px;
+}
+
+.piano-keyboard--labels .piano-keyboard__key--black .piano-keyboard__markers {
+  bottom: 21px;
+}
+
+.piano-keyboard__marker {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: 1px solid rgba(11, 12, 10, .38);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
+  color: var(--ink);
+  font: 700 7px var(--mono);
+}
+
+.piano-keyboard__key--black .piano-keyboard__marker {
+  width: 11px;
+  height: 11px;
+  border-color: rgba(255, 255, 255, .28);
+  font-size: 6px;
+}
+
+.piano-keyboard__marker--anchor { background: var(--blue); }
+.piano-keyboard__marker--guess { background: var(--cream); }
+.piano-keyboard__marker--target { background: var(--lime); }
+.piano-keyboard__marker--wrong { background: var(--danger); color: #fff; }
+
+@media (max-width: 760px) {
+  .piano-keyboard { height: 140px; }
+  .piano-keyboard__marker { width: 12px; height: 12px; font-size: 6px; }
+  .piano-keyboard__key--black .piano-keyboard__marker { width: 9px; height: 9px; font-size: 5px; }
+}

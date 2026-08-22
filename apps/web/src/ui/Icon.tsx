@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-type IconName = "forge" | "sound" | "mirror" | "hum" | "control" | "ear" | "interval" | "harmony" | "melody" | "song" | "skills" | "play" | "pause" | "mic" | "chevron" | "spark" | "settings" | "headphones" | "arrow" | "eye" | "eyeOff" | "record" | "loop";
+type IconName = "forge" | "sound" | "mirror" | "hum" | "control" | "ear" | "interval" | "harmony" | "melody" | "song" | "skills" | "play" | "pause" | "mic" | "chevron" | "spark" | "settings" | "headphones" | "arrow" | "eye" | "eyeOff" | "record" | "loop" | "lock";
 
 const paths: Record<IconName, string> = {
   forge: "M5 18V6l14 12V6M5 6h4m10 12h-4",
@@ -25,7 +25,8 @@ const paths: Record<IconName, string> = {
   eye: "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
   eyeOff: "m3 3 18 18M10.6 6.2A11 11 0 0 1 12 6c6.5 0 10 6 10 6a12 12 0 0 1-3 3.7M6.5 6.5A13 13 0 0 0 2 12s3.5 6 10 6a11 11 0 0 0 3-.4M9.8 9.8a3 3 0 0 0 4.4 4.4",
   record: "M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z",
-  loop: "M17 2l3 3-3 3M3 11V9a4 4 0 0 1 4-4h13M7 22l-3-3 3-3m14-3v2a4 4 0 0 1-4 4H4"
+  loop: "M17 2l3 3-3 3M3 11V9a4 4 0 0 1 4-4h13M7 22l-3-3 3-3m14-3v2a4 4 0 0 1-4 4H4",
+  lock: "M6 10h12v11H6V10Zm3 0V7a3 3 0 0 1 6 0v3m-3 4v3"
 };
 
 export function Icon({ name, size = 20, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {

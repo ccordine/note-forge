@@ -97,7 +97,9 @@ function Topbar({ onMenu, onSettings }: { onMenu: () => void; onSettings: () => 
       <button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><span /><span /></button>
       <div className="page-title"><span>{title.eyebrow}</span><h2>{title.title}</h2></div>
       <div className="coordinate-strip" aria-label="Shared musical context">
-        <div><small>Target</small><b>{labelsHidden ? "Hidden" : noteLabel(selectedMidi)}</b>{!labelsHidden && <em>{centsOffset >= 0 ? "+" : ""}{centsOffset}¢</em>}</div>
+        {view === "ear"
+          ? <div className="wide"><small>Prompt</small><b>Hidden until answer</b></div>
+          : <div><small>Target</small><b>{labelsHidden ? "Hidden" : noteLabel(selectedMidi)}</b>{!labelsHidden && <em>{centsOffset >= 0 ? "+" : ""}{centsOffset}¢</em>}</div>}
         <div><small>Tonic</small><b>{pitchClassLabel(tonicPitchClass)}</b></div>
         <div className="wide"><small>Context</small><b>{SCALE_PRESETS[scaleId]?.label ?? scaleId} · {CHORD_PRESETS[chordQuality]?.label ?? chordQuality}</b></div>
       </div>

@@ -13,6 +13,22 @@ export interface ToneSpec {
   when?: number;
 }
 
+/** One independently voiced item in a sequential playback gesture. */
+export interface ToneSequenceItem extends Omit<ToneSpec, "when"> {
+  /** Silence after this item before the next item begins. */
+  gapAfter?: number;
+}
+
+/** Defaults shared by items that do not specify their own synthesis values. */
+export interface ToneSequenceOptions extends Omit<ToneSpec, "frequencyHz" | "when"> {
+  /** Silence between items unless an item supplies `gapAfter`. */
+  gap?: number;
+  /** Scheduling headroom before the first item. */
+  startDelay?: number;
+}
+
+export type ScheduledToneSpec = ToneSpec & { duration: number; when: number };
+
 export interface ActiveVoice {
   stop: (releaseSeconds?: number) => void;
 }
@@ -132,6 +148,52 @@ export async function playFrequencies(
       })
     )
   );
+}
+
+/**
+ * Resolve a heterogeneous tone sequence into absolute Web Audio start times.
+ * Kept pure so sequence timing can be verified without constructing an
+ * AudioContext in tests.
+ */
+export function createToneSequenceSchedule(
+  tones: readonly ToneSequenceItem[],
+  startAt: number,
+  options: ToneSequenceOptions = {}
+): ScheduledToneSpec[] {
+  const {
+    gap: defaultGap = 0.12,
+    startDelay: _startDelay,
+    duration: defaultDuration = 0.9,
+    ...toneDefaults
+  } = options;
+  let when = startAt;
+
+  return tones.map((item) => {
+    const { gapAfter, duration = defaultDuration, ...tone } = item;
+    const scheduled: ScheduledToneSpec = {
+      ...toneDefaults,
+      ...tone,
+      duration,
+      when
+    };
+    when += duration + (gapAfter ?? defaultGap);
+    return scheduled;
+  });
+}
+
+/**
+ * Play a sequential gesture whose tones may have different timbres, envelopes,
+ * amplitudes, durations, and following gaps.
+ */
+export async function playToneSequence(
+  tones: readonly ToneSequenceItem[],
+  options: ToneSequenceOptions = {}
+): Promise<void> {
+  if (tones.length === 0) return;
+  const context = await ensureAudioReady();
+  const startAt = context.currentTime + (options.startDelay ?? 0.025);
+  const schedule = createToneSequenceSchedule(tones, startAt, options);
+  await Promise.all(schedule.map((tone) => playTone(tone)));
 }
 
 export class Drone {

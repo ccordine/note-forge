@@ -1,17 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
+import { smoothPitchFrames, type PitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone } from "@/audio/synth";
+import { playSafely, playTone, type ActiveVoice, type Timbre } from "@/audio/synth";
 import { useLab } from "@/state/LabContext";
 import { saveAttempt } from "@/storage/database";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
-import { InputScope } from "@/ui/InputScope";
+import { NoteInput } from "@/ui/voice";
 import { PitchRibbon } from "./PitchRibbon";
 
 type MirrorMode = "glide" | "delayed" | "cold" | "anchor" | "silent";
+
+interface AttemptConfiguration {
+  mode: MirrorMode;
+  midi: number;
+  centsOffset: number;
+  timbre: Timbre;
+  toleranceCents: number;
+}
 
 const modeInfo: Record<MirrorMode, { label: string; instruction: string; detail: string }> = {
   glide: { label: "Glide", instruction: "Let your voice find the lane.", detail: "The target stays audible while you slide toward it." },
@@ -32,22 +40,21 @@ export function PitchMirror() {
   const [mode, setMode] = useState<MirrorMode>("glide");
   const [attemptFrames, setAttemptFrames] = useState<PitchFrame[]>([]);
   const [attempting, setAttempting] = useState(false);
+  const [attemptStarting, setAttemptStarting] = useState(false);
   const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
   const [countdown, setCountdown] = useState<string>("READY");
+  const [saveError, setSaveError] = useState("");
+  const [attemptError, setAttemptError] = useState("");
   const attemptFramesRef = useRef<PitchFrame[]>([]);
   const attemptStartRef = useRef(0);
   const attemptActiveRef = useRef(false);
   const attemptTimersRef = useRef<number[]>([]);
+  const attemptStartInFlightRef = useRef(false);
+  const attemptGenerationRef = useRef(0);
+  const attemptConfigurationRef = useRef<AttemptConfiguration | null>(null);
+  const attemptMountedRef = useRef(false);
+  const promptVoiceRef = useRef<ActiveVoice | null>(null);
   const input = useAudioInput({
-    detector: {
-      minFrequency: 65,
-      maxFrequency: 1_100,
-      analysisWindowSize: 2_048,
-      yinThreshold: 0.16,
-      minConfidence: 0.7
-    },
-    bufferSize: 4_096,
-    maxFrames: 240,
     onFrame: (frame) => {
       if (attemptStartRef.current > 0) attemptFramesRef.current.push(frame);
     }
@@ -55,12 +62,23 @@ export function PitchMirror() {
   const targetFrequency = continuousMidiToHz(selectedMidi, centsOffset);
   const targetMidiFloat = selectedMidi + centsOffset / 100;
   const displayFrames = useMemo(() => smoothPitchFrames(input.frames.slice(-180), { correctOctaveJumps: true }), [input.frames]);
-  const rawLiveFrame = input.liveFrame;
+  const liveFrame = input.liveFrame;
   const smoothedLiveFrame = displayFrames.at(-1);
 
-  useEffect(() => () => {
-    attemptActiveRef.current = false;
-    attemptTimersRef.current.forEach(window.clearTimeout);
+  useEffect(() => {
+    attemptMountedRef.current = true;
+    return () => {
+      attemptMountedRef.current = false;
+      attemptGenerationRef.current += 1;
+      attemptStartInFlightRef.current = false;
+      attemptActiveRef.current = false;
+      attemptStartRef.current = 0;
+      attemptConfigurationRef.current = null;
+      attemptTimersRef.current.forEach(window.clearTimeout);
+      attemptTimersRef.current = [];
+      promptVoiceRef.current?.stop(0.02);
+      promptVoiceRef.current = null;
+    };
   }, []);
 
   const finishAttempt = () => {
@@ -68,47 +86,116 @@ export function PitchMirror() {
     attemptActiveRef.current = false;
     attemptTimersRef.current.forEach(window.clearTimeout);
     attemptTimersRef.current = [];
+    promptVoiceRef.current?.stop(0.04);
+    promptVoiceRef.current = null;
+    const configuration = attemptConfigurationRef.current;
+    attemptConfigurationRef.current = null;
+    if (!configuration) return;
     const frames = smoothPitchFrames(attemptFramesRef.current, { correctOctaveJumps: true });
     attemptStartRef.current = 0;
     setAttemptFrames(frames);
     setAttempting(false);
     setCountdown("COMPLETE");
-    const result = scoreSustainedNote(frames, { midi: selectedMidi, centsOffset, durationMs: 4_000, timbre, amplitude: 0.28 }, { toleranceCents, promptTimeSeconds: frames[0]?.timeSeconds });
+    const result = scoreSustainedNote(frames, { midi: configuration.midi, centsOffset: configuration.centsOffset, durationMs: 4_000, timbre: configuration.timbre, amplitude: 0.28 }, { toleranceCents: configuration.toleranceCents, promptTimeSeconds: frames[0]?.timeSeconds });
     setMetrics(result);
     const now = new Date();
     void saveAttempt({
-      id: crypto.randomUUID(), exerciseType: `pitch.match.${mode}`, target: { midi: selectedMidi, centsOffset },
+      id: crypto.randomUUID(), exerciseType: `pitch.match.${configuration.mode}`, target: { midi: configuration.midi, centsOffset: configuration.centsOffset },
       metrics: result as Record<string, number | undefined>, pitchFrames: frames, startedAt: new Date(now.getTime() - 4_000).toISOString(), completedAt: now.toISOString()
-    }).catch(() => undefined);
+    }).catch(() => setSaveError("The measured attempt could not be saved to local history."));
   };
 
   const beginAttempt = async () => {
-    if (input.state !== "ready") {
-      await input.start();
+    if (attemptActiveRef.current || attemptStartInFlightRef.current) return;
+    const generation = ++attemptGenerationRef.current;
+    const configuration: AttemptConfiguration = { mode, midi: selectedMidi, centsOffset, timbre, toleranceCents };
+    attemptStartInFlightRef.current = true;
+    promptVoiceRef.current?.stop(0.03);
+    promptVoiceRef.current = null;
+    setAttemptStarting(true);
+    setCountdown("CONNECTING");
+    setAttemptError("");
+    // Always cross the canonical resume path. A live MediaStream can outlast a
+    // browser-suspended AudioContext and otherwise look ready while producing no PCM.
+    let microphone: Awaited<ReturnType<typeof input.enable>>;
+    try {
+      microphone = await input.enable();
+    } catch {
+      if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
+      attemptStartInFlightRef.current = false;
+      setAttemptStarting(false);
+      setCountdown("MIC ERROR");
+      setAttemptError("The microphone could not start. No measurement began.");
       return;
     }
+    if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
+    if (!microphone) {
+      attemptStartInFlightRef.current = false;
+      setAttemptStarting(false);
+      setCountdown("MIC ERROR");
+      setAttemptError(input.error || "The microphone could not start. No measurement began.");
+      return;
+    }
+    const attemptFrequency = continuousMidiToHz(configuration.midi, configuration.centsOffset);
+    setCountdown("STARTING AUDIO");
+    let promptVoice: ActiveVoice;
+    try {
+      promptVoice = configuration.mode === "glide"
+        ? await playTone({ frequencyHz: attemptFrequency, timbre: configuration.timbre, duration: 4.5, amplitude: 0.18 })
+        : configuration.mode === "anchor"
+          ? await playTone({ frequencyHz: 440, timbre: configuration.timbre, duration: 1.1 })
+          : await playTone({ frequencyHz: attemptFrequency, timbre: configuration.timbre, duration: 1.1 });
+    } catch {
+      if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
+      attemptStartInFlightRef.current = false;
+      attemptActiveRef.current = false;
+      attemptConfigurationRef.current = null;
+      attemptStartRef.current = 0;
+      setAttemptStarting(false);
+      setAttempting(false);
+      setCountdown("AUDIO ERROR");
+      setAttemptError("The required listening prompt could not start. The attempt stayed ready and no microphone frames were scored.");
+      return;
+    }
+    if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) {
+      promptVoice.stop(0.02);
+      return;
+    }
+    promptVoiceRef.current = promptVoice;
+    attemptStartInFlightRef.current = false;
+    attemptConfigurationRef.current = configuration;
+    setAttemptStarting(false);
+    setSaveError("");
     setMetrics(null);
     setAttemptFrames([]);
-    input.clearFrames();
     attemptFramesRef.current = [];
     setAttempting(true);
     attemptActiveRef.current = true;
-    setCountdown(mode === "silent" ? "PREPARE" : "LISTEN");
+    setCountdown(configuration.mode === "silent" ? "PREPARE" : "LISTEN");
 
-    if (mode === "glide") {
-      void playTone({ frequencyHz: targetFrequency, timbre, duration: 4.5, amplitude: 0.18 });
+    const beginScoring = (label: string) => {
+      if (
+        !attemptMountedRef.current
+        || generation !== attemptGenerationRef.current
+        || !attemptActiveRef.current
+      ) return;
       attemptStartRef.current = performance.now() / 1000;
-      setCountdown("PHONATE");
-    } else if (mode === "anchor") {
-      void playTone({ frequencyHz: 440, timbre, duration: 1.1 });
-      attemptTimersRef.current.push(window.setTimeout(() => { attemptStartRef.current = performance.now() / 1000; setCountdown("RECALL A4"); }, 1_600));
+      setCountdown(label);
+    };
+    if (configuration.mode === "glide") {
+      beginScoring("PHONATE");
+    } else if (configuration.mode === "anchor") {
+      attemptTimersRef.current.push(window.setTimeout(() => beginScoring("RECALL A4"), 1_600));
     } else {
-      void playTone({ frequencyHz: targetFrequency, timbre, duration: 1.1 });
-      const delay = mode === "silent" ? 2_250 : 1_450;
-      attemptTimersRef.current.push(window.setTimeout(() => { attemptStartRef.current = performance.now() / 1000; setCountdown(mode === "cold" ? "LAND" : "PHONATE"); }, delay));
+      const delay = configuration.mode === "silent" ? 2_250 : 1_450;
+      attemptTimersRef.current.push(window.setTimeout(() => beginScoring(configuration.mode === "cold" ? "LAND" : "PHONATE"), delay));
     }
-    attemptTimersRef.current.push(window.setTimeout(finishAttempt, mode === "glide" ? 5_000 : mode === "silent" ? 7_000 : 6_000));
+    attemptTimersRef.current.push(window.setTimeout(() => {
+      if (attemptMountedRef.current && generation === attemptGenerationRef.current) finishAttempt();
+    }, configuration.mode === "glide" ? 5_000 : configuration.mode === "silent" ? 7_000 : 6_000));
   };
+
+  const controlsLocked = attempting || attemptStarting;
 
   const shownFrames = attempting ? displayFrames : attemptFrames.length ? attemptFrames : displayFrames;
   const effectiveTargetMidi = mode === "anchor" ? 69 : targetMidiFloat;
@@ -120,21 +207,24 @@ export function PitchMirror() {
         <div><Eyebrow>Sound → prediction → mechanics</Eyebrow><h1>{modeInfo[mode].instruction}</h1><p>{modeInfo[mode].detail} The ribbon keeps attack, correction, drift, and release visible.</p></div>
       </div>
 
+      {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
+      {attemptError && <div className="error-banner" role="alert"><strong>Attempt did not start.</strong><span>{attemptError}</span></div>}
+
       <Panel className="mirror-mode-panel">
-        <Segmented value={mode} onChange={setMode} options={Object.entries(modeInfo).map(([value, item]) => ({ value: value as MirrorMode, label: item.label }))} />
+        <Segmented value={mode} disabled={controlsLocked} onChange={setMode} options={Object.entries(modeInfo).map(([value, item]) => ({ value: value as MirrorMode, label: item.label }))} />
         <div className="mirror-settings">
-          <Select label="Target" value={selectedMidi} onChange={(event) => setSelectedMidi(Number(event.target.value))}>{Array.from({ length: 36 }, (_, index) => 45 + index).map((midi) => <option value={midi} key={midi}>{noteLabel(midi)}</option>)}</Select>
-          <Select label="Timbre" value={timbre} onChange={(event) => setTimbre(event.target.value as typeof timbre)}><option>sine</option><option>triangle</option><option>piano</option><option>guitar</option><option>bass</option><option>flute</option><option>voice</option><option>rich synth</option></Select>
-          <Select label="Tolerance" value={toleranceCents} onChange={(event) => setToleranceCents(Number(event.target.value))}>{tolerances.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</Select>
-          <button className="randomize-button" onClick={() => setSelectedMidi(48 + Math.floor(Math.random() * 25))}><Icon name="spark" size={16} /> Randomize</button>
+          <Select label="Target" value={selectedMidi} disabled={controlsLocked} onChange={(event) => setSelectedMidi(Number(event.target.value))}>{Array.from({ length: 36 }, (_, index) => 45 + index).map((midi) => <option value={midi} key={midi}>{noteLabel(midi)}</option>)}</Select>
+          <Select label="Timbre" value={timbre} disabled={controlsLocked} onChange={(event) => setTimbre(event.target.value as typeof timbre)}><option>sine</option><option>triangle</option><option>piano</option><option>guitar</option><option>bass</option><option>flute</option><option>voice</option><option>rich synth</option></Select>
+          <Select label="Tolerance" value={toleranceCents} disabled={controlsLocked} onChange={(event) => setToleranceCents(Number(event.target.value))}>{tolerances.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</Select>
+          <button className="randomize-button" disabled={controlsLocked} onClick={() => setSelectedMidi(48 + Math.floor(Math.random() * 25))}><Icon name="spark" size={16} /> Randomize</button>
         </div>
       </Panel>
 
-      <InputScope
+      <NoteInput
+        variant="scope"
         input={input}
         targetMidiFloat={mode === "anchor" ? 69 : targetMidiFloat}
         toleranceCents={toleranceCents}
-        busy={attempting}
         title="Pitch mirror input"
       />
 
@@ -143,13 +233,13 @@ export function PitchMirror() {
           <span className="target-kicker">TARGET</span>
           <strong>{mode === "anchor" ? "A4" : noteLabel(selectedMidi)}</strong>
           <span>{mode === "anchor" ? "440.00" : targetFrequency.toFixed(2)} Hz</span>
-          <button className="round-play" onClick={() => playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 })} aria-label="Hear target"><Icon name="play" size={21} /></button>
+          <button className="round-play" disabled={controlsLocked} onClick={() => playSafely(playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 }), "Pitch Mirror target tone")} aria-label="Hear target"><Icon name="play" size={21} /></button>
         </div>
-        <div className="stage-status"><span>{countdown}</span>{liveError != null && <b className={Math.abs(liveError) <= toleranceCents ? "in-band" : ""}>{signed(liveError, 0)}¢</b>}<small>{smoothedLiveFrame?.voiced ? noteLabel(smoothedLiveFrame.nearestMidi ?? selectedMidi) : input.state === "ready" ? "waiting for voiced sound" : "enable the microphone"}</small></div>
+        <div className="stage-status"><span>{countdown}</span>{liveError != null && <b className={Math.abs(liveError) <= toleranceCents ? "in-band" : ""}>{signed(liveError, 0)}¢</b>}<small>{smoothedLiveFrame?.voiced ? noteLabel(smoothedLiveFrame.nearestMidi ?? selectedMidi) : input.state === "running" ? "waiting for voiced sound" : "enable the microphone"}</small></div>
         <PitchRibbon frames={shownFrames} targetMidiFloat={mode === "anchor" ? 69 : targetMidiFloat} toleranceCents={toleranceCents} />
         <div className="stage-actions">
-          <PlayButton label="Hear target" onClick={() => playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 })} />
-          <ActionButton className={`primary attempt-button ${attempting ? "recording" : ""}`} disabled={attempting || input.state === "starting"} onClick={beginAttempt}><Icon name={input.state === "ready" ? "mic" : "headphones"} size={18} /> {attempting ? "Measuring…" : input.state === "ready" ? "Begin attempt" : "Enable mic to begin"}</ActionButton>
+          <PlayButton label="Hear target" disabled={controlsLocked} onClick={() => playSafely(playTone({ frequencyHz: mode === "anchor" ? 440 : targetFrequency, timbre, duration: 1.15 }), "Pitch Mirror target tone")} />
+          <ActionButton className={`primary attempt-button ${attempting ? "recording" : ""}`} disabled={controlsLocked || input.state === "opening"} onClick={beginAttempt}><Icon name={input.state === "running" ? "mic" : "headphones"} size={18} /> {attempting ? "Measuring…" : attemptStarting ? "Connecting…" : input.state === "running" ? "Begin attempt" : "Enable mic to begin"}</ActionButton>
           {attempting && <ActionButton onClick={finishAttempt}>Finish now</ActionButton>}
         </div>
       </Panel>
@@ -179,7 +269,7 @@ export function PitchMirror() {
         </Panel>
       </div>
 
-      {expertMode && <Panel className="debug-panel"><div className="panel-heading"><div><Eyebrow>Detector evidence</Eyebrow><h2>Raw → displayed trace</h2></div><span className="debug-live"><i /> live</span></div><dl><div><dt>Raw MIDI</dt><dd>{rawLiveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Smoothed MIDI</dt><dd>{smoothedLiveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Display correction</dt><dd>{rawLiveFrame?.midiFloat == null || smoothedLiveFrame?.midiFloat == null ? "—" : `${signed((smoothedLiveFrame.midiFloat - rawLiveFrame.midiFloat) * 100, 1)}¢`}</dd></div><div><dt>YIN value</dt><dd>{rawLiveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div><div><dt>Live buffer</dt><dd>{input.frames.length} frames</dd></div><div><dt>Attempt buffer</dt><dd>{attemptFramesRef.current.length} frames</dd></div></dl></Panel>}
+      {expertMode && <Panel className="debug-panel"><div className="panel-heading"><div><Eyebrow>Detector evidence</Eyebrow><h2>Canonical → displayed trace</h2></div><span className="debug-live"><i /> live</span></div><dl><div><dt>Canonical MIDI</dt><dd>{liveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Smoothed MIDI</dt><dd>{smoothedLiveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div><div><dt>Display correction</dt><dd>{liveFrame?.midiFloat == null || smoothedLiveFrame?.midiFloat == null ? "—" : `${signed((smoothedLiveFrame.midiFloat - liveFrame.midiFloat) * 100, 1)}¢`}</dd></div><div><dt>YIN value</dt><dd>{liveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div><div><dt>Live buffer</dt><dd>{input.frames.length} frames</dd></div><div><dt>Attempt buffer</dt><dd>{attemptFramesRef.current.length} frames</dd></div></dl></Panel>}
     </div>
   );
 }

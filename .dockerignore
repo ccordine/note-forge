@@ -4,10 +4,9 @@
 dist
 node_modules
 coverage
+.test-cache
+.test-tmp
 *.log
 *.tsbuildinfo
 .env
 .env.*
-tests
-**/test
-**/*.test.ts

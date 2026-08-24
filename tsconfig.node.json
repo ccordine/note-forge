@@ -4,9 +4,16 @@
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "tsBuildInfoFile": "./node_modules/.cache/noteforge/tsconfig.node.tsbuildinfo",
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "strict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "types": ["node"]
   },
   "include": ["vite.config.ts", "vitest.config.ts"]

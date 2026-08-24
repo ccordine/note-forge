@@ -79,6 +79,14 @@
   box-shadow: inset 0 0 0 3px var(--danger), inset 0 -7px var(--danger);
 }
 
+.piano-keyboard__key--white.piano-keyboard__key--has-selected {
+  background: linear-gradient(#efffb3, #cbe84e);
+}
+
+.piano-keyboard__key--white.piano-keyboard__key--has-compare {
+  box-shadow: inset 0 -7px var(--coral);
+}
+
 .piano-keyboard__key--black.piano-keyboard__key--has-anchor {
   box-shadow: 0 5px 8px rgba(0, 0, 0, .55), inset 0 -6px var(--blue);
 }
@@ -93,6 +101,14 @@
 
 .piano-keyboard__key--black.piano-keyboard__key--has-wrong {
   box-shadow: 0 5px 8px rgba(0, 0, 0, .55), inset 0 0 0 2px var(--danger), inset 0 -6px var(--danger);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-selected {
+  background: linear-gradient(#68831f, #b5d93d 78%, #29320f);
+}
+
+.piano-keyboard__key--black.piano-keyboard__key--has-compare {
+  box-shadow: 0 5px 8px rgba(0, 0, 0, .55), inset 0 -6px var(--coral);
 }
 
 .piano-keyboard__label {
@@ -164,6 +180,8 @@
 .piano-keyboard__marker--guess { background: var(--cream); }
 .piano-keyboard__marker--target { background: var(--lime); }
 .piano-keyboard__marker--wrong { background: var(--danger); color: #fff; }
+.piano-keyboard__marker--selected { background: var(--lime); }
+.piano-keyboard__marker--compare { background: var(--coral); }
 
 @media (max-width: 760px) {
   .piano-keyboard { height: 140px; }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getPrerequisiteClosure,
+  getUnlockedSkillDefinitions,
   SKILL_CATALOG,
   SKILL_GRAPH,
   validateSkillGraph,
@@ -49,6 +50,11 @@ describe("default skill graph", () => {
     expect(SKILL_GRAPH["pitch.same_different"].dependents).toContain("hum.anchor.discover");
     expect(SKILL_GRAPH["hum.anchor.discover"].dependents).toContain("hum.target.match");
     expect(SKILL_GRAPH["hum.target.match"].dependents).toContain("hum.sustain.control");
+    expect(Object.isFrozen(SKILL_GRAPH)).toBe(true);
+    expect(Object.isFrozen(SKILL_GRAPH["pitch.match.glide"].dependents)).toBe(true);
+    expect(Object.isFrozen(SKILL_CATALOG)).toBe(true);
+    expect(Object.isFrozen(SKILL_CATALOG[0])).toBe(true);
+    expect(Object.isFrozen(SKILL_CATALOG[0].prerequisites)).toBe(true);
 
     const humPrerequisites = getPrerequisiteClosure("hum.sustain.control");
     expect(humPrerequisites).toEqual(
@@ -94,5 +100,28 @@ describe("default skill graph", () => {
     expect(validation.valid).toBe(false);
     expect(validation.errors.some((error) => error.includes("Unknown prerequisite missing"))).toBe(true);
     expect(validation.errors.some((error) => error.includes("cycle"))).toBe(true);
+  });
+
+  it("rejects non-finite difficulty, duplicate prerequisites, and invalid mastery thresholds", () => {
+    const invalid: SkillDefinition = {
+      skillId: "invalid",
+      label: "Invalid",
+      description: "Invalid graph fixture",
+      domain: "perception",
+      representations: ["heard-sound"],
+      prerequisites: ["missing", "missing"],
+      difficulty: Number.NaN,
+      tags: [],
+    };
+
+    const validation = validateSkillGraph([invalid]);
+    expect(validation.valid).toBe(false);
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining("Difficulty"),
+      expect.stringContaining("duplicate prerequisites"),
+      expect.stringContaining("Unknown prerequisite"),
+    ]));
+    expect(() => getUnlockedSkillDefinitions({}, SKILL_CATALOG, Number.NaN))
+      .toThrow(/masteryThreshold/);
   });
 });

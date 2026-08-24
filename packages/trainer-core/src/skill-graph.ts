@@ -6,18 +6,18 @@ const skill = (
   description: string,
   domain: SkillDefinition["domain"],
   representations: SkillDefinition["representations"],
-  prerequisites: string[],
+  prerequisites: readonly string[],
   difficulty: number,
-  tags: string[],
-): SkillDefinition => ({
+  tags: readonly string[],
+): SkillDefinition => Object.freeze({
   skillId,
   label,
   description,
   domain,
-  representations,
-  prerequisites,
+  representations: Object.freeze([...representations]),
+  prerequisites: Object.freeze([...prerequisites]),
   difficulty,
-  tags,
+  tags: Object.freeze([...tags]),
 });
 
 /**
@@ -25,7 +25,7 @@ const skill = (
  * lessons. Prerequisites describe useful supporting abilities; they do not
  * prevent an application from exposing any laboratory mode directly.
  */
-export const SKILL_CATALOG: readonly SkillDefinition[] = [
+export const SKILL_CATALOG: readonly SkillDefinition[] = Object.freeze([
   // Perception
   skill(
     "pitch.same_different",
@@ -413,26 +413,35 @@ export const SKILL_CATALOG: readonly SkillDefinition[] = [
     0.42,
     ["mapping", "bass", "fretboard"],
   ),
-];
-
-export const SKILL_DEFINITIONS = SKILL_CATALOG;
+]);
 
 export interface SkillGraphNode {
+  definition: SkillDefinition;
+  dependents: readonly string[];
+}
+
+interface MutableSkillGraphNode {
   definition: SkillDefinition;
   dependents: string[];
 }
 
 const createGraph = (definitions: readonly SkillDefinition[]): Readonly<Record<string, SkillGraphNode>> => {
-  const graph: Record<string, SkillGraphNode> = {};
+  const graph: Record<string, MutableSkillGraphNode> = {};
   for (const definition of definitions) {
     graph[definition.skillId] = { definition, dependents: [] };
   }
   for (const definition of definitions) {
     for (const prerequisite of definition.prerequisites) {
-      if (graph[prerequisite]) graph[prerequisite].dependents.push(definition.skillId);
+      const node = graph[prerequisite];
+      if (node) node.dependents.push(definition.skillId);
     }
   }
-  return graph;
+  return Object.freeze(Object.fromEntries(
+    Object.entries(graph).map(([skillId, node]) => [skillId, Object.freeze({
+      definition: node.definition,
+      dependents: Object.freeze([...node.dependents]),
+    })]),
+  ));
 };
 
 export const SKILL_GRAPH = createGraph(SKILL_CATALOG);
@@ -450,8 +459,13 @@ export const validateSkillGraph = (
   for (const definition of definitions) {
     if (definitionById.has(definition.skillId)) errors.push(`Duplicate skill ID: ${definition.skillId}`);
     definitionById.set(definition.skillId, definition);
-    if (definition.difficulty < 0 || definition.difficulty > 1) {
+    if (definition.skillId.trim().length === 0) errors.push("Skill IDs cannot be empty.");
+    if (definition.label.trim().length === 0) errors.push(`Skill ${definition.skillId} must have a label.`);
+    if (!Number.isFinite(definition.difficulty) || definition.difficulty < 0 || definition.difficulty > 1) {
       errors.push(`Difficulty for ${definition.skillId} must be between 0 and 1.`);
+    }
+    if (new Set(definition.prerequisites).size !== definition.prerequisites.length) {
+      errors.push(`Skill ${definition.skillId} contains duplicate prerequisites.`);
     }
   }
   for (const definition of definitions) {
@@ -507,10 +521,14 @@ export const getUnlockedSkillDefinitions = (
   states: Readonly<Record<string, SkillState | undefined>>,
   definitions: readonly SkillDefinition[] = SKILL_CATALOG,
   masteryThreshold = 0.6,
-): SkillDefinition[] =>
-  definitions.filter((definition) => {
+): SkillDefinition[] => {
+  if (!Number.isFinite(masteryThreshold) || masteryThreshold < 0 || masteryThreshold > 1) {
+    throw new RangeError("masteryThreshold must be a finite number from zero through one.");
+  }
+  return definitions.filter((definition) => {
     if ((states[definition.skillId]?.attemptCount ?? 0) > 0) return true;
     return definition.prerequisites.every(
       (prerequisite) => (states[prerequisite]?.mastery ?? 0) >= masteryThreshold,
     );
   });
+};

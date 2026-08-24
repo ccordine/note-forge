@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
-import { playFrequencies, playTone } from "@/audio/synth";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { playFrequencies, playSafely, playTone } from "@/audio/synth";
 import { useLab } from "@/state/LabContext";
 import { continuousMidiToHz, INTERVAL_LONG, INTERVAL_SHORT, noteLabel } from "@/lib/music-display";
-import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select, Switch } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Switch } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
 
 type ExerciseType = "recognition" | "production" | "comparison" | "mutation";
@@ -33,11 +33,30 @@ export function IntervalLab() {
   const [compareTrial, setCompareTrial] = useState(() => ({ a: randomTrial("ascending"), b: randomTrial("ascending") }));
   const [comparisonAnswer, setComparisonAnswer] = useState<"a" | "b" | "same">();
   const [score, setScore] = useState({ right: 0, total: 0 });
+  const comparisonTimerRef = useRef<number | null>(null);
   const notes = trialNotes(trial);
 
   const playInterval = (source = trial) => {
     const pair = trialNotes(source).map(continuousMidiToHz);
-    void playFrequencies(pair, source.presentation === "harmonic" ? "simultaneous" : "sequential", { timbre, duration: .82 });
+    playSafely(playFrequencies(pair, source.presentation === "harmonic" ? "simultaneous" : "sequential", { timbre, duration: .82 }), "Interval playback");
+  };
+
+  const clearComparisonTimer = () => {
+    if (comparisonTimerRef.current !== null) window.clearTimeout(comparisonTimerRef.current);
+    comparisonTimerRef.current = null;
+  };
+
+  useEffect(() => () => clearComparisonTimer(), []);
+
+  const changeExercise = (next: ExerciseType) => {
+    clearComparisonTimer();
+    setExercise(next);
+    setAnswer(undefined);
+    setComparisonAnswer(undefined);
+    setRevealed(false);
+    if (next === "comparison") {
+      setCompareTrial({ a: randomTrial(presentation), b: randomTrial(presentation) });
+    }
   };
 
   const nextRecognition = () => {
@@ -62,8 +81,8 @@ export function IntervalLab() {
       </div>
 
       <Panel className="interval-config">
-        <Segmented value={exercise} onChange={setExercise} options={[{ value: "recognition", label: "Recognition" }, { value: "production", label: "Production" }, { value: "comparison", label: "Comparison" }, { value: "mutation", label: "Mutation" }]} />
-        <Segmented label="Presentation" value={presentation} onChange={(value) => { setPresentation(value); setTrial(randomTrial(value)); setRevealed(false); }} options={[{ value: "ascending", label: "Ascending" }, { value: "descending", label: "Descending" }, { value: "harmonic", label: "Together" }]} />
+        <Segmented value={exercise} onChange={changeExercise} options={[{ value: "recognition", label: "Recognition" }, { value: "production", label: "Production" }, { value: "comparison", label: "Comparison" }, { value: "mutation", label: "Mutation" }]} />
+        <Segmented label="Presentation" value={presentation} onChange={(value) => { clearComparisonTimer(); setPresentation(value); setTrial(randomTrial(value)); setCompareTrial({ a: randomTrial(value), b: randomTrial(value) }); setAnswer(undefined); setComparisonAnswer(undefined); setRevealed(false); }} options={[{ value: "ascending", label: "Ascending" }, { value: "descending", label: "Descending" }, { value: "harmonic", label: "Together" }]} />
         <Switch label="Sound first" checked={soundFirst} onChange={setSoundFirst} />
       </Panel>
 
@@ -87,26 +106,26 @@ export function IntervalLab() {
       {exercise === "production" && <div className="interval-workspace production">
         <Panel className="production-mission">
           <div className="mission-number">PRODUCTION MISSION</div>
-          <div className="start-note-disc"><small>START</small><strong>{soundFirst ? "•" : noteLabel(notes[0])}</strong><button onClick={() => playTone({ frequencyHz: continuousMidiToHz(notes[0]), timbre, duration: 1.05 })}><Icon name="play" size={18} /></button></div>
+          <div className="start-note-disc"><small>START</small><strong>{soundFirst ? "•" : noteLabel(notes[0])}</strong><button onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(notes[0]), timbre, duration: 1.05 }), "Interval start note")}><Icon name="play" size={18} /></button></div>
           <div className="mission-arrow"><span>{presentation === "descending" ? "↓" : "↑"}</span><small>{trial.semitones} semitones</small></div>
           <div className="target-note-disc"><small>SING</small><strong>{INTERVAL_SHORT[trial.semitones]}</strong><span>{presentation}</span></div>
           <h2>Sing a {INTERVAL_LONG[trial.semitones]} {presentation === "descending" ? "below" : "above"}.</h2>
           <p>Only the starting note sounds. Predict the second pitch, silently configure, then produce.</p>
-          <div className="production-actions"><PlayButton label="Hear start" onClick={() => playTone({ frequencyHz: continuousMidiToHz(notes[0]), timbre, duration: 1.05 })} /><ActionButton className="primary" onClick={() => { setSelectedMidi(notes[1]); setView("mirror"); }}><Icon name="mic" size={18} /> Measure in Pitch Mirror</ActionButton><ActionButton onClick={nextRecognition}>New mission</ActionButton></div>
+          <div className="production-actions"><PlayButton label="Hear start" onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(notes[0]), timbre, duration: 1.05 }), "Interval start note")} /><ActionButton className="primary" onClick={() => { setSelectedMidi(notes[1]); setView("mirror"); }}><Icon name="mic" size={18} /> Measure in Pitch Mirror</ActionButton><ActionButton onClick={nextRecognition}>New mission</ActionButton></div>
         </Panel>
         <Panel className="production-map"><Eyebrow>After you produce</Eyebrow><h2>Reveal the landing coordinate</h2><p>The interval score belongs to the distance between both produced centers, so two sharp notes can still describe an accurate interval.</p><button className="reveal-landing" onClick={() => setRevealed(!revealed)}><Icon name={revealed ? "eyeOff" : "eye"} />{revealed ? <><b>{noteLabel(notes[1])}</b><span>{continuousMidiToHz(notes[1]).toFixed(2)} Hz</span></> : <span>Reveal landing note</span>}</button><div className="formula-card"><span>Δ actual</span><b>1200 log₂ (f₂ / f₁)</b><small>continuous cents · no early snapping</small></div></Panel>
       </div>}
 
       {exercise === "comparison" && <div className="interval-workspace comparison">
         <Panel className="comparison-card">
-          <Eyebrow>Two candidate movements</Eyebrow><h2>Which distance is wider?</h2><div className="candidate-intervals"><button onClick={() => playInterval(compareTrial.a)}><span>A</span><i>{soundFirst && !revealed ? "?" : INTERVAL_SHORT[compareTrial.a.semitones]}</i><Icon name="play" /></button><b>versus</b><button onClick={() => playInterval(compareTrial.b)}><span>B</span><i>{soundFirst && !revealed ? "?" : INTERVAL_SHORT[compareTrial.b.semitones]}</i><Icon name="play" /></button></div><ActionButton className="wide" onClick={() => { playInterval(compareTrial.a); setTimeout(() => playInterval(compareTrial.b), 2_100); }}>Play A, then B</ActionButton>
+          <Eyebrow>Two candidate movements</Eyebrow><h2>Which distance is wider?</h2><div className="candidate-intervals"><button onClick={() => playInterval(compareTrial.a)}><span>A</span><i>{soundFirst && !revealed ? "?" : INTERVAL_SHORT[compareTrial.a.semitones]}</i><Icon name="play" /></button><b>versus</b><button onClick={() => playInterval(compareTrial.b)}><span>B</span><i>{soundFirst && !revealed ? "?" : INTERVAL_SHORT[compareTrial.b.semitones]}</i><Icon name="play" /></button></div><ActionButton className="wide" onClick={() => { clearComparisonTimer(); playInterval(compareTrial.a); comparisonTimerRef.current = window.setTimeout(() => { comparisonTimerRef.current = null; playInterval(compareTrial.b); }, 2_100); }}>Play A, then B</ActionButton>
         </Panel>
-        <Panel className="comparison-answer"><Eyebrow>Your comparison</Eyebrow><div className="wide-choice">{(["a", "same", "b"] as const).map((choice) => <button key={choice} className={`${comparisonAnswer === choice ? "selected" : ""} ${revealed && correctComparison === choice ? "correct" : ""}`} onClick={() => !revealed && setComparisonAnswer(choice)}>{choice === "a" ? "A is wider" : choice === "b" ? "B is wider" : "Identical"}</button>)}</div>{revealed && <div className="comparison-reveal"><b>{INTERVAL_SHORT[compareTrial.a.semitones]} · {compareTrial.a.semitones} st</b><span>versus</span><b>{INTERVAL_SHORT[compareTrial.b.semitones]} · {compareTrial.b.semitones} st</b></div>}<ActionButton className="wide primary" disabled={!comparisonAnswer} onClick={() => { if (!revealed) setRevealed(true); else { setCompareTrial({ a: randomTrial("ascending"), b: randomTrial("ascending") }); setComparisonAnswer(undefined); setRevealed(false); } }}>{revealed ? "Next comparison" : "Reveal distances"}</ActionButton></Panel>
+        <Panel className="comparison-answer"><Eyebrow>Your comparison</Eyebrow><div className="wide-choice">{(["a", "same", "b"] as const).map((choice) => <button key={choice} className={`${comparisonAnswer === choice ? "selected" : ""} ${revealed && correctComparison === choice ? "correct" : ""}`} onClick={() => !revealed && setComparisonAnswer(choice)}>{choice === "a" ? "A is wider" : choice === "b" ? "B is wider" : "Identical"}</button>)}</div>{revealed && <div className="comparison-reveal"><b>{INTERVAL_SHORT[compareTrial.a.semitones]} · {compareTrial.a.semitones} st</b><span>versus</span><b>{INTERVAL_SHORT[compareTrial.b.semitones]} · {compareTrial.b.semitones} st</b></div>}<ActionButton className="wide primary" disabled={!comparisonAnswer} onClick={() => { if (!revealed) setRevealed(true); else { setCompareTrial({ a: randomTrial(presentation), b: randomTrial(presentation) }); setComparisonAnswer(undefined); setRevealed(false); } }}>{revealed ? "Next comparison" : "Reveal distances"}</ActionButton></Panel>
       </div>}
 
       {exercise === "mutation" && <div className="interval-workspace mutation">
-        <Panel className="mutation-phrase"><Eyebrow>Imitation becomes control</Eyebrow><h2>Hear this gesture.</h2><div className="phrase-notes">{phrase.map((midi, index) => <span key={index} style={{ transform: `translateY(${-(midi - trial.start) * 5}px)` }}>{soundFirst ? "•" : noteLabel(midi)}</span>)}</div><PlayButton label="Play phrase" onClick={() => playFrequencies(phrase.map(continuousMidiToHz), "sequential", { timbre, duration: .46 })} /></Panel>
-        <Panel className="mutation-missions"><Eyebrow>Now mutate it</Eyebrow><h2>Preserve one thing; change another.</h2>{[{ label: "Unchanged", detail: "Copy contour, register, and intervals", shift: 0 }, { label: "Octave higher", detail: "Keep pitch classes and contour", shift: 12 }, { label: "A third above", detail: "Transpose every movement by M3", shift: 4 }].map((mission) => <button key={mission.label} onClick={() => playFrequencies(phrase.map((midi) => continuousMidiToHz(midi + mission.shift)), "sequential", { timbre, duration: .46 })}><span><b>{mission.label}</b><small>{mission.detail}</small></span><Icon name="play" size={18} /></button>)}</Panel>
+        <Panel className="mutation-phrase"><Eyebrow>Imitation becomes control</Eyebrow><h2>Hear this gesture.</h2><div className="phrase-notes">{phrase.map((midi, index) => <span key={index} style={{ transform: `translateY(${-(midi - trial.start) * 5}px)` }}>{soundFirst ? "•" : noteLabel(midi)}</span>)}</div><PlayButton label="Play phrase" onClick={() => playSafely(playFrequencies(phrase.map(continuousMidiToHz), "sequential", { timbre, duration: .46 }), "Interval mutation phrase")} /></Panel>
+        <Panel className="mutation-missions"><Eyebrow>Now mutate it</Eyebrow><h2>Preserve one thing; change another.</h2>{[{ label: "Unchanged", detail: "Copy contour, register, and intervals", shift: 0 }, { label: "Octave higher", detail: "Keep pitch classes and contour", shift: 12 }, { label: "A third above", detail: "Transpose every movement by M3", shift: 4 }].map((mission) => <button key={mission.label} onClick={() => playSafely(playFrequencies(phrase.map((midi) => continuousMidiToHz(midi + mission.shift)), "sequential", { timbre, duration: .46 }), "Interval mutation phrase")}><span><b>{mission.label}</b><small>{mission.detail}</small></span><Icon name="play" size={18} /></button>)}</Panel>
       </div>}
     </div>
   );

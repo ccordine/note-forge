@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateNextDueDate,
+  confusionKeyFor,
   createInitialSkillState,
   recordSkillConfusion,
   updateSkillState,
@@ -62,5 +64,94 @@ describe("skill progression", () => {
     ]);
     expect(original[initial.skillId].attemptCount).toBe(0);
     expect(result[initial.skillId].attemptCount).toBe(1);
+  });
+
+  it("rejects corrupt identifiers, counters, dates, and confusion evidence", () => {
+    expect(() => createInitialSkillState(" ")).toThrow(/skillId/);
+    expect(() => createInitialSkillState("constructor")).toThrow(/prototype/);
+    expect(() => createInitialSkillState("x".repeat(129))).toThrow(/128/);
+    expect(() => createInitialSkillState("pitch.direction", Number.NaN)).toThrow(/difficulty/);
+    expect(() => createInitialSkillState("pitch.direction", 1.01)).toThrow(/difficulty/);
+
+    const initial = createInitialSkillState("pitch.direction");
+    expect(() => recordSkillConfusion(initial, "", 1)).toThrow(/confusionKey/);
+    expect(() => recordSkillConfusion(initial, "up → down", 0)).toThrow(/positive/);
+    expect(() => recordSkillConfusion(initial, "up → down", 0.5)).toThrow(/increment/);
+    expect(() => recordSkillConfusion(initial, "constructor", 1)).toThrow(/prototype/);
+    expect(() => recordSkillConfusion(initial, "x".repeat(257), 1)).toThrow(/256/);
+    expect(() => confusionKeyFor("x".repeat(257), "y")).toThrow(/256/);
+    expect(() => calculateNextDueDate({
+      accuracy: 1,
+      mastery: 0.5,
+      attemptCount: -1,
+      practicedAt: new Date("2026-08-22T12:00:00.000Z"),
+    })).toThrow(/attemptCount/);
+    expect(() => calculateNextDueDate({
+      accuracy: Number.NaN,
+      mastery: 0.5,
+      attemptCount: 1,
+      practicedAt: new Date("2026-08-22T12:00:00.000Z"),
+    })).toThrow(/accuracy/);
+    expect(() => calculateNextDueDate({
+      accuracy: 1,
+      mastery: 0.5,
+      attemptCount: 1,
+      practicedAt: new Date("2026-08-22T12:00:00.000Z"),
+    }, { baseIntervalDays: 2, maximumIntervalDays: 1 })).toThrow(/maximumIntervalDays/);
+    expect(() => calculateNextDueDate({
+      accuracy: 1,
+      mastery: 1,
+      attemptCount: 1,
+      practicedAt: new Date("2026-08-22T12:00:00.000Z"),
+    }, {
+      baseIntervalDays: Number.MAX_VALUE,
+      maximumIntervalDays: Number.MAX_VALUE,
+    })).toThrow(/representable date range/);
+    expect(() => updateSkillState({ ...initial, attemptCount: Number.NaN }, initial.skillId, {
+      accuracy: 1,
+    })).toThrow(/attemptCount/);
+    expect(() => updateSkillState({
+      ...initial,
+      attemptCount: Number.MAX_SAFE_INTEGER,
+    }, initial.skillId, { accuracy: 1 })).toThrow(/safe-integer range/);
+    expect(() => updateSkillState({ ...initial, mastery: Number.NaN }, initial.skillId, {
+      accuracy: 1,
+    })).toThrow(/mastery/);
+    expect(() => updateSkillState(initial, initial.skillId, { accuracy: 1.01 }))
+      .toThrow(/accuracy/);
+    expect(() => updateSkillState(initial, initial.skillId, {
+      accuracy: 1,
+      responseTimeMs: -1,
+    })).toThrow(/responseTimeMs/);
+    expect(() => updateSkillState(initial, initial.skillId, {
+      accuracy: 1,
+      confusionKey: " ",
+    })).toThrow(/confusionKey/);
+    expect(() => updateSkillState(initial, initial.skillId, { accuracy: 1 }, {
+      masteryAlpha: Number.NaN,
+    })).toThrow(/masteryAlpha/);
+    expect(() => recordSkillConfusion({
+      ...initial,
+      commonConfusions: { "up → down": Number.NaN },
+    }, "up → down")).toThrow(/commonConfusions/);
+    expect(() => recordSkillConfusion({
+      ...initial,
+      commonConfusions: { "up → down": Number.MAX_SAFE_INTEGER },
+    }, "up → down")).toThrow(/safe-integer range/);
+    expect(() => recordSkillConfusion({
+      ...initial,
+      commonConfusions: Object.fromEntries(
+        Array.from({ length: 129 }, (_, index) => [`confusion-${index}`, 1]),
+      ),
+    }, "another")).toThrow(/128/);
+    expect(() => recordSkillConfusion({
+      ...initial,
+      commonConfusions: JSON.parse('{"__proto__":1}') as Record<string, number>,
+    }, "up → down")).toThrow(/prototype/);
+    expect(() => recordSkillConfusion({
+      ...initial,
+      commonConfusions: [] as unknown as Record<string, number>,
+    }, "up → down")).toThrow(/plain record/);
+    expect(() => updateSkillStates({ alias: initial }, [])).toThrow(/stored under/);
   });
 });

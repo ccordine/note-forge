@@ -6,6 +6,7 @@ import type {
   VolumeEnvelopePoint,
   VolumeMetrics,
 } from "./types";
+import { splitMidiPitch } from "@noteforge/music-core";
 
 export interface VibratoScoringOptions {
   minimumDepthCents?: number;
@@ -42,7 +43,9 @@ const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
 const mean = (values: readonly number[]): number =>
-  values.reduce((sum, value) => sum + value, 0) / values.length;
+  values.length === 0
+    ? Number.NaN
+    : values.reduce((sum, value) => sum + value / values.length, 0);
 
 const quantile = (values: readonly number[], probability: number): number => {
   if (values.length === 0) return Number.NaN;
@@ -70,10 +73,12 @@ const sampleStandardDeviation = (values: readonly number[]): number => {
 
 const finiteMidi = (frame: PitchFrame): number | null => {
   if (frame.midiFloat !== null && Number.isFinite(frame.midiFloat)) {
-    return frame.midiFloat;
-  }
-  if (frame.frequencyHz !== null && frame.frequencyHz > 0 && Number.isFinite(frame.frequencyHz)) {
-    return 69 + 12 * Math.log2(frame.frequencyHz / 440);
+    try {
+      splitMidiPitch(frame.midiFloat);
+      return frame.midiFloat;
+    } catch {
+      return null;
+    }
   }
   return null;
 };
@@ -109,16 +114,26 @@ const longestContinuousRun = (
   let bestStart = 0;
   let bestEnd = 0;
   let currentStart = 0;
+  const shouldReplaceBest = (candidateStart: number, candidateEnd: number): boolean => {
+    const candidateDuration = frames[candidateEnd].frame.timeSeconds -
+      frames[candidateStart].frame.timeSeconds;
+    const bestDuration = frames[bestEnd].frame.timeSeconds -
+      frames[bestStart].frame.timeSeconds;
+    const candidateLength = candidateEnd - candidateStart + 1;
+    const bestLength = bestEnd - bestStart + 1;
+    return candidateDuration > bestDuration ||
+      (candidateDuration === bestDuration && candidateLength > bestLength);
+  };
   for (let index = 1; index < frames.length; index += 1) {
     if (frames[index].frame.timeSeconds - frames[index - 1].frame.timeSeconds > maximumGapSeconds) {
-      if (index - 1 - currentStart > bestEnd - bestStart) {
+      if (shouldReplaceBest(currentStart, index - 1)) {
         bestStart = currentStart;
         bestEnd = index - 1;
       }
       currentStart = index;
     }
   }
-  if (frames.length - 1 - currentStart > bestEnd - bestStart) {
+  if (shouldReplaceBest(currentStart, frames.length - 1)) {
     bestStart = currentStart;
     bestEnd = frames.length - 1;
   }
@@ -129,13 +144,14 @@ const downsampleVolume = (
   frames: readonly PitchFrame[],
   requestedPoints: number,
 ): VolumeEnvelopePoint[] => {
-  if (frames.length === 0 || requestedPoints <= 0) return [];
-  const pointCount = Math.min(frames.length, Math.max(1, Math.floor(requestedPoints)));
+  const validFrames = frames.filter((frame) => Number.isFinite(frame.rms) && frame.rms >= 0);
+  if (validFrames.length === 0 || requestedPoints === 0) return [];
+  const pointCount = Math.min(validFrames.length, requestedPoints);
   const result: VolumeEnvelopePoint[] = [];
   for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
-    const start = Math.floor((pointIndex * frames.length) / pointCount);
-    const end = Math.max(start + 1, Math.floor(((pointIndex + 1) * frames.length) / pointCount));
-    const slice = frames.slice(start, end);
+    const start = Math.floor((pointIndex * validFrames.length) / pointCount);
+    const end = Math.max(start + 1, Math.floor(((pointIndex + 1) * validFrames.length) / pointCount));
+    const slice = validFrames.slice(start, end);
     result.push({
       timeSeconds: mean(slice.map((frame) => frame.timeSeconds)),
       rms: mean(slice.map((frame) => Math.max(0, frame.rms))),
@@ -158,7 +174,9 @@ const scoreVolume = (frames: readonly PitchFrame[], requestedPoints: number): Vo
     meanRms: mean(rmsValues),
     minimumRms,
     maximumRms,
-    dynamicRangeDb: 20 * Math.log10(Math.max(maximumRms, floor) / Math.max(minimumRms, floor)),
+    dynamicRangeDb: 20 * (
+      Math.log10(Math.max(maximumRms, floor)) - Math.log10(Math.max(minimumRms, floor))
+    ),
     envelope: downsampleVolume(frames, requestedPoints),
   };
 };
@@ -181,6 +199,26 @@ interface VibratoAnalysis {
   metrics: VibratoMetrics;
   adjustedStabilityCents?: number;
 }
+
+const validateVibratoOptions = (options: VibratoScoringOptions): void => {
+  const minimumDepthCents = options.minimumDepthCents ?? 5;
+  const minimumRateHz = options.minimumRateHz ?? 3;
+  const maximumRateHz = options.maximumRateHz ?? 9;
+  const minimumCycles = options.minimumCycles ?? 2;
+  if (
+    !Number.isFinite(minimumDepthCents) ||
+    minimumDepthCents < 0 ||
+    !Number.isFinite(minimumRateHz) ||
+    minimumRateHz <= 0 ||
+    !Number.isFinite(maximumRateHz) ||
+    maximumRateHz <= minimumRateHz
+  ) {
+    throw new RangeError("Vibrato depth and rate bounds must be finite, positive, and ordered.");
+  }
+  if (!Number.isInteger(minimumCycles) || minimumCycles < 1) {
+    throw new RangeError("minimumCycles must be a positive integer.");
+  }
+};
 
 interface SinusoidFit {
   residualRms: number;
@@ -243,17 +281,7 @@ const analyzeVibrato = (
   const minimumDepthCents = options.minimumDepthCents ?? 5;
   const minimumRateHz = options.minimumRateHz ?? 3;
   const maximumRateHz = options.maximumRateHz ?? 9;
-  if (
-    !Number.isFinite(minimumDepthCents) ||
-    minimumDepthCents < 0 ||
-    !Number.isFinite(minimumRateHz) ||
-    minimumRateHz <= 0 ||
-    !Number.isFinite(maximumRateHz) ||
-    maximumRateHz <= minimumRateHz
-  ) {
-    throw new RangeError("Vibrato depth and rate bounds must be finite, positive, and ordered.");
-  }
-  const minimumCycles = Math.max(1, Math.floor(options.minimumCycles ?? 2));
+  const minimumCycles = options.minimumCycles ?? 2;
   const crossings = positiveZeroCrossingTimes(relativeTimes, detrended);
   const periods: number[] = [];
   for (let index = 1; index < crossings.length; index += 1) {
@@ -322,35 +350,60 @@ export function scoreSustainedNote(
   if (!Number.isFinite(target.midi) || !Number.isFinite(target.centsOffset)) {
     throw new TypeError("The target must contain finite midi and centsOffset values.");
   }
+  const targetMidiFloat = target.midi + target.centsOffset / 100;
+  if (!Number.isFinite(targetMidiFloat)) {
+    throw new RangeError("The resolved target MIDI coordinate must be finite.");
+  }
+  try {
+    splitMidiPitch(targetMidiFloat);
+  } catch {
+    throw new RangeError("The resolved target MIDI coordinate is outside the canonical safe range.");
+  }
   const toleranceCents = options.toleranceCents ?? DEFAULT_TOLERANCE_CENTS;
   if (!(toleranceCents > 0) || !Number.isFinite(toleranceCents)) {
     throw new RangeError("toleranceCents must be a positive finite number.");
   }
   const requestedMinimumConfidence = options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE;
-  if (!Number.isFinite(requestedMinimumConfidence)) {
-    throw new RangeError("minimumConfidence must be finite.");
+  if (!Number.isFinite(requestedMinimumConfidence) ||
+    requestedMinimumConfidence < 0 || requestedMinimumConfidence > 1) {
+    throw new RangeError("minimumConfidence must be a finite number from zero through one.");
   }
-  const minimumConfidence = clamp(requestedMinimumConfidence, 0, 1);
+  const minimumConfidence = requestedMinimumConfidence;
   const attackWindowSeconds = options.attackWindowSeconds ?? DEFAULT_ATTACK_WINDOW_SECONDS;
   if (!Number.isFinite(attackWindowSeconds) || attackWindowSeconds < 0) {
     throw new RangeError("attackWindowSeconds must be a non-negative finite number.");
   }
+  if (options.promptTimeSeconds !== undefined && !Number.isFinite(options.promptTimeSeconds)) {
+    throw new RangeError("promptTimeSeconds must be finite when provided.");
+  }
+  const volumeEnvelopePoints = options.volumeEnvelopePoints ?? 64;
+  if (!Number.isInteger(volumeEnvelopePoints) || volumeEnvelopePoints < 0) {
+    throw new RangeError("volumeEnvelopePoints must be a non-negative integer.");
+  }
+  if (options.maximumVoicedGapSeconds !== undefined &&
+    (!Number.isFinite(options.maximumVoicedGapSeconds) || options.maximumVoicedGapSeconds <= 0)) {
+    throw new RangeError("maximumVoicedGapSeconds must be a positive finite number.");
+  }
+  validateVibratoOptions(options.vibrato ?? {});
   const sortedFrames = [...frames]
     .filter((frame) => Number.isFinite(frame.timeSeconds))
     .sort((a, b) => a.timeSeconds - b.timeSeconds);
-  const voicedCandidates = sortedFrames.filter((frame) => frame.voiced && finiteMidi(frame) !== null);
+  const voicedCandidates = sortedFrames.filter((frame) => frame.voiced
+    && finiteMidi(frame) !== null
+    && Number.isFinite(frame.confidence)
+    && frame.confidence >= 0
+    && frame.confidence <= 1);
   const detectorConfidence =
     voicedCandidates.length > 0
       ? mean(
           voicedCandidates.map((frame) =>
-            Number.isFinite(frame.confidence) ? clamp(frame.confidence, 0, 1) : 0,
+            frame.confidence,
           ),
         )
       : undefined;
-  const targetMidiFloat = target.midi + target.centsOffset / 100;
   const analyzed: AnalyzedFrame[] = [];
   for (const frame of voicedCandidates) {
-    if (!Number.isFinite(frame.confidence) || frame.confidence < minimumConfidence) continue;
+    if (frame.confidence < minimumConfidence) continue;
     const midiFloat = finiteMidi(frame);
     if (midiFloat === null) continue;
     analyzed.push({
@@ -365,7 +418,7 @@ export function scoreSustainedNote(
     voicedFrameCount: voicedCandidates.length,
     analyzedFrameCount: analyzed.length,
     totalFrameCount: frames.length,
-    volume: scoreVolume(sortedFrames, options.volumeEnvelopePoints ?? 64),
+    volume: scoreVolume(sortedFrames, volumeEnvelopePoints),
   };
   if (analyzed.length === 0) return metrics;
 
@@ -379,9 +432,6 @@ export function scoreSustainedNote(
   const inferredHop = inferHopSeconds(sortedFrames);
   const maximumGapSeconds =
     options.maximumVoicedGapSeconds ?? Math.max(0.1, inferredHop > 0 ? inferredHop * 3 : 0.1);
-  if (!Number.isFinite(maximumGapSeconds) || maximumGapSeconds <= 0) {
-    throw new RangeError("maximumVoicedGapSeconds must be a positive finite number.");
-  }
   const continuousRun = longestContinuousRun(analyzed, maximumGapSeconds);
   const runStart = continuousRun[0].frame.timeSeconds;
   const runEnd = continuousRun[continuousRun.length - 1].frame.timeSeconds;

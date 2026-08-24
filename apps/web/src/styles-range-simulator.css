@@ -1,0 +1,1001 @@
+.range-simulator-page {
+  --rating-1: var(--lime);
+  --rating-2: var(--blue);
+  --rating-3: var(--cream);
+  --rating-4: #ffad5c;
+  --rating-5: var(--coral);
+}
+
+.range-sim-intro {
+  align-items: flex-end;
+}
+
+.range-sim-status {
+  min-width: 230px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel);
+}
+
+.range-sim-status span,
+.range-sim-status strong,
+.range-sim-status small {
+  display: block;
+}
+
+.range-sim-status span {
+  color: var(--lime);
+  font: 8px var(--mono);
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.range-sim-status strong {
+  margin-top: 5px;
+  font: 12px var(--mono);
+}
+
+.range-sim-status small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.range-sim-steps {
+  padding: 12px 16px;
+  margin-bottom: 13px;
+}
+
+.range-sim-steps ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.range-sim-steps li {
+  display: grid;
+  grid-template-columns: 27px 1fr;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--dim);
+}
+
+.range-sim-steps li > span {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font: 9px var(--mono);
+}
+
+.range-sim-steps li b,
+.range-sim-steps li small {
+  display: block;
+}
+
+.range-sim-steps li b {
+  color: inherit;
+  font-size: 10px;
+}
+
+.range-sim-steps li small {
+  margin-top: 2px;
+  color: var(--dim);
+  font-size: 8px;
+}
+
+.range-sim-steps li.current {
+  border-color: rgba(216, 255, 62, .22);
+  background: rgba(216, 255, 62, .045);
+  color: var(--lime);
+}
+
+.range-sim-steps li.complete {
+  color: var(--blue);
+}
+
+.range-sim-map,
+.range-sim-profile {
+  padding: 22px;
+}
+
+.range-sim-stage-header,
+.range-sim-profile-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.range-sim-stage-header h2,
+.range-sim-profile-header h2 {
+  margin: 7px 0 0;
+  font-size: 21px;
+  letter-spacing: -.45px;
+}
+
+.range-sim-profile-header h2:focus {
+  outline: 1px solid rgba(216, 255, 62, .38);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+
+.range-sim-stage-header h2:focus {
+  outline: 1px solid rgba(216, 255, 62, .3);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+
+.range-sim-stage-header p,
+.range-sim-profile-header p {
+  max-width: 670px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.range-sim-save-state {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  border: 1px solid rgba(216, 255, 62, .18);
+  border-radius: 6px;
+  color: var(--lime);
+  font: 8px var(--mono);
+  text-transform: uppercase;
+}
+
+.range-sim-save-state.error {
+  border-color: rgba(255, 107, 69, .25);
+  color: var(--coral);
+}
+
+.range-rating-fieldset {
+  padding: 17px 0 0;
+  margin: 18px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.range-rating-fieldset legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.range-rating-fieldset legend small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.range-rating-fieldset:disabled .range-rating-grid {
+  opacity: .42;
+}
+
+.range-rating-fieldset:disabled .range-rating-option {
+  cursor: not-allowed;
+}
+
+.range-rating-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 12px;
+  clear: both;
+}
+
+.range-rating-option {
+  position: relative;
+  display: flex;
+  min-height: 92px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #11130f;
+  cursor: pointer;
+}
+
+.range-rating-option:hover {
+  border-color: var(--line-strong);
+}
+
+.range-rating-option:has(input:checked) {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, #11130f);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.range-rating-option:has(input:focus-visible) {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+}
+
+.range-rating-option.rating-1 { color: var(--rating-1); }
+.range-rating-option.rating-2 { color: var(--rating-2); }
+.range-rating-option.rating-3 { color: var(--rating-3); }
+.range-rating-option.rating-4 { color: var(--rating-4); }
+.range-rating-option.rating-5 { color: var(--rating-5); }
+
+.range-rating-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.range-rating-option strong {
+  font: 24px var(--mono);
+}
+
+.range-rating-option b {
+  color: var(--text);
+  font-size: 9px;
+}
+
+.range-rating-option small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.range-sim-coordinate-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.range-sim-coordinate-check input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: var(--lime);
+}
+
+.range-sim-rating-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+}
+
+.range-sim-rating-actions .action-button {
+  min-height: 44px;
+}
+
+.range-sim-rating-buttons {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.range-sim-rating-actions > small {
+  color: var(--dim);
+  font: 8px var(--mono);
+}
+
+.range-sim-baseline-config {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.range-sim-baseline-config .field {
+  min-width: 0;
+}
+
+.range-sim-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin: 16px 0 0;
+}
+
+.range-sim-summary-grid > div {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .018);
+}
+
+.range-sim-summary-grid dt {
+  color: var(--dim);
+  font: 7px var(--mono);
+  letter-spacing: .7px;
+  text-transform: uppercase;
+}
+
+.range-sim-summary-grid dd {
+  margin: 6px 0 0;
+  font: 10px var(--mono);
+  line-height: 1.35;
+}
+
+.range-sim-safety {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid rgba(255, 107, 69, .18);
+  border-radius: 9px;
+  background: rgba(255, 107, 69, .035);
+  color: var(--coral);
+}
+
+.range-sim-safety p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.range-sim-safety b {
+  color: var(--text);
+}
+
+.range-sim-map,
+.range-sim-profile {
+  margin-top: 13px;
+}
+
+.range-sim-map-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.range-sim-map-header h2 {
+  margin: 7px 0 0;
+  font-size: 20px;
+}
+
+.range-sim-map-header > small {
+  color: var(--muted);
+  font: 8px var(--mono);
+}
+
+.range-sim-note-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.range-sim-note {
+  position: relative;
+  min-height: 72px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #11130f;
+}
+
+.range-sim-note::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  content: "";
+  background: currentColor;
+  opacity: .7;
+}
+
+.range-sim-note.rating-1 { color: var(--rating-1); }
+.range-sim-note.rating-2 { color: var(--rating-2); }
+.range-sim-note.rating-3 { color: var(--rating-3); }
+.range-sim-note.rating-4 { color: var(--rating-4); }
+.range-sim-note.rating-5 { color: var(--rating-5); }
+
+.range-sim-note span,
+.range-sim-note b,
+.range-sim-note small {
+  display: block;
+}
+
+.range-sim-note span {
+  color: var(--dim);
+  font: 7px var(--mono);
+  text-transform: uppercase;
+}
+
+.range-sim-note b {
+  margin-top: 5px;
+  color: var(--text);
+  font: 14px var(--mono);
+}
+
+.range-sim-note small {
+  margin-top: 4px;
+  color: inherit;
+  font-size: 8px;
+}
+
+.range-sim-profile-callout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.range-sim-profile-callout > div {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #11130f;
+}
+
+.range-sim-profile-callout span,
+.range-sim-profile-callout strong,
+.range-sim-profile-callout small {
+  display: block;
+}
+
+.range-sim-profile-callout span {
+  color: var(--dim);
+  font: 7px var(--mono);
+  text-transform: uppercase;
+}
+
+.range-sim-profile-callout strong {
+  margin-top: 7px;
+  color: var(--lime);
+  font: 16px var(--mono);
+}
+
+.range-sim-profile-callout small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.range-sim-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.range-sim-disclaimer {
+  margin: 15px 0 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.range-sim-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.range-sim-workflow-setup,
+.range-sim-workflow-modal {
+  width: min(100%, 920px);
+  margin: 0 auto;
+}
+
+.range-sim-workflow-setup {
+  padding: 24px;
+}
+
+.range-sim-workflow-modal {
+  padding: 0;
+}
+
+.range-sim-workflow-setup {
+  background:
+    radial-gradient(circle at 84% 15%, rgba(99, 215, 255, .055), transparent 33%),
+    var(--panel);
+}
+
+.range-sim-workflow-setup .range-sim-baseline-config {
+  max-width: 650px;
+}
+
+.range-sim-setup-contract {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.range-sim-setup-contract > div {
+  display: grid;
+  grid-template-columns: 31px 1fr;
+  align-content: start;
+  gap: 3px 10px;
+  min-height: 86px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .018);
+}
+
+.range-sim-setup-contract span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  grid-row: 1 / 3;
+  place-items: center;
+  border: 1px solid rgba(216, 255, 62, .25);
+  border-radius: 50%;
+  color: var(--lime);
+  font: 10px var(--mono);
+}
+
+.range-sim-setup-contract b {
+  font-size: 10px;
+}
+
+.range-sim-setup-contract small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.range-sim-setup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.range-sim-setup-actions > small {
+  max-width: 560px;
+  color: var(--dim);
+  font: 8px/1.5 var(--mono);
+}
+
+.range-sim-setup-actions .action-button {
+  min-height: 48px;
+  flex: 0 0 auto;
+}
+
+.range-sim-input-error {
+  display: grid;
+  gap: 4px;
+  margin-top: 13px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 107, 69, .3);
+  border-radius: 9px;
+  background: rgba(255, 107, 69, .045);
+}
+
+.range-sim-input-error b {
+  color: var(--coral);
+  font-size: 9px;
+}
+
+.range-sim-input-error span {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.range-sim-workflow-modal {
+  position: relative;
+  border-color: rgba(216, 255, 62, .16);
+  background:
+    radial-gradient(circle at 50% -5%, rgba(216, 255, 62, .065), transparent 38%),
+    var(--panel);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .28);
+}
+
+.range-sim-workflow-modal:focus {
+  outline: none;
+}
+
+.range-sim-workflow-modal::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  content: "";
+  background: linear-gradient(90deg, transparent, var(--lime), transparent);
+  opacity: .45;
+}
+
+.range-sim-focus-target {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .16);
+}
+
+.range-sim-focus-target > div:first-child {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 5px 13px;
+}
+
+.range-sim-focus-target > div:first-child span,
+.range-sim-focus-target > div:first-child small {
+  grid-column: 1;
+  color: var(--dim);
+  font: 7px var(--mono);
+  letter-spacing: .8px;
+}
+
+.range-sim-focus-target > div:first-child strong {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  color: var(--lime);
+  font: 42px/1 var(--mono);
+  letter-spacing: -2px;
+}
+
+.range-sim-attempt-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font: 8px/1.35 var(--mono);
+  text-align: right;
+}
+
+.range-sim-attempt-badge i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.range-sim-attempt-badge.prompting {
+  color: var(--blue);
+}
+
+.range-sim-attempt-badge.prompting i {
+  background: var(--blue);
+  box-shadow: 0 0 0 5px rgba(99, 215, 255, .08);
+}
+
+.range-sim-attempt-badge.listening,
+.range-sim-attempt-badge.rating {
+  color: var(--lime);
+}
+
+.range-sim-attempt-badge.listening i,
+.range-sim-attempt-badge.rating i {
+  background: var(--lime);
+  box-shadow: 0 0 0 5px rgba(216, 255, 62, .08);
+}
+
+.range-sim-modal-actions,
+.range-sim-listening-actions,
+.range-sim-prompt-wait {
+  margin-top: 15px;
+}
+
+.range-sim-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.range-sim-modal-actions .action-button {
+  min-height: 44px;
+}
+
+.range-sim-prompt-wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 13px;
+  border: 1px solid rgba(99, 215, 255, .18);
+  border-radius: 9px;
+  color: var(--blue);
+}
+
+.range-sim-prompt-wait span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.range-sim-prompt-wait b {
+  color: var(--text);
+}
+
+.range-sim-listening-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.range-sim-listening-actions > div:first-child,
+.range-sim-escape-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.range-sim-listening-actions > div:first-child {
+  justify-content: flex-end;
+}
+
+.range-sim-escape-actions {
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.range-sim-escape-actions > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.range-sim-escape-actions .action-button:last-child {
+  border-color: rgba(255, 107, 69, .25);
+  color: var(--coral);
+}
+
+.range-sim-live-notice {
+  min-height: 29px;
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font: 8px/1.45 var(--mono);
+}
+
+.range-sim-proposal {
+  text-align: left;
+}
+
+.range-sim-proposed-span {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.range-sim-proposed-span > div {
+  display: grid;
+  min-height: 108px;
+  place-content: center;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #11130f;
+  text-align: center;
+}
+
+.range-sim-proposed-span > div.baseline {
+  border-color: rgba(216, 255, 62, .32);
+  background: rgba(216, 255, 62, .035);
+}
+
+.range-sim-proposed-span span,
+.range-sim-proposed-span strong,
+.range-sim-proposed-span small {
+  display: block;
+}
+
+.range-sim-proposed-span span {
+  color: var(--dim);
+  font: 7px var(--mono);
+  letter-spacing: .8px;
+}
+
+.range-sim-proposed-span strong {
+  margin-top: 8px;
+  color: var(--text);
+  font: 28px var(--mono);
+}
+
+.range-sim-proposed-span .baseline strong {
+  color: var(--lime);
+}
+
+.range-sim-proposed-span small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.range-sim-proposal-copy {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.range-sim-profile-stack .range-sim-profile {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .range-sim-intro {
+    display: block;
+  }
+
+  .range-sim-status {
+    width: 100%;
+    margin-top: 13px;
+  }
+
+  .range-sim-steps li {
+    display: none;
+  }
+
+  .range-sim-steps li.current {
+    display: grid;
+    grid-column: 1 / -1;
+  }
+
+  .range-sim-map,
+  .range-sim-profile,
+  .range-sim-workflow-setup,
+  .range-sim-workflow-modal {
+    padding: 16px;
+  }
+
+  .range-sim-setup-contract,
+  .range-sim-proposed-span {
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-setup-contract > div {
+    min-height: 70px;
+  }
+
+  .range-sim-proposed-span > div {
+    min-height: 84px;
+  }
+
+  .range-sim-focus-target {
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-attempt-badge {
+    max-width: none;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .range-rating-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .range-rating-option:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .range-sim-profile-callout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .range-sim-workflow-modal .range-sim-stage-header {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-workflow-modal .range-sim-save-state {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .range-rating-grid,
+  .range-sim-baseline-config,
+  .range-sim-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-setup-actions,
+  .range-sim-modal-actions,
+  .range-sim-listening-actions > div:first-child,
+  .range-sim-escape-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-setup-actions .action-button,
+  .range-sim-modal-actions .action-button,
+  .range-sim-listening-actions .action-button {
+    width: 100%;
+  }
+
+  .range-sim-escape-actions > span {
+    margin-right: 0;
+  }
+
+  .range-sim-focus-target > div:first-child {
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-focus-target > div:first-child span,
+  .range-sim-focus-target > div:first-child small,
+  .range-sim-focus-target > div:first-child strong {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .range-rating-option,
+  .range-rating-option:last-child {
+    min-height: 74px;
+    grid-column: auto;
+  }
+
+  .range-sim-rating-actions,
+  .range-sim-map-header,
+  .range-sim-profile-header {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-rating-actions .action-button,
+  .range-sim-profile-actions .action-button {
+    width: 100%;
+  }
+
+  .range-sim-rating-buttons {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .range-sim-profile-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .range-rating-option,
+  .range-sim-note {
+    transition: none;
+  }
+}

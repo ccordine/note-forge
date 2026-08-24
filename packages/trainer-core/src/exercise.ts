@@ -21,7 +21,16 @@ export const evaluateExerciseObservation = <TTarget, TAnswer>(
   observation: ExerciseObservation<TTarget, TAnswer>,
   evaluator: ExerciseEvaluator<TTarget, TAnswer>,
 ): ExerciseAttempt<TTarget, TAnswer> => {
-  if (observation.completedAt.getTime() < observation.startedAt.getTime()) {
+  if (observation.id.trim().length === 0) throw new TypeError("observation.id is required.");
+  if (observation.exerciseType.trim().length === 0) {
+    throw new TypeError("observation.exerciseType is required.");
+  }
+  const startedAt = observation.startedAt.getTime();
+  const completedAt = observation.completedAt.getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) {
+    throw new TypeError("startedAt and completedAt must be valid dates.");
+  }
+  if (completedAt < startedAt) {
     throw new RangeError("completedAt cannot precede startedAt.");
   }
   const result: ExerciseAttempt<TTarget, TAnswer> = {

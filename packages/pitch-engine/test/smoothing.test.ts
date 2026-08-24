@@ -66,6 +66,13 @@ describe("median pitch smoothing", () => {
 
     expect(midiValues(result)).toEqual([69, 76]);
   });
+
+  it("rejects impossible smoothing windows and invalid reference frequencies", () => {
+    expect(() => medianSmoothPitchFrames([frame(69, 0)], { radius: 1, minSamples: 4 }))
+      .toThrow(/window size/);
+    expect(() => medianSmoothPitchFrames([frame(69, 0)], { radius: 0, a4Frequency: 0 }))
+      .toThrow(/a4Frequency/);
+  });
 });
 
 describe("continuity-aware octave correction", () => {
@@ -104,6 +111,11 @@ describe("continuity-aware octave correction", () => {
     const result = correctOctaveJumps(source);
 
     expect(midiValues(result)).toEqual([60, 69, 60]);
+  });
+
+  it("validates the reference frequency even when no correction is needed", () => {
+    expect(() => correctOctaveJumps([frame(69, 0)], { a4Frequency: Number.NaN }))
+      .toThrow(/a4Frequency/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { clonePitchFrame, pitchFrameAtMidi } from "./pitch";
+import { pitchFrameAtMidi } from "./pitch";
 import type {
   MedianSmoothingOptions,
   OctaveCorrectionOptions,
@@ -12,6 +12,16 @@ function median(values: readonly number[]): number {
   return sorted.length % 2 === 0
     ? (sorted[middle - 1] + sorted[middle]) / 2
     : sorted[middle];
+}
+
+function clonePitchFrame<T extends PitchFrame>(frame: T): T {
+  return { ...frame };
+}
+
+function validateReferenceFrequency(value: number | undefined): void {
+  if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+    throw new RangeError("a4Frequency must be a finite positive number");
+  }
 }
 
 function validMidi(
@@ -37,6 +47,10 @@ export function medianSmoothPitchFrames<T extends PitchFrame>(
   if (!Number.isInteger(minSamples) || minSamples <= 0) {
     throw new RangeError("minSamples must be a positive integer");
   }
+  if (minSamples > 2 * radius + 1) {
+    throw new RangeError("minSamples cannot exceed the smoothing window size");
+  }
+  validateReferenceFrequency(options.a4Frequency);
 
   return frames.map((frame, index) => {
     if (!validMidi(frame) || radius === 0) {
@@ -109,6 +123,7 @@ export function correctOctaveJumps<T extends PitchFrame>(
   const maxOctaveShift = options.maxOctaveShift ?? 2;
   const maxFrameGapSeconds = options.maxFrameGapSeconds ?? 0.1;
   const maxReturnDistanceCents = options.maxReturnDistanceCents ?? 350;
+  validateReferenceFrequency(options.a4Frequency);
 
   for (
     const [value, name] of [

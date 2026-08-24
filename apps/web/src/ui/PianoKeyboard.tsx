@@ -1,7 +1,9 @@
 import type { CSSProperties } from "react";
+import { normalizePitchClass } from "@noteforge/music-core";
+import { noteLabel } from "@/lib/music-display";
 import "./PianoKeyboard.css";
 
-export type PianoKeyMarkerRole = "anchor" | "guess" | "target" | "wrong";
+export type PianoKeyMarkerRole = "anchor" | "guess" | "target" | "wrong" | "selected" | "compare";
 
 export interface PianoKeyMarker {
   midi: number;
@@ -30,24 +32,17 @@ interface KeyLayout {
 }
 
 const WHITE_PITCH_CLASSES = new Set([0, 2, 4, 5, 7, 9, 11]);
-const NOTE_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"] as const;
 const MARKER_GLYPHS: Record<PianoKeyMarkerRole, string> = {
   anchor: "S",
   guess: "●",
   target: "◎",
-  wrong: "×"
+  wrong: "×",
+  selected: "A",
+  compare: "B"
 };
 
-function pitchClass(midi: number): number {
-  return ((midi % 12) + 12) % 12;
-}
-
-function noteLabel(midi: number): string {
-  return `${NOTE_NAMES[pitchClass(midi)]}${Math.floor(midi / 12) - 1}`;
-}
-
 function isWhiteKey(midi: number): boolean {
-  return WHITE_PITCH_CLASSES.has(pitchClass(midi));
+  return WHITE_PITCH_CLASSES.has(normalizePitchClass(midi));
 }
 
 /**

@@ -55,7 +55,7 @@ export interface ScaleMembership {
 }
 
 /** Chromatic scale-degree labels used by tonic-relative exercises. */
-export const CHROMATIC_SCALE_DEGREES = [
+export const CHROMATIC_SCALE_DEGREES = Object.freeze([
   '1',
   '♭2',
   '2',
@@ -68,9 +68,9 @@ export const CHROMATIC_SCALE_DEGREES = [
   '6',
   '♭7',
   '7',
-] as const;
+] as const);
 
-export const SCALES: Readonly<Record<ScaleType, ScaleDefinition>> = {
+const SCALE_DEFINITIONS: Record<ScaleType, ScaleDefinition> = {
   major: {
     type: 'major',
     name: 'major',
@@ -112,6 +112,25 @@ export const SCALES: Readonly<Record<ScaleType, ScaleDefinition>> = {
     aliases: ['minor blues'],
   },
 };
+
+function freezeScaleDefinition(definition: ScaleDefinition): ScaleDefinition {
+  return Object.freeze({
+    ...definition,
+    intervals: Object.freeze([...definition.intervals]),
+    degreeLabels: Object.freeze([...definition.degreeLabels]),
+    diatonicDegrees: Object.freeze([...definition.diatonicDegrees]),
+    aliases: Object.freeze([...definition.aliases]),
+  });
+}
+
+export const SCALES: Readonly<Record<ScaleType, ScaleDefinition>> = Object.freeze(
+  Object.fromEntries(
+    Object.entries(SCALE_DEFINITIONS).map(([type, definition]) => [
+      type,
+      freezeScaleDefinition(definition),
+    ]),
+  ) as Record<ScaleType, ScaleDefinition>,
+);
 
 function inferAccidentalPreference(tonic: number | string): AccidentalPreference {
   if (typeof tonic === 'string') {
@@ -184,8 +203,8 @@ export function buildScale(
 }
 
 export function getScaleMembership(pitchClass: number, scale: Scale): ScaleMembership {
-  if (!Number.isInteger(pitchClass)) {
-    throw new RangeError('pitchClass must be an integer');
+  if (!Number.isSafeInteger(pitchClass)) {
+    throw new RangeError('pitchClass must be a safe integer');
   }
   const normalized = normalizePitchClass(pitchClass);
   const degree = scale.degrees.find((candidate) => candidate.pitchClass === normalized) ?? null;
@@ -194,8 +213,8 @@ export function getScaleMembership(pitchClass: number, scale: Scale): ScaleMembe
 
 /** Return the chromatic functional label of a note against a tonic. */
 export function scaleDegreeLabel(tonicPitchClass: number, pitchClass: number): string {
-  if (!Number.isInteger(tonicPitchClass) || !Number.isInteger(pitchClass)) {
-    throw new RangeError('tonicPitchClass and pitchClass must be integers');
+  if (!Number.isSafeInteger(tonicPitchClass) || !Number.isSafeInteger(pitchClass)) {
+    throw new RangeError('tonicPitchClass and pitchClass must be safe integers');
   }
   const distance = normalizePitchClass(pitchClass - tonicPitchClass);
   return CHROMATIC_SCALE_DEGREES[distance];

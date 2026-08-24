@@ -22,6 +22,9 @@ describe('foundational scales', () => {
       'blues',
     ]);
     expect(SCALES.blues.intervals).toEqual([0, 3, 5, 6, 7, 10]);
+    expect(Object.isFrozen(SCALES)).toBe(true);
+    expect(Object.isFrozen(SCALES.major)).toBe(true);
+    expect(Object.isFrozen(SCALES.major.intervals)).toBe(true);
   });
 
   it('builds pitch classes and functional degrees', () => {
@@ -56,6 +59,9 @@ describe('chords', () => {
     expect(resolveChordQuality('m7b5')).toBe('half-diminished-7');
     expect(resolveChordQuality('major7')).toBe('major-7');
     expect(resolveChordQuality('dominant7')).toBe('dominant-7');
+    expect(Object.isFrozen(CHORD_QUALITIES)).toBe(true);
+    expect(Object.isFrozen(CHORD_QUALITIES.major)).toBe(true);
+    expect(Object.isFrozen(CHORD_QUALITIES.major.aliases)).toBe(true);
   });
 
   it('builds pitch classes with explicit chord-tone roles', () => {
@@ -79,5 +85,11 @@ describe('chords', () => {
   it('retains ambiguity for symmetrical pitch-class sets', () => {
     const diminished = identifyChords([0, 3, 6, 9]);
       expect(diminished.filter((match) => match.chord.quality === 'diminished-7')).toHaveLength(4);
+  });
+
+  it('rejects unsafe integer pitch-class inputs', () => {
+    expect(() => getScaleMembership(Number.MAX_VALUE, buildScale('C', 'major')))
+      .toThrow(/safe integer/);
+    expect(() => identifyChords([0, Number.MAX_VALUE])).toThrow(/safe integers/);
   });
 });

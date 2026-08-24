@@ -10,7 +10,7 @@ export {
   medianSmoothPitchFrames,
   smoothPitchFrames,
 } from "./smoothing";
-export { detectPitch, YinDetector } from "./yin";
+export { detectPitch } from "./yin";
 export type {
   MedianSmoothingOptions,
   OctaveCorrectionOptions,

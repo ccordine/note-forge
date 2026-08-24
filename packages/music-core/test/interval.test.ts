@@ -5,6 +5,7 @@ import {
   intervalBetweenFrequencies,
   intervalBetweenMidi,
   midiToFrequency,
+  SIMPLE_INTERVALS,
 } from '../src';
 
 describe('interval metadata', () => {
@@ -35,6 +36,9 @@ describe('interval metadata', () => {
     expect(tritone.shortName).toBe('TT');
     expect(tritone.aliases).toContain('augmented fourth');
     expect(tritone.aliases).toContain('diminished fifth');
+    expect(Object.isFrozen(SIMPLE_INTERVALS)).toBe(true);
+    expect(Object.isFrozen(SIMPLE_INTERVALS[6])).toBe(true);
+    expect(Object.isFrozen(SIMPLE_INTERVALS[6].aliases)).toBe(true);
   });
 });
 
@@ -66,9 +70,11 @@ describe('continuous interval analysis', () => {
     expect(harmonicIntervalName(2)).toBe('ninth');
     expect(harmonicIntervalName(6)).toBe('tritone / sharp eleventh');
     expect(harmonicIntervalName(14)).toBe('ninth');
+    expect(() => harmonicIntervalName(Number.MAX_VALUE)).toThrow(/safe integer/);
   });
 
   it('requires integer distances for direct naming', () => {
     expect(() => getIntervalMetadata(3.2)).toThrow(RangeError);
+    expect(() => getIntervalMetadata(Number.MAX_VALUE)).toThrow(/safe integer/);
   });
 });

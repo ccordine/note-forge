@@ -11,6 +11,8 @@ export interface SyntheticSignalOptions {
   durationSeconds: number;
   frequencyHz: number;
   amplitude?: number;
+  /** Fundamental weight before optional harmonics. Defaults to one. */
+  fundamentalAmplitude?: number;
   phaseRadians?: number;
   harmonics?: readonly Harmonic[];
   amplitudeEnvelope?: (timeSeconds: number, progress: number) => number;
@@ -59,7 +61,8 @@ export function generateSyntheticSignal(
       options.frequencyAtTime?.(timeSeconds, progress) ?? options.frequencyHz;
     const envelope = options.amplitudeEnvelope?.(timeSeconds, progress) ?? 1;
 
-    let periodic = Math.sin(phase + phaseOffset);
+    let periodic = (options.fundamentalAmplitude ?? 1) *
+      Math.sin(phase + phaseOffset);
     for (const harmonic of harmonics) {
       periodic += harmonic.amplitude *
         Math.sin(

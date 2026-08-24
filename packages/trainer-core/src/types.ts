@@ -1,14 +1,8 @@
-/** A continuous pitch observation produced by any detector. */
-export interface PitchFrame {
-  timeSeconds: number;
-  frequencyHz: number | null;
-  midiFloat: number | null;
-  nearestMidi: number | null;
-  centsFromNearest: number | null;
-  rms: number;
-  confidence: number;
-  voiced: boolean;
-}
+import type { HarmonicContext } from "@noteforge/music-core";
+import type { PitchFrame } from "@noteforge/pitch-engine";
+
+export type { HarmonicContext } from "@noteforge/music-core";
+export type { PitchFrame } from "@noteforge/pitch-engine";
 
 /** A synthesis or production target. `midi + centsOffset / 100` is the exact target. */
 export interface NoteTarget {
@@ -17,14 +11,6 @@ export interface NoteTarget {
   durationMs: number;
   timbre: string;
   amplitude: number;
-}
-
-export interface HarmonicContext {
-  tonicPitchClass: number;
-  scalePitchClasses: number[];
-  chordPitchClasses: number[];
-  chordRoot: number;
-  chordQuality: string;
 }
 
 export interface VibratoMetrics {
@@ -119,11 +105,11 @@ export interface SkillDefinition {
   label: string;
   description: string;
   domain: SkillDomain;
-  representations: Representation[];
-  prerequisites: string[];
+  representations: readonly Representation[];
+  prerequisites: readonly string[];
   /** Relative starting complexity on a 0–1 scale. */
   difficulty: number;
-  tags: string[];
+  tags: readonly string[];
 }
 
 export interface SkillGraphValidation {

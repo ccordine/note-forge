@@ -5,7 +5,6 @@ import {
   NOTE_LETTERS,
   advanceHighestUnlockedFamily,
   createEmptyFamilyEvidence,
-  createEmptyNoteFamilyProgress,
   createNoteFamilyTrial,
   createReferenceTrial,
   isFamilyComplete,
@@ -218,27 +217,26 @@ describe("per-note mastery and family unlocks", () => {
   });
 });
 
-describe("stored family evidence migration", () => {
-  it("preserves v1 lifetime totals but revokes unprovable latched stability", () => {
-    const migrated = normalizeFamilyProgress({
-      low: { C: { attempts: 12, correct: 9, mastered: true } },
-    }, false);
+describe("stored current family evidence", () => {
+  it("restores valid lifetime totals and current consecutive-answer evidence", () => {
+    const restored = normalizeFamilyProgress({
+      low: { C: { attempts: 12, correct: 9, correctStreak: 2 } },
+    });
 
-    expect(migrated.low.C).toEqual({ attempts: 12, correct: 9, correctStreak: 0 });
-    expect(isNoteMastered(migrated.low.C)).toBe(false);
+    expect(restored.low.C).toEqual({ attempts: 12, correct: 9, correctStreak: 2 });
+    expect(isNoteMastered(restored.low.C)).toBe(false);
   });
 
-  it("restores only valid v2 streak evidence and never trusts a stored badge", () => {
-    const restored = normalizeFamilyProgress({
+  it("clamps corrupt current counts and defaults omitted notes", () => {
+    const normalized = normalizeFamilyProgress({
       low: {
-        C: { attempts: 10, correct: 8, correctStreak: 2, mastered: true },
-        D: { attempts: 4, correct: 3, correctStreak: 99, mastered: false },
+        C: { attempts: -3, correct: 8, correctStreak: 2 },
+        D: { attempts: 4.8, correct: 3.9, correctStreak: 99 },
       },
-    }, true);
+    });
 
-    expect(restored.low.C).toEqual({ attempts: 10, correct: 8, correctStreak: 2 });
-    expect(isNoteMastered(restored.low.C)).toBe(false);
-    expect(restored.low.D.correctStreak).toBe(3);
-    expect(isNoteMastered(restored.low.D)).toBe(true);
+    expect(normalized.low.C).toEqual({ attempts: 0, correct: 0, correctStreak: 0 });
+    expect(normalized.low.D).toEqual({ attempts: 4, correct: 3, correctStreak: 3 });
+    expect(normalized.high.B).toEqual({ attempts: 0, correct: 0, correctStreak: 0 });
   });
 });

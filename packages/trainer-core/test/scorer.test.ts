@@ -68,6 +68,23 @@ describe("scoreSustainedNote", () => {
     expect(metrics.inToleranceRatio).toBeCloseTo(11 / 21, 8);
   });
 
+  it("selects the longest hold by elapsed time instead of favorable frame density", () => {
+    const frames = [
+      frame(0, 0),
+      frame(0.01, 0),
+      frame(0.02, 0),
+      frame(0.03, 0),
+      frame(1, 0),
+      frame(1.09, 0),
+      frame(1.18, 0),
+    ];
+    const metrics = scoreSustainedNote(frames, target, {
+      maximumVoicedGapSeconds: 0.1,
+    });
+
+    expect(metrics.holdDurationMs).toBeCloseTo(180, 8);
+  });
+
   it("recognizes centered vibrato without folding it into the target center", () => {
     const frames = Array.from({ length: 201 }, (_, index) => {
       const time = index / 100;
@@ -85,7 +102,7 @@ describe("scoreSustainedNote", () => {
     expect(metrics.vibratoAdjustedStabilityCents).toBeLessThan(1);
   });
 
-  it("can derive a continuous MIDI observation from frequency", () => {
+  it("does not invent a second MIDI coordinate from a malformed frequency-only frame", () => {
     const frequency = 440 * 2 ** ((60.12 - 69) / 12);
     const frames = [
       frame(0, null, {
@@ -95,7 +112,24 @@ describe("scoreSustainedNote", () => {
         confidence: 1,
       }),
     ];
-    expect(scoreSustainedNote(frames, target).medianErrorCents).toBeCloseTo(12, 8);
+    const metrics = scoreSustainedNote(frames, target);
+    expect(metrics.voicedFrameCount).toBe(0);
+    expect(metrics.analyzedFrameCount).toBe(0);
+    expect(metrics.medianErrorCents).toBeUndefined();
+  });
+
+  it("excludes malformed confidence and out-of-range MIDI coordinates", () => {
+    const metrics = scoreSustainedNote([
+      frame(0, 0, { confidence: 1.01 }),
+      frame(0.1, 0, { confidence: -0.01 }),
+      frame(0.2, 0, { midiFloat: Number.MAX_VALUE }),
+      frame(0.3, 5),
+    ], target);
+
+    expect(metrics.voicedFrameCount).toBe(1);
+    expect(metrics.analyzedFrameCount).toBe(1);
+    expect(metrics.medianErrorCents).toBeCloseTo(5, 8);
+    expect(metrics.detectorConfidence).toBeCloseTo(0.95, 8);
   });
 
   it("returns observable counts rather than inventing pitch metrics for silence", () => {
@@ -106,7 +140,53 @@ describe("scoreSustainedNote", () => {
     expect(metrics.medianErrorCents).toBeUndefined();
   });
 
+  it("keeps invalid RMS values out of serialized volume evidence", () => {
+    const frames = [
+      frame(0, 0, { rms: 0.1 }),
+      frame(0.1, 0, { rms: Number.NaN }),
+      frame(0.2, 0, { rms: -1 }),
+      frame(0.3, 0, { rms: 0.3 }),
+    ];
+    const volume = scoreSustainedNote(frames, target, { volumeEnvelopePoints: 4 }).volume;
+
+    expect(volume).toMatchObject({
+      meanRms: 0.2,
+      minimumRms: 0.1,
+      maximumRms: 0.3,
+    });
+    expect(volume?.envelope).toEqual([
+      { timeSeconds: 0, rms: 0.1 },
+      { timeSeconds: 0.3, rms: 0.3 },
+    ]);
+    expect(JSON.stringify(volume)).not.toContain("null");
+  });
+
+  it("keeps extreme finite RMS evidence numerically representable", () => {
+    const volume = scoreSustainedNote([
+      frame(0, 0, { rms: Number.MAX_VALUE }),
+      frame(0.1, 0, { rms: Number.MIN_VALUE }),
+    ], target).volume;
+
+    expect(volume?.meanRms).toBe(Number.MAX_VALUE / 2);
+    expect(volume?.dynamicRangeDb).toBeTypeOf("number");
+    expect(Number.isFinite(volume?.dynamicRangeDb)).toBe(true);
+  });
+
   it("rejects an invalid target lane", () => {
+    expect(() => scoreSustainedNote([], {
+      ...target,
+      midi: Number.MAX_VALUE,
+      centsOffset: Number.MAX_VALUE,
+    })).toThrow(/resolved target MIDI/);
+    expect(() => scoreSustainedNote([], {
+      ...target,
+      midi: Number.MAX_SAFE_INTEGER + 1,
+    })).toThrow(/canonical safe range/);
     expect(() => scoreSustainedNote([], target, { toleranceCents: 0 })).toThrow(RangeError);
+    expect(() => scoreSustainedNote([], target, { promptTimeSeconds: Number.NaN })).toThrow(RangeError);
+    expect(() => scoreSustainedNote([], target, { minimumConfidence: 1.1 })).toThrow(RangeError);
+    expect(() => scoreSustainedNote([], target, { maximumVoicedGapSeconds: 0 })).toThrow(RangeError);
+    expect(() => scoreSustainedNote([], target, { volumeEnvelopePoints: 1.5 })).toThrow(RangeError);
+    expect(() => scoreSustainedNote([], target, { vibrato: { minimumCycles: 0 } })).toThrow(RangeError);
   });
 });

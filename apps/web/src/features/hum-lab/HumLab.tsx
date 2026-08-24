@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { smoothPitchFrames, type PitchFrame, type YinPitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone, type ActiveVoice } from "@/audio/synth";
+import { playSafely, playTone, type ActiveVoice } from "@/audio/synth";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { useLab } from "@/state/LabContext";
 import { saveAttempt } from "@/storage/database";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
-import { InputScope } from "@/ui/InputScope";
+import { NoteInput } from "@/ui/voice";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
 
 type HumMode = "anchor" | "match" | "glide" | "sustain";
@@ -90,11 +90,13 @@ export function HumLab() {
   const [mode, setMode] = useState<HumMode>("anchor");
   const [shape, setShape] = useState<HumShape>("m");
   const [phase, setPhase] = useState<Phase>("idle");
+  const [attemptStarting, setAttemptStarting] = useState(false);
   const [microphoneError, setMicrophoneError] = useState("");
   const [attemptFrames, setAttemptFrames] = useState<PitchFrame[]>([]);
   const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
   const [anchorResult, setAnchorResult] = useState<AnchorResult | null>(null);
   const [status, setStatus] = useState("READY");
+  const [saveError, setSaveError] = useState("");
 
   const attemptFramesRef = useRef<YinPitchFrame[]>([]);
   const attemptActiveRef = useRef(false);
@@ -102,27 +104,21 @@ export function HumLab() {
   const attemptStartedAtRef = useRef("");
   const timersRef = useRef<number[]>([]);
   const guideVoiceRef = useRef<ActiveVoice | null>(null);
+  const startInFlightRef = useRef(false);
+  const attemptGenerationRef = useRef(0);
   const input = useAudioInput({
-    detector: {
-      minFrequency: 60,
-      maxFrequency: 1_000,
-      analysisWindowSize: "maximum",
-      yinThreshold: 0.18,
-      minConfidence: 0.62
-    },
-    maxFrames: 280,
     onFrame: (frame) => {
       if (attemptActiveRef.current) attemptFramesRef.current.push(frame);
     }
   });
   const micState = input.state;
-  const rawFrames = input.frames;
+  const frames = input.frames;
   const targetMidiFloat = selectedMidi + centsOffset / 100;
   const targetFrequency = continuousMidiToHz(selectedMidi, centsOffset);
   const attempting = phase === "listen" || phase === "hum";
   const displayFrames = useMemo(
-    () => smoothPitchFrames(rawFrames.slice(-220), { correctOctaveJumps: true }),
-    [rawFrames]
+    () => smoothPitchFrames(frames.slice(-220), { correctOctaveJumps: true }),
+    [frames]
   );
   const smoothedLiveFrame = displayFrames.at(-1);
   const liveFrame = input.liveFrame;
@@ -149,25 +145,17 @@ export function HumLab() {
   };
 
   useEffect(() => () => {
+    attemptGenerationRef.current += 1;
+    startInFlightRef.current = false;
     clearTimers();
     stopGuide();
     attemptActiveRef.current = false;
   }, []);
 
-  const startMicrophone = async () => {
-    setMicrophoneError("");
-    setStatus("CONNECTING");
-    const info = await input.start();
-    if (info) {
-      setStatus("MIC READY");
-    } else {
-      setStatus("MIC ERROR");
-    }
-  };
-
   const finishAttempt = () => {
     if (!attemptActiveRef.current) return;
     attemptActiveRef.current = false;
+    attemptGenerationRef.current += 1;
     clearTimers();
     stopGuide();
 
@@ -244,13 +232,12 @@ export function HumLab() {
       pitchFrames: frames,
       startedAt: attemptStartedAtRef.current || new Date(completedAt.getTime() - MODES[attemptMode].duration * 1_000).toISOString(),
       completedAt: completedAt.toISOString()
-    }).catch(() => undefined);
+    }).catch(() => setSaveError("The measured hum attempt could not be saved to local history."));
   };
 
   const beginRecording = (attemptMode: HumMode) => {
     attemptModeRef.current = attemptMode;
     attemptFramesRef.current = [];
-    input.clearFrames();
     attemptStartedAtRef.current = new Date().toISOString();
     attemptActiveRef.current = true;
     setPhase("hum");
@@ -259,30 +246,63 @@ export function HumLab() {
   };
 
   const beginAttempt = async () => {
-    if (micState !== "ready") {
-      await startMicrophone();
+    if (attemptActiveRef.current || startInFlightRef.current) return;
+    const generation = ++attemptGenerationRef.current;
+    startInFlightRef.current = true;
+    setAttemptStarting(true);
+    setStatus("CONNECTING");
+    // `enable` also activates retained capture infrastructure; do not trust track-live
+    // state alone after backgrounding the tab.
+    const microphone = await input.enable();
+    if (generation !== attemptGenerationRef.current) return;
+    if (!microphone) {
+      startInFlightRef.current = false;
+      setAttemptStarting(false);
+      setMicrophoneError("The microphone could not start or resume.");
+      setStatus("MIC ERROR");
       return;
     }
     clearTimers();
     stopGuide();
+    setSaveError("");
     setMicrophoneError("");
     setMetrics(null);
     setAttemptFrames([]);
     setAnchorResult(mode === "anchor" ? null : anchorResult);
 
     if (mode === "anchor") {
+      startInFlightRef.current = false;
+      setAttemptStarting(false);
       beginRecording(mode);
       return;
     }
 
     setPhase("listen");
     setStatus(mode === "glide" ? "TARGET ON — BEGIN HUM" : "LISTEN");
-    const voice = await playTone({
-      frequencyHz: targetFrequency,
-      timbre,
-      duration: mode === "glide" ? MODES.glide.duration + 0.25 : 1.05,
-      amplitude: mode === "glide" ? 0.12 : 0.22
-    });
+    let voice: ActiveVoice;
+    try {
+      voice = await playTone({
+        frequencyHz: targetFrequency,
+        timbre,
+        duration: mode === "glide" ? MODES.glide.duration + 0.25 : 1.05,
+        amplitude: mode === "glide" ? 0.12 : 0.22
+      });
+    } catch (error) {
+      if (generation === attemptGenerationRef.current) {
+        startInFlightRef.current = false;
+        setAttemptStarting(false);
+        setPhase("idle");
+        setStatus("PLAYBACK ERROR");
+        setMicrophoneError(error instanceof Error ? error.message : "The target tone could not play.");
+      }
+      return;
+    }
+    if (generation !== attemptGenerationRef.current) {
+      voice.stop();
+      return;
+    }
+    startInFlightRef.current = false;
+    setAttemptStarting(false);
     if (mode === "glide") guideVoiceRef.current = voice;
     if (mode === "glide") {
       beginRecording(mode);
@@ -296,12 +316,13 @@ export function HumLab() {
     setMetrics(null);
     setAnchorResult(null);
     setPhase("idle");
-    setStatus(micState === "ready" ? "MIC READY" : "READY");
+    setStatus(micState === "running" ? "MIC RUNNING" : "READY");
   };
 
   const resultContinuity = anchorResult?.continuityRatio
     ?? (metrics?.totalFrameCount ? (metrics.voicedFrameCount ?? 0) / metrics.totalFrameCount : undefined);
   const centered = Math.abs(metrics?.medianErrorCents ?? Number.POSITIVE_INFINITY) <= toleranceCents;
+  const controlsLocked = attempting || attemptStarting;
 
   return (
     <div className="page hum-lab-page">
@@ -313,12 +334,14 @@ export function HumLab() {
         </div>
       </div>
 
-      <InputScope
+      {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
+
+      <NoteInput
+        variant="scope"
         input={input}
         title="Hum input scope"
         targetMidiFloat={mode === "anchor" ? undefined : targetMidiFloat}
         toleranceCents={toleranceCents}
-        busy={attempting}
       />
 
       {microphoneError && <div className="error-banner"><strong>Hum signal needs attention.</strong><span>{microphoneError}</span></div>}
@@ -326,21 +349,22 @@ export function HumLab() {
       <Panel className="hum-config">
         <Segmented
           value={mode}
-          onChange={(next) => { if (!attempting) { setMode(next); resetTrace(); } }}
+          disabled={controlsLocked}
+          onChange={(next) => { if (!controlsLocked) { setMode(next); resetTrace(); } }}
           options={(Object.entries(MODES) as [HumMode, typeof MODES[HumMode]][]).map(([value, item]) => ({ value, label: item.label }))}
           label="Training primitive"
         />
         <div className="hum-config-fields">
-          <Select label="Target" value={selectedMidi} disabled={attempting || mode === "anchor"} onChange={(event) => { setSelectedMidi(Number(event.target.value)); setCentsOffset(0); }}>
+          <Select label="Target" value={selectedMidi} disabled={controlsLocked || mode === "anchor"} onChange={(event) => { setSelectedMidi(Number(event.target.value)); setCentsOffset(0); }}>
             {Array.from({ length: 36 }, (_, index) => 43 + index).map((midi) => <option value={midi} key={midi}>{noteLabel(midi)}</option>)}
           </Select>
-          <Select label="Timbre" value={timbre} disabled={attempting} onChange={(event) => setTimbre(event.target.value as typeof timbre)}>
+          <Select label="Timbre" value={timbre} disabled={controlsLocked} onChange={(event) => setTimbre(event.target.value as typeof timbre)}>
             <option>sine</option><option>triangle</option><option>piano</option><option>guitar</option><option>bass</option><option>flute</option><option>voice</option><option>rich synth</option>
           </Select>
-          <Select label="Tolerance" value={toleranceCents} disabled={attempting} onChange={(event) => setToleranceCents(Number(event.target.value))}>
+          <Select label="Tolerance" value={toleranceCents} disabled={controlsLocked} onChange={(event) => setToleranceCents(Number(event.target.value))}>
             {TOLERANCES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
           </Select>
-          <button className="randomize-button" disabled={attempting || mode === "anchor"} onClick={() => { setSelectedMidi(45 + Math.floor(Math.random() * 28)); setCentsOffset(0); }}><Icon name="spark" size={16} /> Randomize</button>
+          <button className="randomize-button" disabled={controlsLocked || mode === "anchor"} onClick={() => { setSelectedMidi(45 + Math.floor(Math.random() * 28)); setCentsOffset(0); }}><Icon name="spark" size={16} /> Randomize</button>
         </div>
       </Panel>
 
@@ -351,7 +375,7 @@ export function HumLab() {
           <p>The pitch detector measures the fundamental. It does not judge where vibration “should” feel.</p>
           <div className="hum-shapes">
             {(Object.entries(SHAPES) as [HumShape, typeof SHAPES[HumShape]][]).map(([value, item]) => (
-              <button key={value} disabled={attempting} className={shape === value ? "active" : ""} onClick={() => setShape(value)}>
+              <button key={value} disabled={controlsLocked} className={shape === value ? "active" : ""} onClick={() => setShape(value)}>
                 <strong>{item.symbol}</strong><span>{item.label}</span>
               </button>
             ))}
@@ -371,17 +395,17 @@ export function HumLab() {
             <div className="hum-stage-copy">
               <span>{status}</span>
               <strong className={liveError != null && Math.abs(liveError) <= toleranceCents ? "in-band" : ""}>{liveError == null ? "—" : `${signed(liveError, 0)}¢`}</strong>
-              <small>{liveFrame?.voiced ? `${noteLabel(liveFrame.nearestMidi ?? selectedMidi)} · ${(liveFrame.frequencyHz ?? 0).toFixed(1)} Hz` : micState === "ready" ? "waiting for a steady hum" : "enable the microphone"}</small>
+              <small>{liveFrame?.voiced ? `${noteLabel(liveFrame.nearestMidi ?? selectedMidi)} · ${(liveFrame.frequencyHz ?? 0).toFixed(1)} Hz` : micState === "running" ? "waiting for a steady hum" : "enable the microphone"}</small>
             </div>
           </div>
 
           <PitchRibbon frames={shownFrames} targetMidiFloat={ribbonTarget} toleranceCents={toleranceCents} durationSeconds={MODES[mode].duration + 1} />
 
           <div className="stage-actions">
-            {mode !== "anchor" && <PlayButton label="Hear target" disabled={attempting} onClick={() => playTone({ frequencyHz: targetFrequency, timbre, duration: 1.1, amplitude: 0.22 })} />}
-            <ActionButton className={`primary attempt-button ${phase === "hum" ? "recording" : ""}`} disabled={attempting || micState === "starting"} onClick={beginAttempt}>
-              <Icon name={micState === "ready" ? "hum" : "mic"} size={18} />
-              {attempting ? phase === "listen" ? "Listen…" : "Measuring hum…" : micState === "ready" ? mode === "anchor" ? "Find my anchor" : "Begin hum" : "Enable mic to begin"}
+            {mode !== "anchor" && <PlayButton label="Hear target" disabled={controlsLocked} onClick={() => playSafely(playTone({ frequencyHz: targetFrequency, timbre, duration: 1.1, amplitude: 0.22 }), "Hum Lab target tone")} />}
+            <ActionButton className={`primary attempt-button ${phase === "hum" ? "recording" : ""}`} disabled={controlsLocked || micState === "opening"} onClick={beginAttempt}>
+              <Icon name={micState === "running" ? "hum" : "mic"} size={18} />
+              {attempting ? phase === "listen" ? "Listen…" : "Measuring hum…" : attemptStarting ? "Connecting…" : micState === "running" ? mode === "anchor" ? "Find my anchor" : "Begin hum" : "Enable mic to begin"}
             </ActionButton>
             {phase === "hum" && <ActionButton onClick={finishAttempt}>Finish now</ActionButton>}
           </div>
@@ -416,14 +440,14 @@ export function HumLab() {
         <Panel className="debug-panel">
           <div className="panel-heading"><div><Eyebrow>Detector evidence</Eyebrow><h2>Hum debug view</h2></div><span className="debug-live"><i /> live</span></div>
           <dl>
-            <div><dt>Raw frequency</dt><dd>{liveFrame?.frequencyHz?.toFixed(3) ?? "—"} Hz</dd></div>
+            <div><dt>Canonical frequency</dt><dd>{liveFrame?.frequencyHz?.toFixed(3) ?? "—"} Hz</dd></div>
             <div><dt>MIDI float</dt><dd>{liveFrame?.midiFloat?.toFixed(4) ?? "—"}</dd></div>
             <div><dt>Confidence</dt><dd>{liveFrame ? `${(liveFrame.confidence * 100).toFixed(1)}%` : "—"}</dd></div>
             <div><dt>RMS</dt><dd>{liveFrame?.rms.toFixed(5) ?? "—"}</dd></div>
             <div><dt>YIN value</dt><dd>{liveFrame?.yinValue?.toFixed(4) ?? "—"}</dd></div>
             <div><dt>Frame status</dt><dd>{liveFrame?.reason ?? "no frame"}</dd></div>
             <div><dt>Window</dt><dd>4096 analysis</dd></div>
-            <div><dt>Detector gate</dt><dd>{input.gateThresholdDbfs.toFixed(1)} dBFS</dd></div>
+            <div><dt>Admission</dt><dd>none · every PCM window</dd></div>
           </dl>
         </Panel>
       )}

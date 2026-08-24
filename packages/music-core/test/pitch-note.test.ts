@@ -11,6 +11,7 @@ import {
   parseNote,
   splitMidiPitch,
   transposeFrequency,
+  transposeMidi,
 } from '../src';
 
 describe('continuous pitch conversion', () => {
@@ -30,6 +31,17 @@ describe('continuous pitch conversion', () => {
       octave: 3,
     });
     expect(splitMidiPitch(original).centsFromNearest).toBeCloseTo(23.7, 10);
+    expect(Object.is(splitMidiPitch(-0.5).nearestMidi, -0)).toBe(false);
+    expect(splitMidiPitch(Number.MAX_SAFE_INTEGER)).toMatchObject({
+      nearestMidi: Number.MAX_SAFE_INTEGER,
+      centsFromNearest: 0,
+    });
+    expect(splitMidiPitch(-Number.MAX_SAFE_INTEGER)).toMatchObject({
+      nearestMidi: -Number.MAX_SAFE_INTEGER,
+      centsFromNearest: 0,
+    });
+    expect(() => splitMidiPitch(Number.MAX_SAFE_INTEGER + 1)).toThrow(/safe-integer/);
+    expect(() => splitMidiPitch(Number.MAX_VALUE)).toThrow(/safe-integer/);
   });
 
   it('measures and applies cents as a continuous ratio', () => {
@@ -42,11 +54,22 @@ describe('continuous pitch conversion', () => {
     expect(normalizePitchClass(-1)).toBe(11);
     expect(normalizePitchClass(25)).toBe(1);
     expect(normalizePitchClass(-0.25)).toBe(11.75);
+    expect(() => normalizePitchClass(Number.MAX_VALUE)).toThrow(/safely representable/);
   });
 
   it('rejects physically invalid frequencies', () => {
     expect(() => frequencyToMidi(0)).toThrow(RangeError);
     expect(() => centsBetweenFrequencies(-1, 440)).toThrow(RangeError);
+  });
+
+  it('avoids ratio underflow and rejects non-representable conversion results', () => {
+    expect(frequencyToMidi(Number.MIN_VALUE, Number.MAX_VALUE)).toBeTypeOf('number');
+    expect(centsBetweenFrequencies(Number.MIN_VALUE, Number.MAX_VALUE)).toBeTypeOf('number');
+    expect(() => midiToFrequency(Number.MAX_VALUE)).toThrow(/finite positive/);
+    expect(() => midiToFrequency(-Number.MAX_VALUE)).toThrow(/finite positive/);
+    expect(() => transposeFrequency(Number.MAX_VALUE, 1_200)).toThrow(/finite positive/);
+    expect(() => transposeFrequency(Number.MIN_VALUE, -1_200)).toThrow(/finite positive/);
+    expect(() => transposeMidi(Number.MAX_VALUE, Number.MAX_VALUE)).toThrow(/finite/);
   });
 });
 
@@ -92,5 +115,9 @@ describe('note naming and parsing', () => {
     expect(() => parseNote('H4')).toThrow(SyntaxError);
     expect(() => noteToMidi('F♯')).toThrow(SyntaxError);
     expect(() => noteName(1.2)).toThrow(RangeError);
+    expect(() => noteName(Number.MAX_VALUE)).toThrow(/safe integer/);
+    expect(() => parseNote(`C${'9'.repeat(400)}`)).toThrow(/octave/);
+    expect(() => parseNote(`C4 +${'9'.repeat(400)}c`)).toThrow(/cents/);
+    expect(() => parseNote(`C${Number.MAX_SAFE_INTEGER}`)).toThrow(/safe-integer/);
   });
 });

@@ -23,18 +23,19 @@ export function Select({ label, children, ...props }: PropsWithChildren<SelectHT
   );
 }
 
-export function Segmented<T extends string>({ options, value, onChange, label }: {
+export function Segmented<T extends string>({ options, value, onChange, label, disabled = false }: {
   options: readonly { value: T; label: string }[];
   value: T;
   onChange: (value: T) => void;
   label?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className="segmented-field">
       {label && <span className="field-label">{label}</span>}
       <div className="segmented" role="radiogroup" aria-label={label}>
         {options.map((option) => (
-          <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={value === option.value ? "active" : ""} onClick={() => onChange(option.value)}>{option.label}</button>
+          <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={value === option.value ? "active" : ""} disabled={disabled} onClick={() => onChange(option.value)}>{option.label}</button>
         ))}
       </div>
     </div>

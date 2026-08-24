@@ -52,6 +52,7 @@ describe('harmonic relationship analysis', () => {
 
   it('preserves a microtonal inflection instead of silently rounding it', () => {
     const relationship = analyzeHarmonicRelationship({ midi: 64.23 }, cMajorContext);
+    expect(relationship.pitch.label).toBe('E4 +23¢');
     expect(relationship.pitch.pitchClass).toBe(4);
     expect(relationship.pitch.centsFromNearest).toBeCloseTo(23, 10);
     expect(relationship.semitoneDistance).toBeCloseTo(4.23, 10);
@@ -93,5 +94,20 @@ describe('harmonic relationship analysis', () => {
     expect(relationship.interval.harmonicName).toBe('minor third / sharp ninth');
     expect(relationship.chordMembership.role).toBe('minor third');
     expect(relationship.scaleMembership.degreeLabel).toBe('♭3');
+  });
+
+  it('rejects internally contradictory harmonic contexts', () => {
+    expect(() => analyzeHarmonicRelationship('C4', {
+      ...cMajorContext,
+      chordPitchClasses: [],
+    })).toThrow(/cannot be empty/);
+    expect(() => analyzeHarmonicRelationship('C4', {
+      ...cMajorContext,
+      chordPitchClasses: [2, 5, 9],
+    })).toThrow(/chord root/);
+    expect(() => analyzeHarmonicRelationship('C4', {
+      ...cMajorContext,
+      scalePitchClasses: [2, 4, 5, 7, 9, 11],
+    })).toThrow(/tonic/);
   });
 });

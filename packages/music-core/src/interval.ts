@@ -1,4 +1,4 @@
-import { frequencyToMidi } from './pitch';
+import { frequencyToMidi, normalizePitchClass } from './pitch';
 
 export type IntervalDirection = 'ascending' | 'descending' | 'unison';
 export type IntervalQuality = 'perfect' | 'major' | 'minor' | 'augmented' | 'diminished';
@@ -40,7 +40,7 @@ export interface IntervalAnalysis {
   interval: IntervalMetadata;
 }
 
-export const SIMPLE_INTERVALS: readonly SimpleIntervalDefinition[] = [
+const SIMPLE_INTERVAL_DEFINITIONS: readonly SimpleIntervalDefinition[] = [
   { semitones: 0, number: 1, quality: 'perfect', shortName: 'P1', name: 'perfect unison', aliases: ['unison'] },
   { semitones: 1, number: 2, quality: 'minor', shortName: 'm2', name: 'minor second', aliases: ['semitone', 'half step'] },
   { semitones: 2, number: 2, quality: 'major', shortName: 'M2', name: 'major second', aliases: ['whole tone', 'whole step'] },
@@ -55,8 +55,15 @@ export const SIMPLE_INTERVALS: readonly SimpleIntervalDefinition[] = [
   { semitones: 11, number: 7, quality: 'major', shortName: 'M7', name: 'major seventh', aliases: [] },
 ] as const;
 
+export const SIMPLE_INTERVALS: readonly SimpleIntervalDefinition[] = Object.freeze(
+  SIMPLE_INTERVAL_DEFINITIONS.map((definition) => Object.freeze({
+    ...definition,
+    aliases: Object.freeze([...definition.aliases]),
+  })),
+);
+
 /** Harmonic-role names use extensions where that is the conventional useful label. */
-export const HARMONIC_INTERVAL_NAMES = [
+export const HARMONIC_INTERVAL_NAMES = Object.freeze([
   'root',
   'minor ninth',
   'ninth',
@@ -69,7 +76,7 @@ export const HARMONIC_INTERVAL_NAMES = [
   'sixth / thirteenth',
   'minor seventh',
   'major seventh',
-] as const;
+] as const);
 
 function requireFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) {
@@ -123,8 +130,8 @@ function compoundName(quality: IntervalQuality, number: number): string {
 /** Name an integer equal-tempered interval. Negative values describe descent. */
 export function getIntervalMetadata(signedSemitones: number): IntervalMetadata {
   requireFinite(signedSemitones, 'semitones');
-  if (!Number.isInteger(signedSemitones)) {
-    throw new RangeError('semitones must be an integer when naming an interval');
+  if (!Number.isSafeInteger(signedSemitones)) {
+    throw new RangeError('semitones must be a safe integer when naming an interval');
   }
 
   const direction = intervalDirection(signedSemitones);
@@ -204,6 +211,10 @@ export function intervalBetweenFrequencies(fromHz: number, toHz: number): Interv
 /** Harmonic extension/role name for a pitch-class distance above a chord root. */
 export function harmonicIntervalName(semitonesAboveRoot: number): string {
   requireFinite(semitonesAboveRoot, 'semitonesAboveRoot');
-  const normalized = ((Math.round(semitonesAboveRoot) % 12) + 12) % 12;
+  const rounded = Math.round(semitonesAboveRoot);
+  if (!Number.isSafeInteger(rounded)) {
+    throw new RangeError('semitonesAboveRoot must round to a safe integer');
+  }
+  const normalized = normalizePitchClass(rounded);
   return HARMONIC_INTERVAL_NAMES[normalized];
 }

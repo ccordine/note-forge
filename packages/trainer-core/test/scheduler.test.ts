@@ -78,4 +78,55 @@ describe("adaptive session scheduling", () => {
     expect(new Set(schedule.map((item) => item.skillId))).toEqual(new Set(["pitch.same_different"]));
     expect(schedule.every((item) => item.bucket === "exploration")).toBe(true);
   });
+
+  it("rejects malformed scheduling evidence instead of silently producing a queue", () => {
+    expect(() => createSeededRng(Number.NaN)).toThrow(/seed/);
+    expect(() => createSeededRng(Number.MAX_SAFE_INTEGER + 1)).toThrow(/seed/);
+    expect(() => allocateSessionMix(10_001)).toThrow(/cannot exceed/);
+    expect(() => allocateSessionMix(Number.MAX_SAFE_INTEGER + 1)).toThrow(/safe integer/);
+    expect(() => allocateSessionMix(10, { weakDue: Number.NaN })).toThrow(/weakDue/);
+    expect(() => allocateSessionMix(10, {
+      weakDue: Number.MAX_VALUE,
+      recent: Number.MAX_VALUE,
+      exploration: Number.MAX_VALUE,
+    })).toThrow(/total session mix/);
+    expect(() => allocateSessionMix(10, { weakDue: 0, recent: 0, exploration: 0 }))
+      .toThrow(/positive/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {}, {
+      sessionSize: 1,
+      now: new Date("invalid"),
+    })).toThrow(/valid Date/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {}, {
+      sessionSize: 1,
+      now: new Date(0),
+      recentWindowDays: Number.MAX_VALUE,
+    })).toThrow(/finite scheduling range/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {
+      "skill.0": state("different-skill", {}),
+    }, { sessionSize: 1 })).toThrow(/stored under/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {}, {
+      sessionSize: 1,
+      variationPools: { amplitudes: [Number.NaN] },
+    })).toThrow(/amplitudes/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {}, {
+      sessionSize: 1,
+      rng: () => 1,
+    })).toThrow(/injected RNG/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {
+      "skill.0": state("skill.0", { dueAt: "invalid" }),
+    }, { sessionSize: 1 })).toThrow(/dueAt/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {
+      "skill.0": state("skill.0", { attemptCount: Number.MAX_SAFE_INTEGER + 1 }),
+    }, { sessionSize: 1 })).toThrow(/safe integer/);
+    expect(() => generateAdaptiveSession([
+      { ...definition("skill.0"), prerequisites: ["missing"] },
+    ], {}, { sessionSize: 1 })).toThrow(/Invalid skill graph/);
+    expect(() => generateAdaptiveSession([
+      { ...definition("skill.0"), prerequisites: ["missing"] },
+    ], {}, { sessionSize: 0 })).toThrow(/Invalid skill graph/);
+    expect(() => generateAdaptiveSession([definition("skill.0")], {}, {
+      sessionSize: 0,
+      variationPools: { timbres: [] },
+    })).toThrow(/timbres/);
+  });
 });

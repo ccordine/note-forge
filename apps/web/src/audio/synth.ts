@@ -1,7 +1,21 @@
 import { ensureAudioReady } from "./audio-context";
+import { midiToFrequency } from "@noteforge/music-core";
 
-export const TIMBRES = ["sine", "triangle", "piano", "guitar", "bass", "flute", "voice", "rich synth"] as const;
+export const TIMBRES = Object.freeze(["sine", "triangle", "piano", "guitar", "bass", "flute", "voice", "rich synth"] as const);
 export type Timbre = (typeof TIMBRES)[number];
+
+export const SYNTH_LIMITS = Object.freeze({
+  minimumFrequencyHz: 20,
+  maximumFrequencyHz: 24_000,
+  maximumAmplitude: 0.8,
+  maximumToneDurationSeconds: 3_600,
+  maximumEnvelopeSeconds: 10,
+  maximumScheduleAheadSeconds: 3_600,
+  maximumSequenceDurationSeconds: 600,
+  maximumToneCount: 128,
+  maximumContourPointCount: 512,
+  maximumContourDurationSeconds: 60,
+});
 
 export interface ToneSpec {
   frequencyHz: number;
@@ -33,7 +47,45 @@ export interface ActiveVoice {
   stop: (releaseSeconds?: number) => void;
 }
 
+/** Terminate intentionally fire-and-forget playback without hiding failures. */
+export function playSafely(operation: Promise<unknown>, label = "Audio playback"): void {
+  void operation.catch((error) => console.error(`${label} failed.`, error));
+}
+
 type Partial = { ratio: number; gain: number; type?: OscillatorType; detune?: number };
+
+function requireFiniteRange(label: string, value: number, minimum: number, maximum: number): void {
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${label} must be a finite number from ${minimum} through ${maximum}.`);
+  }
+}
+
+function validateFrequency(frequencyHz: number): void {
+  requireFiniteRange(
+    "Tone frequency",
+    frequencyHz,
+    SYNTH_LIMITS.minimumFrequencyHz,
+    SYNTH_LIMITS.maximumFrequencyHz,
+  );
+}
+
+function validateToneValues(spec: Omit<ToneSpec, "frequencyHz"> & { frequencyHz?: number }): void {
+  if (spec.frequencyHz !== undefined) validateFrequency(spec.frequencyHz);
+  if (spec.duration !== undefined) {
+    requireFiniteRange("Tone duration", spec.duration, Number.EPSILON, SYNTH_LIMITS.maximumToneDurationSeconds);
+  }
+  if (spec.amplitude !== undefined) requireFiniteRange("Tone amplitude", spec.amplitude, Number.EPSILON, SYNTH_LIMITS.maximumAmplitude);
+  if (spec.attack !== undefined) requireFiniteRange("Tone attack", spec.attack, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  if (spec.release !== undefined) requireFiniteRange("Tone release", spec.release, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  if (spec.when !== undefined) requireFiniteRange("Tone start time", spec.when, 0, Number.MAX_SAFE_INTEGER);
+  if (spec.timbre !== undefined && !(TIMBRES as readonly string[]).includes(spec.timbre)) {
+    throw new RangeError(`Unsupported timbre: ${String(spec.timbre)}.`);
+  }
+}
+
+function validateCollectionSize(label: string, length: number, maximum: number): void {
+  if (length > maximum) throw new RangeError(`${label} supports at most ${maximum} items.`);
+}
 
 const PARTIALS: Record<Timbre, Partial[]> = {
   sine: [{ ratio: 1, gain: 1, type: "sine" }],
@@ -81,13 +133,20 @@ function envelopeFor(timbre: Timbre, duration: number): { attack: number; decay:
 }
 
 export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
+  validateFrequency(spec.frequencyHz);
+  validateToneValues(spec);
   const context = await ensureAudioReady();
   const timbre = spec.timbre ?? "sine";
   const duration = spec.duration ?? 1.2;
-  const amplitude = Math.max(0.001, Math.min(spec.amplitude ?? 0.28, 0.8));
+  const amplitude = spec.amplitude ?? 0.28;
   const startAt = spec.when ?? context.currentTime + 0.012;
   const release = spec.release ?? 0.08;
   const env = envelopeFor(timbre, duration);
+  const attack = Math.min(spec.attack ?? env.attack, duration);
+  const decay = Math.min(env.decay, Math.max(0, duration - attack));
+  if (startAt > context.currentTime + SYNTH_LIMITS.maximumScheduleAheadSeconds) {
+    throw new RangeError(`Tone start time cannot be more than ${SYNTH_LIMITS.maximumScheduleAheadSeconds} seconds ahead.`);
+  }
   const output = context.createGain();
   const compressor = context.createDynamicsCompressor();
   compressor.threshold.value = -12;
@@ -95,13 +154,14 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
   compressor.ratio.value = 5;
   output.connect(compressor).connect(context.destination);
 
-  output.gain.setValueAtTime(0.0001, startAt);
-  output.gain.exponentialRampToValueAtTime(amplitude, startAt + (spec.attack ?? env.attack));
-  output.gain.exponentialRampToValueAtTime(Math.max(0.0001, amplitude * env.sustain), startAt + env.attack + env.decay);
-  output.gain.setValueAtTime(Math.max(0.0001, amplitude * env.sustain), startAt + duration);
-  output.gain.exponentialRampToValueAtTime(0.0001, startAt + duration + release);
+  output.gain.setValueAtTime(Number.EPSILON, startAt);
+  output.gain.exponentialRampToValueAtTime(amplitude, startAt + attack);
+  output.gain.exponentialRampToValueAtTime(Math.max(Number.EPSILON, amplitude * env.sustain), startAt + attack + decay);
+  output.gain.setValueAtTime(Math.max(Number.EPSILON, amplitude * env.sustain), startAt + duration);
+  output.gain.exponentialRampToValueAtTime(Number.EPSILON, startAt + duration + release);
 
-  const oscillators = PARTIALS[timbre].map((partial) => {
+  let activeOscillators = PARTIALS[timbre].length;
+  const oscillatorNodes = PARTIALS[timbre].map((partial) => {
     const oscillator = context.createOscillator();
     const partialGain = context.createGain();
     oscillator.type = partial.type ?? "sine";
@@ -109,21 +169,31 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
     oscillator.detune.setValueAtTime(partial.detune ?? 0, startAt);
     partialGain.gain.value = partial.gain;
     oscillator.connect(partialGain).connect(output);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      partialGain.disconnect();
+      activeOscillators -= 1;
+      if (activeOscillators === 0) {
+        output.disconnect();
+        compressor.disconnect();
+      }
+    };
     oscillator.start(startAt);
     oscillator.stop(startAt + duration + release + 0.05);
-    return oscillator;
+    return { oscillator };
   });
 
   let stopped = false;
   return {
     stop: (releaseSeconds = 0.06) => {
+      requireFiniteRange("Stop release", releaseSeconds, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
       if (stopped) return;
       stopped = true;
       const now = context.currentTime;
       output.gain.cancelScheduledValues(now);
-      output.gain.setValueAtTime(Math.max(0.0001, output.gain.value), now);
-      output.gain.exponentialRampToValueAtTime(0.0001, now + releaseSeconds);
-      oscillators.forEach((oscillator) => {
+      output.gain.setValueAtTime(Math.max(Number.EPSILON, output.gain.value), now);
+      output.gain.exponentialRampToValueAtTime(Number.EPSILON, now + releaseSeconds);
+      oscillatorNodes.forEach(({ oscillator }) => {
         try { oscillator.stop(now + releaseSeconds + 0.02); } catch { /* already stopped */ }
       });
     }
@@ -135,8 +205,16 @@ export async function playFrequencies(
   mode: "simultaneous" | "sequential",
   options: Omit<ToneSpec, "frequencyHz" | "when"> = {}
 ): Promise<void> {
-  const context = await ensureAudioReady();
+  validateCollectionSize("Frequency playback", frequencies.length, SYNTH_LIMITS.maximumToneCount);
+  frequencies.forEach(validateFrequency);
+  validateToneValues(options);
   const duration = options.duration ?? 0.9;
+  if (mode !== "simultaneous" && mode !== "sequential") throw new RangeError(`Unsupported playback mode: ${String(mode)}.`);
+  const gestureDuration = mode === "sequential" ? frequencies.length * (duration + 0.12) : duration;
+  if (gestureDuration > SYNTH_LIMITS.maximumSequenceDurationSeconds) {
+    throw new RangeError(`Frequency playback cannot exceed ${SYNTH_LIMITS.maximumSequenceDurationSeconds} seconds.`);
+  }
+  const context = await ensureAudioReady();
   const now = context.currentTime + 0.025;
   await Promise.all(
     frequencies.map((frequencyHz, index) =>
@@ -160,6 +238,18 @@ export function createToneSequenceSchedule(
   startAt: number,
   options: ToneSequenceOptions = {}
 ): ScheduledToneSpec[] {
+  validateCollectionSize("Tone sequence", tones.length, SYNTH_LIMITS.maximumToneCount);
+  requireFiniteRange(
+    "Sequence start time",
+    startAt,
+    0,
+    Number.MAX_SAFE_INTEGER - SYNTH_LIMITS.maximumSequenceDurationSeconds,
+  );
+  validateToneValues(options);
+  if (options.gap !== undefined) requireFiniteRange("Sequence gap", options.gap, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  if (options.startDelay !== undefined) {
+    requireFiniteRange("Sequence start delay", options.startDelay, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  }
   const {
     gap: defaultGap = 0.12,
     startDelay: _startDelay,
@@ -168,17 +258,25 @@ export function createToneSequenceSchedule(
   } = options;
   let when = startAt;
 
-  return tones.map((item) => {
+  const schedule = tones.map((item) => {
     const { gapAfter, duration = defaultDuration, ...tone } = item;
+    validateFrequency(item.frequencyHz);
+    validateToneValues({ ...toneDefaults, ...tone, duration });
+    const resolvedGap = gapAfter ?? defaultGap;
+    requireFiniteRange("Tone gap", resolvedGap, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
     const scheduled: ScheduledToneSpec = {
       ...toneDefaults,
       ...tone,
       duration,
       when
     };
-    when += duration + (gapAfter ?? defaultGap);
+    when += duration + resolvedGap;
     return scheduled;
   });
+  if (when - startAt > SYNTH_LIMITS.maximumSequenceDurationSeconds) {
+    throw new RangeError(`Tone sequence cannot exceed ${SYNTH_LIMITS.maximumSequenceDurationSeconds} seconds.`);
+  }
+  return schedule;
 }
 
 /**
@@ -188,44 +286,84 @@ export function createToneSequenceSchedule(
 export async function playToneSequence(
   tones: readonly ToneSequenceItem[],
   options: ToneSequenceOptions = {}
-): Promise<void> {
-  if (tones.length === 0) return;
+): Promise<ActiveVoice> {
+  validateCollectionSize("Tone sequence", tones.length, SYNTH_LIMITS.maximumToneCount);
+  validateToneValues(options);
+  if (options.gap !== undefined) requireFiniteRange("Sequence gap", options.gap, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  if (options.startDelay !== undefined) {
+    requireFiniteRange("Sequence start delay", options.startDelay, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  }
+  tones.forEach((item) => {
+    validateFrequency(item.frequencyHz);
+    validateToneValues(item);
+    if (item.gapAfter !== undefined) requireFiniteRange("Tone gap", item.gapAfter, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+  });
+  if (tones.length === 0) return { stop: () => undefined };
   const context = await ensureAudioReady();
   const startAt = context.currentTime + (options.startDelay ?? 0.025);
   const schedule = createToneSequenceSchedule(tones, startAt, options);
-  await Promise.all(schedule.map((tone) => playTone(tone)));
+  const voices = await Promise.all(schedule.map((tone) => playTone(tone)));
+  let stopped = false;
+  return {
+    stop: (releaseSeconds = 0.05) => {
+      if (stopped) return;
+      stopped = true;
+      voices.forEach((voice) => voice.stop(releaseSeconds));
+    },
+  };
 }
 
 export class Drone {
   private voice: ActiveVoice | null = null;
+  private generation = 0;
 
   async start(frequencyHz: number, timbre: Timbre, amplitude = 0.18): Promise<void> {
     this.stop();
-    this.voice = await playTone({ frequencyHz, timbre, amplitude, duration: 3_600, release: 0.12 });
+    const generation = this.generation;
+    const voice = await playTone({ frequencyHz, timbre, amplitude, duration: 3_600, release: 0.12 });
+    if (generation !== this.generation) {
+      voice.stop(0);
+      return;
+    }
+    this.voice = voice;
   }
 
   stop(): void {
+    this.generation += 1;
     this.voice?.stop(0.09);
     this.voice = null;
   }
 }
 
 export async function playPitchContour(midiPoints: readonly number[], duration = 2.5, amplitude = 0.2): Promise<void> {
+  validateCollectionSize("Pitch contour", midiPoints.length, SYNTH_LIMITS.maximumContourPointCount);
+  requireFiniteRange("Pitch contour duration", duration, Number.EPSILON, SYNTH_LIMITS.maximumContourDurationSeconds);
+  requireFiniteRange("Pitch contour amplitude", amplitude, Number.EPSILON, SYNTH_LIMITS.maximumAmplitude);
+  const frequencies = midiPoints.map((midi) => {
+    if (!Number.isFinite(midi)) throw new RangeError("Pitch contour points must be finite MIDI coordinates.");
+    const frequencyHz = midiToFrequency(midi);
+    validateFrequency(frequencyHz);
+    return frequencyHz;
+  });
   if (midiPoints.length < 2) return;
   const context = await ensureAudioReady();
   const startAt = context.currentTime + 0.025;
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(440 * 2 ** ((midiPoints[0] - 69) / 12), startAt);
-  midiPoints.slice(1).forEach((midi, index) => {
-    oscillator.frequency.linearRampToValueAtTime(440 * 2 ** ((midi - 69) / 12), startAt + ((index + 1) / (midiPoints.length - 1)) * duration);
+  oscillator.frequency.setValueAtTime(frequencies[0]!, startAt);
+  frequencies.slice(1).forEach((frequencyHz, index) => {
+    oscillator.frequency.linearRampToValueAtTime(frequencyHz, startAt + ((index + 1) / (midiPoints.length - 1)) * duration);
   });
-  gain.gain.setValueAtTime(0.0001, startAt);
+  gain.gain.setValueAtTime(Number.EPSILON, startAt);
   gain.gain.exponentialRampToValueAtTime(amplitude, startAt + 0.04);
   gain.gain.setValueAtTime(amplitude, startAt + duration);
-  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration + 0.08);
+  gain.gain.exponentialRampToValueAtTime(Number.EPSILON, startAt + duration + 0.08);
   oscillator.connect(gain).connect(context.destination);
+  oscillator.onended = () => {
+    oscillator.disconnect();
+    gain.disconnect();
+  };
   oscillator.start(startAt);
   oscillator.stop(startAt + duration + 0.1);
 }

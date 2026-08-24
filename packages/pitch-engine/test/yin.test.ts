@@ -4,7 +4,6 @@ import {
   detectPitch,
   frequencyToMidi,
   midiToFrequency,
-  YinDetector,
 } from "../src";
 import {
   centsError,
@@ -95,7 +94,10 @@ describe("YIN pitch detection", () => {
       const frame = detectFrequency(expectedHz);
 
       expect(frame.reason).toBe("detected");
-      expect(Math.abs(centsError(frame.frequencyHz as number, expectedHz)))
+      expect(
+        Math.abs(centsError(frame.frequencyHz as number, expectedHz)),
+        `${expectedHz} Hz boundary error`,
+      )
         .toBeLessThan(1);
     },
   );
@@ -174,6 +176,165 @@ describe("YIN pitch detection", () => {
     expect(frame.rms).toBeGreaterThan(0.05);
   });
 
+  it.each([
+    { fundamental: 0.1, second: 1, third: 0.02, fourth: 0.4 },
+    { fundamental: 0.2, second: 1, third: 0.1, fourth: 0.4 },
+  ])(
+    "retains C3 identity when the second harmonic dominates ($fundamental fundamental)",
+    ({ fundamental, second, third, fourth }) => {
+      const expectedHz = midiFrequency(48);
+      const samples = generateSyntheticSignal({
+        sampleRate: SAMPLE_RATE,
+        durationSeconds: 4_096 / SAMPLE_RATE,
+        frequencyHz: expectedHz,
+        amplitude: 0.24,
+        fundamentalAmplitude: fundamental,
+        harmonics: [
+          { multiple: 2, amplitude: second, phaseRadians: 0.7 },
+          { multiple: 3, amplitude: third, phaseRadians: 1.3 },
+          { multiple: 4, amplitude: fourth, phaseRadians: 0.35 },
+        ],
+      });
+      const frame = detectPitch(samples, {
+        ...BASE_OPTIONS,
+        minFrequency: 45,
+        analysisWindowSize: 3_025,
+      });
+
+      expect(frame.reason).toBe("detected");
+      expect(frame.nearestMidi).toBe(48);
+      expect(Math.abs(centsError(frame.frequencyHz!, expectedHz))).toBeLessThan(3);
+    },
+  );
+
+  it.each([30, 34, 39])(
+    "retains low MIDI %i with a weak fundamental and dominant second harmonic",
+    (midi) => {
+      const expectedHz = midiFrequency(midi);
+      for (const phaseRadians of [0, 0.61, 1.37, 2.53]) {
+        const samples = generateSyntheticSignal({
+          sampleRate: SAMPLE_RATE,
+          durationSeconds: 4_096 / SAMPLE_RATE,
+          frequencyHz: expectedHz,
+          amplitude: 0.12,
+          fundamentalAmplitude: 0.08,
+          phaseRadians,
+          harmonics: [
+            { multiple: 2, amplitude: 1, phaseRadians: 2 * phaseRadians + 0.23 },
+            { multiple: 3, amplitude: 0.24, phaseRadians: 3 * phaseRadians + 0.91 },
+            { multiple: 4, amplitude: 0.12, phaseRadians: 4 * phaseRadians + 1.43 },
+          ],
+        });
+        const frame = detectPitch(samples, {
+          ...BASE_OPTIONS,
+          minFrequency: 45,
+        });
+
+        expect(frame.reason, `phase ${phaseRadians}`).toBe("detected");
+        expect(frame.nearestMidi, `phase ${phaseRadians}`).toBe(midi);
+        expect(
+          Math.abs(centsError(frame.frequencyHz!, expectedHz)),
+          `phase ${phaseRadians}`,
+        ).toBeLessThan(3);
+      }
+    },
+  );
+
+  it.each([42, 46, 51])(
+    "does not invent a sub-80 Hz octave beneath pure MIDI %i",
+    (midi) => {
+      const expectedHz = midiFrequency(midi);
+      for (const phaseRadians of [0, 0.61, 1.37, 2.53]) {
+        const frame = detectPitch(generateSyntheticSignal({
+          sampleRate: SAMPLE_RATE,
+          durationSeconds: 4_096 / SAMPLE_RATE,
+          frequencyHz: expectedHz,
+          amplitude: 0.24,
+          phaseRadians,
+        }), {
+          ...BASE_OPTIONS,
+          minFrequency: 45,
+        });
+
+        expect(frame.reason, `phase ${phaseRadians}`).toBe("detected");
+        expect(frame.nearestMidi, `phase ${phaseRadians}`).toBe(midi);
+        expect(
+          Math.abs(centsError(frame.frequencyHz!, expectedHz)),
+          `phase ${phaseRadians}`,
+        ).toBeLessThan(1);
+      }
+    },
+  );
+
+  it.each([
+    { targetHz: 100, mainsHz: 50, otherMainsHz: 120 },
+    { targetHz: 120, mainsHz: 60, otherMainsHz: 50 },
+  ])(
+    "retains $targetHz Hz above $mainsHz Hz mains leakage and broadband noise",
+    ({ targetHz, mainsHz, otherMainsHz }) => {
+      for (const phaseRadians of [0, 0.61, 1.37, 2.53]) {
+        const options = {
+          sampleRate: SAMPLE_RATE,
+          durationSeconds: 4_096 / SAMPLE_RATE,
+        } as const;
+        const target = generateSyntheticSignal({
+          ...options,
+          frequencyHz: targetHz,
+          amplitude: 0.24,
+          phaseRadians,
+        });
+        const mains = generateSyntheticSignal({
+          ...options,
+          frequencyHz: mainsHz,
+          amplitude: 0.034,
+          phaseRadians: phaseRadians * 0.73 + 0.2,
+        });
+        const otherMains = generateSyntheticSignal({
+          ...options,
+          frequencyHz: otherMainsHz,
+          amplitude: 0.012,
+          phaseRadians: phaseRadians * 1.31 + 0.8,
+        });
+        const noise = generateSyntheticSignal({
+          ...options,
+          frequencyHz: 440,
+          amplitude: 0,
+          noiseAmplitude: 0.004,
+          noiseSeed: 0x59_49_4e ^ Math.round(phaseRadians * 1_000),
+        });
+        const samples = Float32Array.from(target, (sample, index) =>
+          sample + mains[index]! + otherMains[index]! + noise[index]!);
+        const frame = detectPitch(samples, {
+          ...BASE_OPTIONS,
+          minFrequency: 45,
+        });
+
+        expect(frame.reason, `phase ${phaseRadians}`).toBe("detected");
+        expect(
+          Math.abs(centsError(frame.frequencyHz!, targetHz)),
+          `phase ${phaseRadians}`,
+        ).toBeLessThan(3);
+      }
+    },
+  );
+
+  it("does not invent a lower octave beneath a pure high sine", () => {
+    const expectedHz = midiFrequency(60);
+    const frame = detectPitch(generateSyntheticSignal({
+      sampleRate: SAMPLE_RATE,
+      durationSeconds: 4_096 / SAMPLE_RATE,
+      frequencyHz: expectedHz,
+      amplitude: 0.3,
+    }), {
+      ...BASE_OPTIONS,
+      minFrequency: 45,
+      analysisWindowSize: 3_025,
+    });
+
+    expect(frame.nearestMidi).toBe(60);
+    expect(Math.abs(centsError(frame.frequencyHz!, expectedHz))).toBeLessThan(1);
+  });
+
   it("retains target pitch through a substantial clean amplitude envelope", () => {
     const expectedHz = midiFrequency(60);
     const samples = generateSyntheticSignal({
@@ -191,20 +352,21 @@ describe("YIN pitch detection", () => {
       .toBeLessThan(3);
   });
 
-  it("provides a reusable fixed-configuration detector", () => {
-    const detector = new YinDetector(BASE_OPTIONS);
-    const samples = generateSyntheticSignal({
-      sampleRate: SAMPLE_RATE,
-      durationSeconds: 0.1,
-      frequencyHz: 440,
-    });
-    const frame = detector.detect(samples, 1.25);
+  it("returns direct stateless results when the pitch changes", () => {
+    const detectMidi = (midi: number, timeSeconds: number) => detectPitch(
+      generateSyntheticSignal({
+        sampleRate: SAMPLE_RATE,
+        durationSeconds: 0.1,
+        frequencyHz: midiToFrequency(midi),
+      }),
+      { ...BASE_OPTIONS, timeSeconds },
+    );
 
-    expect(frame.voiced).toBe(true);
-    expect(frame.timeSeconds).toBe(1.25);
-    expect(frame.detector).toBe("yin");
-    expect(frame.periodSamples).toBeGreaterThan(100);
-    expect(frame.yinValue).toBeLessThan(0.01);
+    const first = detectMidi(57, 1.25);
+    const changed = detectMidi(58, 1.35);
+
+    expect(first).toMatchObject({ reason: "detected", nearestMidi: 57, timeSeconds: 1.25 });
+    expect(changed).toMatchObject({ reason: "detected", nearestMidi: 58, timeSeconds: 1.35 });
   });
 });
 
@@ -269,7 +431,7 @@ describe("observable detection failures", () => {
   it("validates detector configuration before analysis", () => {
     expect(
       () =>
-        new YinDetector({
+        detectPitch(new Float32Array(4_096), {
           sampleRate: 48_000,
           minFrequency: 500,
           maxFrequency: 100,

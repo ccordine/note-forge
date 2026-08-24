@@ -1,11 +1,11 @@
-export const NOTE_LETTERS = ["C", "D", "E", "F", "G", "A", "B"] as const;
+export const NOTE_LETTERS = Object.freeze(["C", "D", "E", "F", "G", "A", "B"] as const);
 
 export type NoteLetter = (typeof NOTE_LETTERS)[number];
 export type NaturalPitchClass = 0 | 2 | 4 | 5 | 7 | 9 | 11;
 export type NoteFamilyId = "low" | "middle" | "high";
 export type RandomSource = () => number;
 
-export const NOTE_LETTER_TO_PITCH_CLASS: Readonly<Record<NoteLetter, NaturalPitchClass>> = {
+export const NOTE_LETTER_TO_PITCH_CLASS: Readonly<Record<NoteLetter, NaturalPitchClass>> = Object.freeze({
   C: 0,
   D: 2,
   E: 4,
@@ -13,7 +13,7 @@ export const NOTE_LETTER_TO_PITCH_CLASS: Readonly<Record<NoteLetter, NaturalPitc
   G: 7,
   A: 9,
   B: 11,
-};
+});
 
 export interface NoteFamilyDefinition {
   id: NoteFamilyId;
@@ -24,11 +24,11 @@ export interface NoteFamilyDefinition {
   rangeLabel: string;
 }
 
-export const NOTE_FAMILIES = [
-  { id: "low", label: "Low", octave: 3, firstMidi: 48, lastMidi: 59, rangeLabel: "C3–B3" },
-  { id: "middle", label: "Middle", octave: 4, firstMidi: 60, lastMidi: 71, rangeLabel: "C4–B4" },
-  { id: "high", label: "High", octave: 5, firstMidi: 72, lastMidi: 83, rangeLabel: "C5–B5" },
-] as const satisfies readonly NoteFamilyDefinition[];
+export const NOTE_FAMILIES = Object.freeze([
+  Object.freeze({ id: "low", label: "Low", octave: 3, firstMidi: 48, lastMidi: 59, rangeLabel: "C3–B3" }),
+  Object.freeze({ id: "middle", label: "Middle", octave: 4, firstMidi: 60, lastMidi: 71, rangeLabel: "C4–B4" }),
+  Object.freeze({ id: "high", label: "High", octave: 5, firstMidi: 72, lastMidi: 83, rangeLabel: "C5–B5" }),
+] as const satisfies readonly NoteFamilyDefinition[]);
 
 export interface NoteEvidence {
   attempts: number;
@@ -45,9 +45,9 @@ export interface MasteryRequirement {
   requiredCorrectStreak: number;
 }
 
-export const DEFAULT_MASTERY_REQUIREMENT: Readonly<MasteryRequirement> = {
+export const DEFAULT_MASTERY_REQUIREMENT: Readonly<MasteryRequirement> = Object.freeze({
   requiredCorrectStreak: 3,
-};
+});
 
 export interface NoteFamilyTrial {
   familyId: NoteFamilyId;
@@ -151,17 +151,12 @@ interface StoredNoteEvidence {
   attempts?: unknown;
   correct?: unknown;
   correctStreak?: unknown;
-  mastered?: unknown;
 }
 
 type StoredProgress = Partial<Record<NoteFamilyId, Partial<Record<NoteLetter, StoredNoteEvidence>>>>;
 
-/**
- * Restore locally stored evidence without trusting the old latched `mastered`
- * flag. V1 totals contain no ordering information, so they cannot prove a
- * consecutive streak and migrate with a zero streak.
- */
-export function normalizeFamilyProgress(candidate: unknown, preserveStreak: boolean): NoteFamilyProgress {
+/** Sanitize the current evidence schema. */
+export function normalizeFamilyProgress(candidate: unknown): NoteFamilyProgress {
   const result = createEmptyNoteFamilyProgress();
   const storedProgress = (candidate ?? {}) as StoredProgress;
   for (const family of NOTE_FAMILIES) {
@@ -174,7 +169,7 @@ export function normalizeFamilyProgress(candidate: unknown, preserveStreak: bool
       const correct = typeof stored.correct === "number" && Number.isFinite(stored.correct)
         ? Math.max(0, Math.min(attempts, Math.floor(stored.correct)))
         : 0;
-      const storedStreak = preserveStreak && typeof stored.correctStreak === "number" && Number.isFinite(stored.correctStreak)
+      const storedStreak = typeof stored.correctStreak === "number" && Number.isFinite(stored.correctStreak)
         ? Math.max(0, Math.floor(stored.correctStreak))
         : 0;
       result[family.id][letter] = { attempts, correct, correctStreak: Math.min(correct, storedStreak) };
@@ -194,7 +189,6 @@ export function recordNoteAttempt(
   evidence: Readonly<FamilyEvidence>,
   letter: NoteLetter,
   wasCorrect: boolean,
-  requirement: Readonly<MasteryRequirement> = DEFAULT_MASTERY_REQUIREMENT,
 ): FamilyEvidence {
   const previous = evidence[letter];
   const updated: NoteEvidence = {

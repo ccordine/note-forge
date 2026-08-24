@@ -67,7 +67,7 @@ export interface ChordIdentification {
   inversion: ChordInversion;
 }
 
-export const CHORD_QUALITIES: Readonly<Record<ChordQuality, ChordQualityDefinition>> = {
+const CHORD_QUALITY_DEFINITIONS: Record<ChordQuality, ChordQualityDefinition> = {
   major: {
     quality: 'major', name: 'major', symbol: '', intervals: [0, 4, 7],
     diatonicDegrees: [1, 3, 5],
@@ -124,6 +124,28 @@ export const CHORD_QUALITIES: Readonly<Record<ChordQuality, ChordQualityDefiniti
     roles: ['root', 'minor third', 'diminished fifth', 'diminished seventh'], aliases: ['dim7', '°7', 'diminished seventh'],
   },
 };
+
+function freezeChordQuality(
+  definition: ChordQualityDefinition,
+): ChordQualityDefinition {
+  return Object.freeze({
+    ...definition,
+    intervals: Object.freeze([...definition.intervals]),
+    diatonicDegrees: Object.freeze([...definition.diatonicDegrees]),
+    roles: Object.freeze([...definition.roles]),
+    aliases: Object.freeze([...definition.aliases]),
+  });
+}
+
+export const CHORD_QUALITIES: Readonly<Record<ChordQuality, ChordQualityDefinition>> =
+  Object.freeze(
+    Object.fromEntries(
+      Object.entries(CHORD_QUALITY_DEFINITIONS).map(([quality, definition]) => [
+        quality,
+        freezeChordQuality(definition),
+      ]),
+    ) as Record<ChordQuality, ChordQualityDefinition>,
+  );
 
 function inferAccidentalPreference(root: number | string): AccidentalPreference {
   if (typeof root === 'string' && /[b♭]/.test(root)) return 'flat';
@@ -193,8 +215,8 @@ export function buildChord(
 }
 
 export function getChordMembership(pitchClass: number, chord: Chord): ChordMembership {
-  if (!Number.isInteger(pitchClass)) {
-    throw new RangeError('pitchClass must be an integer');
+  if (!Number.isSafeInteger(pitchClass)) {
+    throw new RangeError('pitchClass must be a safe integer');
   }
   const normalized = normalizePitchClass(pitchClass);
   const tone = chord.tones.find((candidate) => candidate.pitchClass === normalized) ?? null;
@@ -219,11 +241,11 @@ export function identifyChords(
   options: BuildChordOptions = {},
 ): ChordIdentification[] {
   if (pitchClasses.length === 0) return [];
-  if (!pitchClasses.every(Number.isInteger)) {
-    throw new RangeError('pitchClasses must contain only integers');
+  if (!pitchClasses.every(Number.isSafeInteger)) {
+    throw new RangeError('pitchClasses must contain only safe integers');
   }
-  if (bassPitchClass !== undefined && !Number.isInteger(bassPitchClass)) {
-    throw new RangeError('bassPitchClass must be an integer');
+  if (bassPitchClass !== undefined && !Number.isSafeInteger(bassPitchClass)) {
+    throw new RangeError('bassPitchClass must be a safe integer');
   }
 
   const unique = [...new Set(pitchClasses.map(normalizePitchClass))].sort((a, b) => a - b);

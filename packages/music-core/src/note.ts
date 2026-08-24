@@ -39,7 +39,7 @@ export interface MidiPitchDescription extends SplitMidiPitch {
 const SHARP_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'] as const;
 const FLAT_NAMES = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'] as const;
 
-export const NOTE_LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const;
+export const NOTE_LETTERS = Object.freeze(['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const);
 
 const NATURAL_PITCH_CLASS: Record<NoteLetter, number> = {
   C: 0,
@@ -54,8 +54,8 @@ const NATURAL_PITCH_CLASS: Record<NoteLetter, number> = {
 const NOTE_PATTERN = /^\s*([A-Ga-g])\s*((?:[#♯b♭x]|𝄪|𝄫){0,2})\s*(-?\d+)?(?:\s*([+-])\s*(\d+(?:\.\d+)?)\s*(?:c|¢|cents?))?\s*$/i;
 
 function requireInteger(value: number, label: string): void {
-  if (!Number.isInteger(value)) {
-    throw new RangeError(`${label} must be an integer`);
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError(`${label} must be a safe integer`);
   }
 }
 
@@ -95,15 +95,13 @@ export function noteName(
   return accidentalPreference === 'flat' ? FLAT_NAMES[normalized] : SHARP_NAMES[normalized];
 }
 
-export const pitchClassName = noteName;
-
 /**
  * Spell a pitch class using a required note letter. This is useful when scale
  * and chord construction must retain diatonic spelling (for example E♯ in C♯ major).
  */
 export function spellPitchClass(pitchClass: number, letter: NoteLetter): string {
-  if (!Number.isInteger(pitchClass)) {
-    throw new RangeError('pitchClass must be an integer');
+  if (!Number.isSafeInteger(pitchClass)) {
+    throw new RangeError('pitchClass must be a safe integer');
   }
   let offset = normalizePitchClass(pitchClass - NATURAL_PITCH_CLASS[letter]);
   if (offset > 6) offset -= 12;
@@ -125,8 +123,8 @@ export function spellPitchClass(pitchClass: number, letter: NoteLetter): string 
 
 /** Move through note letters, independently of chromatic pitch. */
 export function transposeNoteLetter(letter: NoteLetter, diatonicSteps: number): NoteLetter {
-  if (!Number.isInteger(diatonicSteps)) {
-    throw new RangeError('diatonicSteps must be an integer');
+  if (!Number.isSafeInteger(diatonicSteps)) {
+    throw new RangeError('diatonicSteps must be a safe integer');
   }
   const start = NOTE_LETTERS.indexOf(letter);
   const index = ((start + diatonicSteps) % NOTE_LETTERS.length + NOTE_LETTERS.length) % NOTE_LETTERS.length;
@@ -135,6 +133,9 @@ export function transposeNoteLetter(letter: NoteLetter, diatonicSteps: number): 
 
 /** Parse note spellings such as C#4, D♭3, Fx5, B♭, or A4 -12.5c. */
 export function parseNote(source: string): ParsedNote {
+  if (typeof source !== 'string') {
+    throw new TypeError('source must be a string');
+  }
   const match = NOTE_PATTERN.exec(source);
   if (!match) {
     throw new SyntaxError(`Invalid note: "${source}"`);
@@ -145,6 +146,12 @@ export function parseNote(source: string): ParsedNote {
   const offset = accidentalOffset(rawAccidental);
   const octave = match[3] === undefined ? null : Number.parseInt(match[3], 10);
   const centsMagnitude = match[5] === undefined ? 0 : Number.parseFloat(match[5]);
+  if (octave !== null && !Number.isSafeInteger(octave)) {
+    throw new RangeError('Note octave must be a safe integer');
+  }
+  if (!Number.isFinite(centsMagnitude)) {
+    throw new RangeError('Note cents offset must be finite');
+  }
   const centsOffset = match[4] === '-' ? -centsMagnitude : centsMagnitude;
   const natural = NATURAL_PITCH_CLASS[letter];
   const chromaticIndex = natural + offset;
@@ -152,6 +159,10 @@ export function parseNote(source: string): ParsedNote {
   const midi = octave === null
     ? null
     : (octave + 1) * 12 + chromaticIndex + centsOffset / 100;
+  if (midi !== null && !Number.isFinite(midi)) {
+    throw new RangeError('Parsed MIDI coordinate must be finite');
+  }
+  if (midi !== null) splitMidiPitch(midi);
   const accidental = normalizeAccidental(rawAccidental);
 
   return {

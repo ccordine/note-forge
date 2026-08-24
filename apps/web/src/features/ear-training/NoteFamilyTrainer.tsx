@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { playTone, playToneSequence, TIMBRES, type Timbre } from "@/audio/synth";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { playTone, playToneSequence, TIMBRES, type ActiveVoice, type Timbre } from "@/audio/synth";
 import { continuousMidiToHz, INTERVAL_LONG, noteLabel } from "@/lib/music-display";
 import { saveAttempt, getSetting, setSetting } from "@/storage/database";
 import { ActionButton, Eyebrow, Panel, PlayButton, Select } from "@/ui/Controls";
@@ -32,7 +32,6 @@ import {
 export type FoundationEarMode = "letters" | "reference";
 
 interface StoredFamilyState {
-  version?: 1 | 2;
   activeFamilyId?: NoteFamilyId;
   highestUnlockedFamilyId?: NoteFamilyId;
   progress?: unknown;
@@ -46,7 +45,7 @@ interface PromptTrial {
   startedAt: string;
 }
 
-const STORAGE_KEY = "ear.note-families.v1";
+const STORAGE_KEY = "ear.note-families";
 
 function randomTimbre(): Timbre {
   return TIMBRES[Math.floor(Math.random() * TIMBRES.length)] ?? "sine";
@@ -114,6 +113,15 @@ export function NoteFamilyTrainer({
   const [submitted, setSubmitted] = useState(false);
   const [heardCurrent, setHeardCurrent] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [storageError, setStorageError] = useState("");
+  const [promptError, setPromptError] = useState("");
+  const [promptStarting, setPromptStarting] = useState(false);
+  const progressReadRef = useRef(false);
+  const mountedRef = useRef(false);
+  const promptGenerationRef = useRef(0);
+  const promptVoiceRef = useRef<ActiveVoice | null>(null);
+  const heardCurrentRef = useRef(false);
+  const heardPromptRef = useRef<PromptTrial | null>(null);
 
   const family = getNoteFamily(activeFamilyId);
   const evidence = progress[activeFamilyId];
@@ -122,52 +130,102 @@ export function NoteFamilyTrainer({
   const unlockedFamilyIds = unlockedFamilyIdsThrough(highestUnlockedFamilyId);
   const currentFamilyIndex = familyIndex(activeFamilyId);
   const nextFamily = NOTE_FAMILIES[currentFamilyIndex + 1];
+  const promptTransitioning = trial.kind !== mode;
+  const currentPromptHeard = heardCurrent && !promptTransitioning;
+
+  const invalidatePrompt = useCallback(() => {
+    promptGenerationRef.current += 1;
+    promptVoiceRef.current?.stop(0.03);
+    promptVoiceRef.current = null;
+    heardCurrentRef.current = false;
+    heardPromptRef.current = null;
+    setPromptStarting(false);
+  }, []);
 
   const resetTrial = useCallback((nextMode: FoundationEarMode, familyId: NoteFamilyId, nextAnchor = anchorLetter, nextProgress = progress) => {
+    invalidatePrompt();
     const next = makePromptTrial(nextMode, familyId, nextProgress[familyId], nextAnchor);
     setTrial(next);
     setAnswerLetter(undefined);
     setSubmitted(false);
     setHeardCurrent(false);
+    setPromptError("");
     return next;
-  }, [anchorLetter, progress]);
+  }, [anchorLetter, invalidatePrompt, progress]);
 
-  const playPrompt = useCallback((prompt = trial) => {
-    if (!hydrated) return;
-    setHeardCurrent(true);
-    if (isReferencePrompt(prompt)) {
-      void playToneSequence([
-        {
-          frequencyHz: continuousMidiToHz(prompt.note.anchorMidi),
-          timbre: varyTimbre ? prompt.timbreA : timbre,
-          duration: 0.82,
-          amplitude: 0.24,
-          gapAfter: 0.24
-        },
-        {
+  const playPrompt = useCallback(async (prompt = trial): Promise<void> => {
+    if (!hydrated || prompt.kind !== mode) return;
+    const generation = ++promptGenerationRef.current;
+    promptVoiceRef.current?.stop(0.03);
+    promptVoiceRef.current = null;
+    heardCurrentRef.current = false;
+    heardPromptRef.current = null;
+    setHeardCurrent(false);
+    setPromptError("");
+    setPromptStarting(true);
+    try {
+      const voice = isReferencePrompt(prompt)
+        ? await playToneSequence([
+          {
+            frequencyHz: continuousMidiToHz(prompt.note.anchorMidi),
+            timbre: varyTimbre ? prompt.timbreA : timbre,
+            duration: 0.82,
+            amplitude: 0.24,
+            gapAfter: 0.24
+          },
+          {
+            frequencyHz: continuousMidiToHz(prompt.note.targetMidi),
+            timbre: varyTimbre ? prompt.timbreB : timbre,
+            duration: 0.92,
+            amplitude: 0.24
+          }
+        ])
+        : await playTone({
           frequencyHz: continuousMidiToHz(prompt.note.targetMidi),
           timbre: varyTimbre ? prompt.timbreB : timbre,
-          duration: 0.92,
-          amplitude: 0.24
-        }
-      ]);
-    } else {
-      void playTone({
-        frequencyHz: continuousMidiToHz(prompt.note.targetMidi),
-        timbre: varyTimbre ? prompt.timbreB : timbre,
-        duration: 1.05,
-        amplitude: 0.26
-      });
+          duration: 1.05,
+          amplitude: 0.26
+        });
+      if (!mountedRef.current || generation !== promptGenerationRef.current) {
+        voice.stop(0.02);
+        return;
+      }
+      promptVoiceRef.current = voice;
+      heardCurrentRef.current = true;
+      heardPromptRef.current = prompt;
+      setHeardCurrent(true);
+      setPromptStarting(false);
+    } catch {
+      if (!mountedRef.current || generation !== promptGenerationRef.current) return;
+      promptVoiceRef.current = null;
+      heardCurrentRef.current = false;
+      heardPromptRef.current = null;
+      setHeardCurrent(false);
+      setPromptStarting(false);
+      setPromptError("The listening prompt could not start. No answer is enabled and no attempt will be scored; check browser audio, then try again.");
     }
-  }, [hydrated, timbre, trial, varyTimbre]);
+  }, [hydrated, mode, timbre, trial, varyTimbre]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      promptGenerationRef.current += 1;
+      promptVoiceRef.current?.stop(0.02);
+      promptVoiceRef.current = null;
+      heardCurrentRef.current = false;
+      heardPromptRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void getSetting<StoredFamilyState>(STORAGE_KEY)
       .then((stored) => {
         if (cancelled) return;
-        const restoredProgress = normalizeFamilyProgress(stored?.progress, stored?.version === 2);
-        const restoredHighest = stored?.version === 2 && isKnownFamilyId(stored.highestUnlockedFamilyId)
+        progressReadRef.current = true;
+        const restoredProgress = normalizeFamilyProgress(stored?.progress);
+        const restoredHighest = isKnownFamilyId(stored?.highestUnlockedFamilyId)
           ? stored.highestUnlockedFamilyId
           : "low";
         const requestedFamily = stored?.activeFamilyId;
@@ -179,19 +237,20 @@ export function NoteFamilyTrainer({
         setHighestUnlockedFamilyId(restoredHighest);
         setTrial(makePromptTrial(mode, restoredFamily, restoredProgress[restoredFamily], anchorLetter));
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (!cancelled) setStorageError("Local ear-training progress could not be read. Unread progress will not be overwritten during this visit.");
+      })
       .finally(() => { if (!cancelled) setHydrated(true); });
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !progressReadRef.current) return;
     void setSetting<StoredFamilyState>(STORAGE_KEY, {
-      version: 2,
       activeFamilyId,
       highestUnlockedFamilyId,
       progress
-    }).catch(() => undefined);
+    }).catch(() => setStorageError("Local ear-training progress could not be saved."));
   }, [activeFamilyId, highestUnlockedFamilyId, hydrated, progress]);
 
   useEffect(() => {
@@ -205,7 +264,13 @@ export function NoteFamilyTrainer({
   }, [activeFamilyId, hydrated, mode, resetTrial, trial.kind]);
 
   const commitLetter = useCallback((letter: NoteLetter) => {
-    if (!hydrated || !heardCurrent || submitted) return;
+    if (
+      !hydrated
+      || !heardCurrentRef.current
+      || heardPromptRef.current !== trial
+      || trial.kind !== mode
+      || submitted
+    ) return;
     const correct = letter === trial.note.targetLetter;
     const completedAt = new Date();
     setAnswerLetter(letter);
@@ -230,49 +295,25 @@ export function NoteFamilyTrainer({
       },
       startedAt: trial.startedAt,
       completedAt: completedAt.toISOString()
-    }).catch(() => undefined);
-  }, [activeFamilyId, heardCurrent, hydrated, mode, onRevealMidi, submitted, trial]);
+    }).catch(() => setStorageError("This ear-training attempt could not be saved to local history."));
+  }, [activeFamilyId, hydrated, mode, onRevealMidi, submitted, trial]);
 
   const advanceAndPlay = useCallback(() => {
     const next = resetTrial(mode, activeFamilyId);
-    setHeardCurrent(true);
-    if (isReferencePrompt(next)) {
-      void playToneSequence([
-        { frequencyHz: continuousMidiToHz(next.note.anchorMidi), timbre: varyTimbre ? next.timbreA : timbre, duration: 0.82, amplitude: 0.24, gapAfter: 0.24 },
-        { frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 0.92, amplitude: 0.24 }
-      ]);
-    } else {
-      void playTone({ frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 1.05, amplitude: 0.26 });
-    }
-  }, [activeFamilyId, mode, resetTrial, timbre, varyTimbre]);
+    void playPrompt(next);
+  }, [activeFamilyId, mode, playPrompt, resetTrial]);
 
   const selectFamily = useCallback((familyId: NoteFamilyId) => {
     if (familyIndex(familyId) > highestUnlockedIndex) return;
     setActiveFamilyId(familyId);
     const next = resetTrial(mode, familyId);
-    setHeardCurrent(true);
-    if (isReferencePrompt(next)) {
-      void playToneSequence([
-        { frequencyHz: continuousMidiToHz(next.note.anchorMidi), timbre: varyTimbre ? next.timbreA : timbre, duration: 0.82, amplitude: 0.24, gapAfter: 0.24 },
-        { frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 0.92, amplitude: 0.24 }
-      ]);
-    } else {
-      void playTone({ frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 1.05, amplitude: 0.26 });
-    }
-  }, [highestUnlockedIndex, mode, resetTrial, timbre, varyTimbre]);
+    void playPrompt(next);
+  }, [highestUnlockedIndex, mode, playPrompt, resetTrial]);
 
   const changeAnchor = (nextAnchor: NoteLetter) => {
     setAnchorLetter(nextAnchor);
     const next = resetTrial(mode, activeFamilyId, nextAnchor);
-    if (mode === "reference") {
-      setHeardCurrent(true);
-      if (isReferencePrompt(next)) {
-        void playToneSequence([
-          { frequencyHz: continuousMidiToHz(next.note.anchorMidi), timbre: varyTimbre ? next.timbreA : timbre, duration: 0.82, amplitude: 0.24, gapAfter: 0.24 },
-          { frequencyHz: continuousMidiToHz(next.note.targetMidi), timbre: varyTimbre ? next.timbreB : timbre, duration: 0.92, amplitude: 0.24 }
-        ]);
-      }
-    }
+    if (mode === "reference") void playPrompt(next);
   };
 
   useEffect(() => {
@@ -280,7 +321,7 @@ export function NoteFamilyTrainer({
       if (answerTargetIsEditable(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
       if (event.code === "Space") {
         event.preventDefault();
-        if (!event.repeat) playPrompt();
+        if (!event.repeat) void playPrompt();
         return;
       }
       if (event.key === "Enter" && submitted) {
@@ -327,6 +368,8 @@ export function NoteFamilyTrainer({
 
   return (
     <>
+      {storageError && <div className="error-banner"><strong>Local progress storage needs attention.</strong><span>{storageError}</span></div>}
+      {promptError && <div className="error-banner" role="alert"><strong>Prompt audio did not start.</strong><span>{promptError}</span></div>}
       <Panel className="family-path" aria-label="Register family progression">
         <div className="family-path-copy">
           <Eyebrow>One register at a time</Eyebrow>
@@ -376,14 +419,14 @@ export function NoteFamilyTrainer({
             </Select>
           )}
 
-          <button className="sound-orb family-sound-orb" type="button" onClick={() => playPrompt()} disabled={!hydrated} aria-label={heardCurrent ? "Replay prompt" : "Play prompt"}>
+          <button className="sound-orb family-sound-orb" type="button" onClick={() => { void playPrompt(); }} disabled={!hydrated || promptStarting || promptTransitioning} aria-label={currentPromptHeard ? "Replay prompt" : "Play prompt"}>
             <div className="orb-ring one" /><div className="orb-ring two" /><div className="orb-ring three" />
             <Icon name="play" size={32} />
-            <span>{heardCurrent ? "REPLAY" : hydrated ? mode === "reference" ? "PLAY TWO TONES" : "PLAY NOTE" : "LOADING"}</span>
+            <span>{promptStarting ? "STARTING AUDIO" : currentPromptHeard ? "REPLAY" : hydrated ? mode === "reference" ? "PLAY TWO TONES" : "PLAY NOTE" : "LOADING"}</span>
           </button>
           <h2>{mode === "reference" ? `Start at ${anchorLetter}${family.octave}. Name the second tone.` : "Hear one note. Press its letter."}</h2>
           <p>{varyTimbre ? "Advanced variation is on: the sound surface may change, but the register cannot." : `Only natural notes in ${family.rangeLabel}; ${timbre} timbre stays fixed.`}</p>
-          <PlayButton label={heardCurrent ? "Replay prompt · Space" : "Begin this challenge"} onClick={() => playPrompt()} disabled={!hydrated} />
+          <PlayButton label={promptStarting ? "Starting prompt…" : currentPromptHeard ? "Replay prompt · Space" : "Begin this challenge"} onClick={() => { void playPrompt(); }} disabled={!hydrated || promptStarting || promptTransitioning} />
         </Panel>
 
         <Panel className="answer-card family-answer-card">
@@ -409,7 +452,7 @@ export function NoteFamilyTrainer({
           </div>
 
           <div className="letter-answer-label">
-            <div><b>{heardCurrent ? "Which letter did you hear?" : "Play the prompt first."}</b><small>Press A–G on your keyboard or choose below. The answer submits immediately.</small></div>
+            <div><b>{currentPromptHeard ? "Which letter did you hear?" : "Play the prompt first."}</b><small>Press A–G on your keyboard or choose below. The answer submits immediately.</small></div>
             <span>{masteredNoteCount(evidence)}/7 stable</span>
           </div>
           <div className="letter-answer-grid">
@@ -423,7 +466,7 @@ export function NoteFamilyTrainer({
                 <button
                   key={letter}
                   type="button"
-                  disabled={!heardCurrent || submitted}
+                  disabled={!currentPromptHeard || submitted}
                   className={`${stable ? "mastered" : ""} ${isTarget ? "correct" : ""} ${isWrong ? "incorrect" : ""}`}
                   onClick={() => commitLetter(letter)}
                   aria-label={`Answer ${letter}. ${stable ? "Stable with three consecutive correct answers" : `${streak} of 3 consecutive correct answers`}. ${item.correct} correct of ${item.attempts} lifetime attempts.`}

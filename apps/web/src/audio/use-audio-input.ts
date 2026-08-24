@@ -1,411 +1,474 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { detectPitch, type YinPitchFrame } from "@noteforge/pitch-engine";
 import {
-  applyGateHysteresis,
-  dbfsToAmplitude,
-  deriveNoiseGateThresholds,
-  estimateNoiseFloorDbfs,
-  type NoiseGateThresholds
-} from "./input-analysis";
-import { MicrophoneCapture, type CapturedLevel, type MicrophoneInfo } from "./microphone";
-import { getSetting, setSetting } from "@/storage/database";
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from "react";
+import { reduceLiveNote, type LiveNote } from "./live-note";
+import {
+  MICROPHONE_ANALYSIS_WINDOW_SIZE,
+  MicrophoneCapture,
+  type CapturedLevel,
+  type CaptureTransportEvent,
+  type MicrophoneInfo,
+} from "./microphone";
+import {
+  NOTE_INPUT_DEFAULTS,
+  NoteInputEngine,
+  type PitchObservation,
+} from "./note-input";
+import {
+  pitchDiagnostics,
+  toDiagnosticToken,
+  toFrameDiagnostic,
+  toInputDiagnostic,
+  type DiagnosticFlow,
+  type TrackingDiagnostic,
+} from "@/diagnostics/pitch-diagnostics";
 
-export type AudioInputState = "off" | "starting" | "ready" | "error";
+export type AudioInputState = "disabled" | "opening" | "running" | "error";
 
-export interface InputTelemetry extends CapturedLevel {
-  noiseFloorDbfs: number | null;
-  noiseCeilingDbfs: number | null;
-  gateThresholdDbfs: number;
-  gateCloseThresholdDbfs: number;
-  gateOpen: boolean;
-  signalMarginDb: number | null;
-  headroomDb: number;
-}
+/** Raw level telemetry. It describes PCM but never admits or rejects pitch. */
+export type InputTelemetry = Readonly<CapturedLevel> & {
+  readonly headroomDb: number;
+};
 
-export interface NoiseCalibrationState {
-  status: "idle" | "calibrating" | "complete" | "warning";
-  progress: number;
-  frameCount: number;
-  quality?: "good" | "variable-noise" | "clipped" | "too-loud";
-  message?: string;
-}
-
-export interface DetectorProfile {
-  minFrequency?: number;
-  maxFrequency?: number;
-  analysisWindowSize?: number | "maximum";
-  yinThreshold?: number;
-  minConfidence?: number;
-  a4Frequency?: number;
+export interface AudioInputDiagnosticContext {
+  flow: DiagnosticFlow;
+  phase: string;
+  targetMidi?: number | null;
+  toleranceCents?: number | null;
+  stableMs?: number | null;
+  requiredHoldMs?: number | null;
+  resetReason?: string | null;
 }
 
 export interface UseAudioInputOptions {
-  detector?: DetectorProfile;
-  fallbackRmsThreshold?: number;
-  bufferSize?: number;
-  maxFrames?: number;
-  onFrame?: (frame: YinPitchFrame) => void;
-}
-
-interface StoredInputCalibration {
-  version: 1;
-  noiseFloorDbfs: number | null;
-  noiseCeilingDbfs: number | null;
-  gateMarginDb: number;
-  measuredAt?: string;
+  readonly onFrame?: (observation: Readonly<PitchObservation>) => void;
+  readonly diagnostics?: AudioInputDiagnosticContext;
 }
 
 export interface AudioInputController {
-  state: AudioInputState;
-  error: string;
-  microphoneInfo: MicrophoneInfo | null;
-  frames: YinPitchFrame[];
-  liveFrame: YinPitchFrame | undefined;
-  telemetry: InputTelemetry | null;
-  telemetryHistory: InputTelemetry[];
-  noiseFloorDbfs: number | null;
-  noiseCeilingDbfs: number | null;
-  gateMarginDb: number;
-  gateThresholdDbfs: number;
-  gateRmsThreshold: number;
-  calibration: NoiseCalibrationState;
-  start: () => Promise<MicrophoneInfo | null>;
-  stop: () => void;
-  clearFrames: () => void;
-  beginCalibration: () => void;
-  cancelCalibration: () => void;
-  resetCalibration: () => void;
-  setGateMarginDb: (marginDb: number) => void;
-  getRmsThreshold: (fallback?: number) => number;
-  getStream: () => MediaStream | null;
+  readonly state: AudioInputState;
+  readonly error: string;
+  readonly microphoneInfo: MicrophoneInfo | null;
+  /** One observation for every overlapping detector window, including silence. */
+  readonly frames: readonly Readonly<PitchObservation>[];
+  readonly liveFrame: Readonly<PitchObservation> | undefined;
+  /** Current musical note and continuous same-note occupancy, derived downstream. */
+  readonly liveNote: Readonly<LiveNote> | null;
+  readonly processedWindowCount: number;
+  readonly processedSampleCount: number;
+  readonly workletProcessCount: number;
+  readonly captureEpoch: number;
+  readonly continuityEpoch: number;
+  readonly graphGeneration: number;
+  readonly transportRepairCount: number;
+  readonly telemetry: InputTelemetry | null;
+  readonly telemetryHistory: readonly InputTelemetry[];
+  readonly enable: () => Promise<MicrophoneInfo | null>;
+  readonly disable: () => void;
+  readonly getStream: () => MediaStream | null;
 }
 
-const CALIBRATION_DURATION_MS = 3_000;
-const FALLBACK_OPEN_DBFS = -48;
-const FALLBACK_CLOSE_DBFS = -52;
-const DEFAULT_GATE_MARGIN_DB = 12;
+type OptionsReader = () => UseAudioInputOptions;
 
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
+interface ConsumerRegistry {
+  readers: Map<symbol, OptionsReader>;
+  attach: (id: symbol, reader: OptionsReader) => () => void;
+  current: () => UseAudioInputOptions;
 }
 
-function deviceCalibrationKey(info: MicrophoneInfo): string {
-  return `input-calibration.v1:${info.settings.deviceId || "default"}`;
+function createConsumerRegistry(): ConsumerRegistry {
+  const readers = new Map<symbol, OptionsReader>();
+  return {
+    readers,
+    attach(id, reader) {
+      readers.delete(id);
+      readers.set(id, reader);
+      let attached = true;
+      return () => {
+        if (!attached) return;
+        attached = false;
+        readers.delete(id);
+      };
+    },
+    current() {
+      const options = [...readers.values()].map((reader) => reader());
+      const diagnostics = options.slice().reverse().find((option) => option.diagnostics)?.diagnostics;
+      const frameConsumers = options
+        .map((option) => option.onFrame)
+        .filter((consumer): consumer is NonNullable<typeof consumer> => Boolean(consumer));
+      return {
+        ...(diagnostics ? { diagnostics } : {}),
+        ...(frameConsumers.length > 0
+          ? {
+              onFrame: (observation) => {
+                for (const consume of frameConsumers) {
+                  try {
+                    consume(observation);
+                  } catch (error) {
+                    console.error("NoteForge audio-input observation consumer failed.", error);
+                  }
+                }
+              },
+            }
+          : {}),
+      };
+    },
+  };
 }
 
-function thresholdsFor(
-  floorDbfs: number | null,
-  ceilingDbfs: number | null,
-  marginDb: number
-): NoiseGateThresholds {
-  if (floorDbfs === null) {
-    return {
-      noiseFloorDbfs: FALLBACK_CLOSE_DBFS,
-      openThresholdDbfs: FALLBACK_OPEN_DBFS,
-      closeThresholdDbfs: FALLBACK_CLOSE_DBFS,
-      marginDb: FALLBACK_OPEN_DBFS - FALLBACK_CLOSE_DBFS,
-      hysteresisDb: FALLBACK_OPEN_DBFS - FALLBACK_CLOSE_DBFS
-    };
-  }
+const FRAME_HISTORY_LIMIT = 720;
+const EMPTY_FRAMES = Object.freeze([]) as readonly Readonly<PitchObservation>[];
+const EMPTY_TELEMETRY = Object.freeze([]) as readonly InputTelemetry[];
 
-  // A median floor ignores short intrusions; the upper calibration percentile
-  // keeps an intermittently noisy room from opening the detector by accident.
-  const effectiveFloor = ceilingDbfs === null
-    ? floorDbfs
-    : Math.max(floorDbfs, ceilingDbfs + 6 - marginDb);
-  return deriveNoiseGateThresholds(effectiveFloor, {
-    marginDb,
-    hysteresisDb: 4,
-    minimumDbfs: -72,
-    maximumDbfs: -18
-  });
+function diagnosticErrorCode(error: unknown): string {
+  if (error instanceof DOMException) return toDiagnosticToken(error.name);
+  if (error instanceof Error && error.name) return toDiagnosticToken(error.name);
+  return "unknown";
 }
 
-export function useAudioInput(options: UseAudioInputOptions = {}): AudioInputController {
-  const captureRef = useRef(new MicrophoneCapture());
-  const optionsRef = useRef(options);
-  const stateRef = useRef<AudioInputState>("off");
+function booleanSetting(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function useAudioInputController(
+  capture: MicrophoneCapture,
+  readOptions: () => UseAudioInputOptions,
+): AudioInputController {
+  const engineRef = useRef(new NoteInputEngine());
+  const stateRef = useRef<AudioInputState>("disabled");
   const microphoneInfoRef = useRef<MicrophoneInfo | null>(null);
-  const calibrationKeyRef = useRef("input-calibration.v1:default");
-  const calibrationLoadRef = useRef(0);
-  const calibrationStartedAtRef = useRef(0);
-  const calibrationReadingsRef = useRef<number[]>([]);
-  const calibrationClippedFramesRef = useRef(0);
-  const calibrationActiveRef = useRef(false);
-  const noiseFloorRef = useRef<number | null>(null);
-  const noiseCeilingRef = useRef<number | null>(null);
-  const gateMarginRef = useRef(DEFAULT_GATE_MARGIN_DB);
-  const gateOpenRef = useRef(false);
-  const lastTelemetryRef = useRef<InputTelemetry | null>(null);
+  const enableGenerationRef = useRef(0);
+  const enablePromiseRef = useRef<Promise<MicrophoneInfo | null> | null>(null);
   const levelSequenceRef = useRef(0);
+  const lastTelemetryRef = useRef<InputTelemetry | null>(null);
 
-  const [state, setState] = useState<AudioInputState>("off");
+  const [state, setState] = useState<AudioInputState>("disabled");
   const [error, setError] = useState("");
   const [microphoneInfo, setMicrophoneInfo] = useState<MicrophoneInfo | null>(null);
-  const [frames, setFrames] = useState<YinPitchFrame[]>([]);
+  const [frames, setFrames] = useState<readonly Readonly<PitchObservation>[]>(EMPTY_FRAMES);
+  const [liveFrame, setLiveFrame] = useState<Readonly<PitchObservation>>();
+  const [liveNote, setLiveNote] = useState<Readonly<LiveNote> | null>(null);
+  const [processedWindowCount, setProcessedWindowCount] = useState(0);
+  const [processedSampleCount, setProcessedSampleCount] = useState(0);
+  const [workletProcessCount, setWorkletProcessCount] = useState(0);
+  const [captureEpoch, setCaptureEpoch] = useState(0);
+  const [continuityEpoch, setContinuityEpoch] = useState(0);
+  const [graphGeneration, setGraphGeneration] = useState(0);
+  const [transportRepairCount, setTransportRepairCount] = useState(0);
   const [telemetry, setTelemetry] = useState<InputTelemetry | null>(null);
-  const [telemetryHistory, setTelemetryHistory] = useState<InputTelemetry[]>([]);
-  const [noiseFloorDbfs, setNoiseFloorDbfs] = useState<number | null>(null);
-  const [noiseCeilingDbfs, setNoiseCeilingDbfs] = useState<number | null>(null);
-  const [gateMarginDb, setGateMarginState] = useState(DEFAULT_GATE_MARGIN_DB);
-  const [calibration, setCalibration] = useState<NoiseCalibrationState>({
-    status: "idle",
-    progress: 0,
-    frameCount: 0
-  });
+  const [telemetryHistory, setTelemetryHistory] = useState<readonly InputTelemetry[]>(EMPTY_TELEMETRY);
 
-  optionsRef.current = options;
-
-  const persistCalibration = useCallback((record?: Partial<StoredInputCalibration>) => {
-    const value: StoredInputCalibration = {
-      version: 1,
-      noiseFloorDbfs: noiseFloorRef.current,
-      noiseCeilingDbfs: noiseCeilingRef.current,
-      gateMarginDb: gateMarginRef.current,
-      ...record
-    };
-    void setSetting(calibrationKeyRef.current, value).catch(() => undefined);
+  const clearObservations = useCallback(() => {
+    setLiveFrame(undefined);
+    setLiveNote(null);
+    setFrames(EMPTY_FRAMES);
+    setProcessedWindowCount(0);
+    setProcessedSampleCount(0);
+    setWorkletProcessCount(0);
+    setCaptureEpoch(0);
+    setContinuityEpoch(0);
+    setGraphGeneration(0);
   }, []);
-
-  const applyStoredCalibration = useCallback(async (info: MicrophoneInfo) => {
-    const key = deviceCalibrationKey(info);
-    calibrationKeyRef.current = key;
-    const loadSequence = ++calibrationLoadRef.current;
-    try {
-      const stored = await getSetting<StoredInputCalibration>(key);
-      if (loadSequence !== calibrationLoadRef.current || !stored || stored.version !== 1) return;
-      const margin = clamp(stored.gateMarginDb, 6, 24);
-      noiseFloorRef.current = stored.noiseFloorDbfs;
-      noiseCeilingRef.current = stored.noiseCeilingDbfs;
-      gateMarginRef.current = margin;
-      gateOpenRef.current = false;
-      setNoiseFloorDbfs(stored.noiseFloorDbfs);
-      setNoiseCeilingDbfs(stored.noiseCeilingDbfs);
-      setGateMarginState(margin);
-      if (stored.noiseFloorDbfs !== null) {
-        setCalibration({ status: "complete", progress: 1, frameCount: 0, quality: "good", message: "Saved room calibration loaded." });
-      }
-    } catch {
-      // IndexedDB may be unavailable in a locked-down context; live metering
-      // and session calibration still work without persistence.
-    }
-  }, []);
-
-  const finishCalibration = useCallback(() => {
-    const readings = calibrationReadingsRef.current;
-    const floor = estimateNoiseFloorDbfs(readings, { quantile: 0.5, minimumDbfs: -96, maximumDbfs: 0 });
-    const ceiling = estimateNoiseFloorDbfs(readings, { quantile: 0.9, minimumDbfs: -96, maximumDbfs: 0 });
-    calibrationActiveRef.current = false;
-
-    if (floor === null || ceiling === null || readings.length < 20) {
-      setCalibration({ status: "warning", progress: 1, frameCount: readings.length, message: "Not enough input arrived. Check the selected microphone and try again." });
-      return;
-    }
-
-    noiseFloorRef.current = floor;
-    noiseCeilingRef.current = ceiling;
-    gateOpenRef.current = false;
-    setNoiseFloorDbfs(floor);
-    setNoiseCeilingDbfs(ceiling);
-    const variability = ceiling - floor;
-    const clipped = calibrationClippedFramesRef.current > 0;
-    const tooLoud = floor > -28;
-    const quality = clipped ? "clipped" : tooLoud ? "too-loud" : variability > 12 ? "variable-noise" : "good";
-    const message = clipped
-      ? "Clipping occurred while the room should have been quiet. Reduce input gain and recalibrate."
-      : tooLoud
-        ? "The room floor is very high. Move closer, lower the source noise, or raise the gate margin."
-        : variability > 12
-          ? "The background changed during calibration. The upper noise band is being guarded."
-          : "Room floor captured. The detector gate now follows this microphone.";
-    setCalibration({ status: quality === "good" ? "complete" : "warning", progress: 1, frameCount: readings.length, quality, message });
-    persistCalibration({ measuredAt: new Date().toISOString() });
-  }, [persistCalibration]);
 
   const handleLevel = useCallback((level: CapturedLevel) => {
-    const thresholds = thresholdsFor(noiseFloorRef.current, noiseCeilingRef.current, gateMarginRef.current);
-    gateOpenRef.current = applyGateHysteresis(gateOpenRef.current, level.rmsDbfs, thresholds);
-    const next: InputTelemetry = {
+    const next: InputTelemetry = Object.freeze({
       ...level,
-      noiseFloorDbfs: noiseFloorRef.current,
-      noiseCeilingDbfs: noiseCeilingRef.current,
-      gateThresholdDbfs: thresholds.openThresholdDbfs,
-      gateCloseThresholdDbfs: thresholds.closeThresholdDbfs,
-      gateOpen: gateOpenRef.current,
-      signalMarginDb: noiseFloorRef.current === null ? null : level.rmsDbfs - noiseFloorRef.current,
-      headroomDb: Math.max(0, -level.peakDbfs)
-    };
+      headroomDb: Math.max(0, -level.peakDbfs),
+    });
     lastTelemetryRef.current = next;
-
-    if (calibrationActiveRef.current) {
-      calibrationReadingsRef.current.push(level.rmsDbfs);
-      if (level.clippedSampleCount > 0) calibrationClippedFramesRef.current += 1;
-      const elapsed = performance.now() - calibrationStartedAtRef.current;
-      if (elapsed >= CALIBRATION_DURATION_MS) finishCalibration();
-      else if (levelSequenceRef.current % 2 === 0) {
-        setCalibration({
-          status: "calibrating",
-          progress: clamp(elapsed / CALIBRATION_DURATION_MS, 0, 1),
-          frameCount: calibrationReadingsRef.current.length,
-          message: "Stay quiet while NoteForge measures the room."
-        });
-      }
-    }
-
-    // The worklet meters at roughly 47 Hz. Paint at half that cadence so the
-    // scope feels continuous without forcing every laboratory to rerender 47×/s.
     levelSequenceRef.current += 1;
     if (levelSequenceRef.current % 2 === 0) {
       setTelemetry(next);
-      setTelemetryHistory((current) => [...current.slice(-191), next]);
+      setTelemetryHistory((current) => Object.freeze([...current.slice(-191), next]));
     }
-  }, [finishCalibration]);
-
-  const getRmsThreshold = useCallback((fallback?: number): number => {
-    if (noiseFloorRef.current === null) {
-      if (fallback !== undefined) return fallback;
-      return dbfsToAmplitude(gateOpenRef.current ? FALLBACK_CLOSE_DBFS : FALLBACK_OPEN_DBFS);
-    }
-    const thresholds = thresholdsFor(noiseFloorRef.current, noiseCeilingRef.current, gateMarginRef.current);
-    return dbfsToAmplitude(gateOpenRef.current ? thresholds.closeThresholdDbfs : thresholds.openThresholdDbfs);
   }, []);
 
-  const start = useCallback(async (): Promise<MicrophoneInfo | null> => {
-    if (stateRef.current === "ready") return microphoneInfoRef.current;
-    if (stateRef.current === "starting") return null;
-    stateRef.current = "starting";
-    setState("starting");
+  const handleTransportEvent = useCallback((event: CaptureTransportEvent) => {
+    if (event.kind !== "recovering") return;
+    setTransportRepairCount((current) => current + 1);
+    setLiveFrame(undefined);
+    setLiveNote(null);
+  }, []);
+
+  const disable = useCallback(() => {
+    pitchDiagnostics.record(readOptions().diagnostics?.flow ?? "audio-input", {
+      kind: "microphone-state",
+      microphone: { state: "off" },
+    });
+    enableGenerationRef.current += 1;
+    enablePromiseRef.current = null;
+    capture.stop();
+    lastTelemetryRef.current = null;
+    levelSequenceRef.current = 0;
+    stateRef.current = "disabled";
+    microphoneInfoRef.current = null;
+    setState("disabled");
     setError("");
-
-    try {
-      const info = await captureRef.current.start(({ samples, capturedAt, sampleRate }) => {
-        const profile = optionsRef.current.detector ?? {};
-        const minFrequency = profile.minFrequency ?? 65;
-        const maximumAnalysisWindow = samples.length - Math.ceil(sampleRate / minFrequency) - 2;
-        const requestedWindow = profile.analysisWindowSize === "maximum"
-          ? maximumAnalysisWindow
-          : profile.analysisWindowSize;
-        const analysisWindowSize = requestedWindow === undefined
-          ? undefined
-          : Math.max(2, Math.min(requestedWindow, maximumAnalysisWindow));
-        const frame = detectPitch(samples, {
-          sampleRate,
-          minFrequency,
-          maxFrequency: profile.maxFrequency,
-          analysisWindowSize,
-          yinThreshold: profile.yinThreshold,
-          minConfidence: profile.minConfidence,
-          a4Frequency: profile.a4Frequency,
-          rmsThreshold: getRmsThreshold(optionsRef.current.fallbackRmsThreshold),
-          timeSeconds: capturedAt
-        });
-        const maxFrames = optionsRef.current.maxFrames ?? 280;
-        setFrames((current) => [...current.slice(-(maxFrames - 1)), frame]);
-        optionsRef.current.onFrame?.(frame);
-      }, optionsRef.current.bufferSize ?? 4096, handleLevel);
-
-      microphoneInfoRef.current = info;
-      setMicrophoneInfo(info);
-      void applyStoredCalibration(info);
-      stateRef.current = "ready";
-      setState("ready");
-      return info;
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Microphone access failed.";
-      stateRef.current = "error";
-      setState("error");
-      setError(message);
-      return null;
-    }
-  }, [applyStoredCalibration, getRmsThreshold, handleLevel]);
-
-  const cancelCalibration = useCallback(() => {
-    calibrationActiveRef.current = false;
-    calibrationReadingsRef.current = [];
-    calibrationClippedFramesRef.current = 0;
-    setCalibration(noiseFloorRef.current === null
-      ? { status: "idle", progress: 0, frameCount: 0 }
-      : { status: "complete", progress: 1, frameCount: 0, quality: "good", message: "Previous room calibration retained." });
-  }, []);
-
-  const stop = useCallback(() => {
-    captureRef.current.stop();
-    calibrationActiveRef.current = false;
-    calibrationReadingsRef.current = [];
-    gateOpenRef.current = false;
-    stateRef.current = "off";
-    setState("off");
+    setMicrophoneInfo(null);
+    clearObservations();
+    setTransportRepairCount(0);
     setTelemetry(null);
-    setTelemetryHistory([]);
-    setCalibration((current) => current.status === "calibrating"
-      ? noiseFloorRef.current === null
-        ? { status: "idle", progress: 0, frameCount: 0 }
-        : { status: "complete", progress: 1, frameCount: 0, quality: "good", message: "Room calibration retained." }
-      : current);
-  }, []);
+    setTelemetryHistory(EMPTY_TELEMETRY);
+  }, [capture, clearObservations, readOptions]);
 
-  const beginCalibration = useCallback(() => {
-    if (stateRef.current !== "ready") return;
-    calibrationReadingsRef.current = [];
-    calibrationClippedFramesRef.current = 0;
-    calibrationStartedAtRef.current = performance.now();
-    calibrationActiveRef.current = true;
-    gateOpenRef.current = false;
-    setCalibration({ status: "calibrating", progress: 0, frameCount: 0, message: "Stay quiet while NoteForge measures the room." });
-  }, []);
+  const handleStreamEnded = useCallback(() => {
+    if (stateRef.current === "disabled") return;
+    pitchDiagnostics.record(readOptions().diagnostics?.flow ?? "audio-input", {
+      kind: "microphone-state",
+      microphone: { state: "stream-ended", errorCode: "media-track-ended" },
+    });
+    enableGenerationRef.current += 1;
+    enablePromiseRef.current = null;
+    capture.stop();
+    lastTelemetryRef.current = null;
+    levelSequenceRef.current = 0;
+    stateRef.current = "error";
+    microphoneInfoRef.current = null;
+    setState("error");
+    setMicrophoneInfo(null);
+    clearObservations();
+    setTelemetry(null);
+    setTelemetryHistory(EMPTY_TELEMETRY);
+    setError("The microphone disconnected. Enable input to reconnect.");
+  }, [capture, clearObservations, readOptions]);
 
-  const resetCalibration = useCallback(() => {
-    calibrationActiveRef.current = false;
-    noiseFloorRef.current = null;
-    noiseCeilingRef.current = null;
-    gateOpenRef.current = false;
-    setNoiseFloorDbfs(null);
-    setNoiseCeilingDbfs(null);
-    setCalibration({ status: "idle", progress: 0, frameCount: 0 });
-    persistCalibration({ noiseFloorDbfs: null, noiseCeilingDbfs: null, measuredAt: undefined });
-  }, [persistCalibration]);
+  const enable = useCallback((): Promise<MicrophoneInfo | null> => {
+    if (capture.isActive()) {
+      stateRef.current = "running";
+      setState("running");
+      setError("");
+      return Promise.resolve(capture.getInfo());
+    }
+    if (stateRef.current === "opening" && enablePromiseRef.current) {
+      return enablePromiseRef.current;
+    }
 
-  const setGateMarginDb = useCallback((marginDb: number) => {
-    const next = clamp(marginDb, 6, 24);
-    gateMarginRef.current = next;
-    gateOpenRef.current = false;
-    setGateMarginState(next);
-    persistCalibration({ gateMarginDb: next });
-  }, [persistCalibration]);
+    const generation = ++enableGenerationRef.current;
+    lastTelemetryRef.current = null;
+    levelSequenceRef.current = 0;
+    stateRef.current = "opening";
+    setState("opening");
+    setError("");
+    microphoneInfoRef.current = null;
+    setMicrophoneInfo(null);
+    clearObservations();
+    setTransportRepairCount(0);
+    setTelemetry(null);
+    setTelemetryHistory(EMPTY_TELEMETRY);
+    pitchDiagnostics.record(readOptions().diagnostics?.flow ?? "audio-input", {
+      kind: "microphone-state",
+      microphone: {
+        state: "starting",
+        bufferSize: MICROPHONE_ANALYSIS_WINDOW_SIZE,
+        minFrequencyHz: NOTE_INPUT_DEFAULTS.minFrequency,
+        maxFrequencyHz: NOTE_INPUT_DEFAULTS.maxFrequency,
+        yinThreshold: NOTE_INPUT_DEFAULTS.yinThreshold,
+        minConfidence: NOTE_INPUT_DEFAULTS.minConfidence,
+      },
+    });
 
-  const clearFrames = useCallback(() => setFrames([]), []);
-  const getStream = useCallback(() => captureRef.current.getStream(), []);
+    const operation = (async (): Promise<MicrophoneInfo | null> => {
+      try {
+        const info = await capture.start(
+          (window) => {
+            const detectionStartedAt = performance.now();
+            const { observation } = engineRef.current.process(window);
+            const processingMs = Number(
+              Math.max(0, performance.now() - detectionStartedAt).toFixed(3),
+            );
+            setError("");
+            setLiveFrame(observation);
+            setLiveNote((current) => reduceLiveNote(current, observation));
+            setProcessedWindowCount((current) => current + 1);
+            setProcessedSampleCount(observation.processedSampleCount);
+            setWorkletProcessCount(observation.workletProcessCount);
+            setCaptureEpoch(observation.captureEpoch);
+            setContinuityEpoch(observation.continuityEpoch);
+            setGraphGeneration(observation.graphGeneration);
+            setFrames((current) => Object.freeze([
+              ...current.slice(-(FRAME_HISTORY_LIMIT - 1)),
+              observation,
+            ]));
+
+            const options = readOptions();
+            const context = options.diagnostics;
+            const targetMidi = context?.targetMidi;
+            const toleranceCents = context?.toleranceCents;
+            const errorCents = observation.voiced
+              && observation.midiFloat !== null
+              && targetMidi != null
+              && Number.isFinite(targetMidi)
+              ? (observation.midiFloat - targetMidi) * 100
+              : null;
+            const tracking: TrackingDiagnostic | undefined = context
+              ? {
+                  phase: context.phase,
+                  targetMidi: targetMidi ?? null,
+                  toleranceCents: toleranceCents ?? null,
+                  errorCents,
+                  inBand: errorCents === null || toleranceCents == null
+                    ? null
+                    : Math.abs(errorCents) <= toleranceCents,
+                  stableMs: context.stableMs ?? null,
+                  requiredHoldMs: context.requiredHoldMs ?? null,
+                  resetReason: context.resetReason ?? null,
+                }
+              : undefined;
+            pitchDiagnostics.record(context?.flow ?? "audio-input", {
+              kind: "pitch-frame",
+              pitch: {
+                frame: toFrameDiagnostic(observation),
+                processingMs,
+                ...(lastTelemetryRef.current
+                  ? { input: toInputDiagnostic(lastTelemetryRef.current) }
+                  : {}),
+                ...(tracking ? { tracking } : {}),
+              },
+            });
+            options.onFrame?.(observation);
+          },
+          MICROPHONE_ANALYSIS_WINDOW_SIZE,
+          handleLevel,
+          handleStreamEnded,
+          handleTransportEvent,
+        );
+
+        if (generation !== enableGenerationRef.current || stateRef.current !== "opening") {
+          return null;
+        }
+        microphoneInfoRef.current = info;
+        setMicrophoneInfo(info);
+        setCaptureEpoch(info.captureEpoch);
+        stateRef.current = "running";
+        setState("running");
+        pitchDiagnostics.record(readOptions().diagnostics?.flow ?? "audio-input", {
+          kind: "microphone-state",
+          microphone: {
+            state: "ready",
+            sampleRate: info.sampleRate,
+            bufferSize: info.analysisWindowSize,
+            minFrequencyHz: NOTE_INPUT_DEFAULTS.minFrequency,
+            maxFrequencyHz: NOTE_INPUT_DEFAULTS.maxFrequency,
+            echoCancellation: booleanSetting(info.settings.echoCancellation),
+            noiseSuppression: booleanSetting(info.settings.noiseSuppression),
+            autoGainControl: booleanSetting(info.settings.autoGainControl),
+          },
+        });
+        return info;
+      } catch (caught) {
+        if (generation !== enableGenerationRef.current || stateRef.current !== "opening") {
+          return null;
+        }
+        const message = caught instanceof Error ? caught.message : "Microphone access failed.";
+        stateRef.current = "error";
+        setState("error");
+        setError(message);
+        pitchDiagnostics.record(readOptions().diagnostics?.flow ?? "audio-input", {
+          kind: "microphone-state",
+          microphone: { state: "error", errorCode: diagnosticErrorCode(caught) },
+        });
+        return null;
+      }
+    })();
+    enablePromiseRef.current = operation;
+    void operation.then(
+      () => {
+        if (enablePromiseRef.current === operation) enablePromiseRef.current = null;
+      },
+      () => {
+        if (enablePromiseRef.current === operation) enablePromiseRef.current = null;
+      },
+    );
+    return operation;
+  }, [
+    capture,
+    clearObservations,
+    handleLevel,
+    handleStreamEnded,
+    handleTransportEvent,
+    readOptions,
+  ]);
+
+  const getStream = useCallback(() => capture.getStream(), [capture]);
 
   useEffect(() => () => {
-    captureRef.current.stop();
-    calibrationActiveRef.current = false;
-  }, []);
+    enableGenerationRef.current += 1;
+    enablePromiseRef.current = null;
+    capture.stop();
+  }, [capture]);
 
-  const gateThresholdDbfs = thresholdsFor(noiseFloorDbfs, noiseCeilingDbfs, gateMarginDb).openThresholdDbfs;
-  const gateRmsThreshold = dbfsToAmplitude(gateThresholdDbfs);
-
-  return {
+  return Object.freeze({
     state,
     error,
     microphoneInfo,
     frames,
-    liveFrame: frames.at(-1),
+    liveFrame,
+    liveNote,
+    processedWindowCount,
+    processedSampleCount,
+    workletProcessCount,
+    captureEpoch,
+    continuityEpoch,
+    graphGeneration,
+    transportRepairCount,
     telemetry,
     telemetryHistory,
-    noiseFloorDbfs,
-    noiseCeilingDbfs,
-    gateMarginDb,
-    gateThresholdDbfs,
-    gateRmsThreshold,
-    calibration,
-    start,
-    stop,
-    clearFrames,
-    beginCalibration,
-    cancelCalibration,
-    resetCalibration,
-    setGateMarginDb,
-    getRmsThreshold,
-    getStream
-  };
+    enable,
+    disable,
+    getStream,
+  });
+}
+
+interface SharedAudioInputContextValue {
+  controller: AudioInputController;
+  attach: (id: symbol, reader: OptionsReader) => () => void;
+}
+
+const SharedAudioInputContext = createContext<SharedAudioInputContextValue | null>(null);
+
+export function AudioInputProvider({ children }: PropsWithChildren) {
+  const captureRef = useRef<MicrophoneCapture | null>(null);
+  if (captureRef.current === null) captureRef.current = new MicrophoneCapture();
+  const registryRef = useRef<ConsumerRegistry | null>(null);
+  if (registryRef.current === null) registryRef.current = createConsumerRegistry();
+  const registry = registryRef.current;
+  const readOptions = useCallback(() => registry.current(), [registry]);
+  const controller = useAudioInputController(captureRef.current, readOptions);
+  const attach = useCallback(
+    (id: symbol, reader: OptionsReader) => registry.attach(id, reader),
+    [registry],
+  );
+  const value = useMemo(() => ({ controller, attach }), [attach, controller]);
+  return createElement(SharedAudioInputContext.Provider, { value }, children);
+}
+
+export function useAudioInput(options: UseAudioInputOptions = {}): AudioInputController {
+  const shared = useContext(SharedAudioInputContext);
+  if (!shared) throw new Error("useAudioInput must be used inside AudioInputProvider");
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const consumerIdRef = useRef<symbol | null>(null);
+  if (consumerIdRef.current === null) consumerIdRef.current = Symbol("audio-input-consumer");
+
+  useLayoutEffect(
+    () => shared.attach(consumerIdRef.current!, () => optionsRef.current),
+    [shared.attach],
+  );
+  return shared.controller;
+}
+
+/** Observe app-scoped capture without registering a frame consumer. */
+export function useAudioInputStatus(): AudioInputController {
+  const shared = useContext(SharedAudioInputContext);
+  if (!shared) throw new Error("useAudioInputStatus must be used inside AudioInputProvider");
+  return shared.controller;
 }

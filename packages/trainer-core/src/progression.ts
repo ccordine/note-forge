@@ -28,6 +28,12 @@ export interface SkillProgressionOptions {
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
+const MAX_SKILL_ID_LENGTH = 128;
+const MAX_CONFUSION_KEY_LENGTH = 256;
+const MAX_CONFUSION_ENTRIES = 128;
+const UNSAFE_DICTIONARY_KEYS = new Set(
+  [...Object.getOwnPropertyNames(Object.prototype), "prototype"],
+);
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
@@ -35,16 +41,101 @@ const clamp = (value: number, minimum: number, maximum: number): number =>
 const finiteOr = (value: number | undefined, fallback: number): number =>
   value !== undefined && Number.isFinite(value) ? value : fallback;
 
-export const createInitialSkillState = (skillId: string, difficulty = 0.5): SkillState => ({
-  skillId,
-  mastery: 0,
-  difficulty: clamp(finiteOr(difficulty, 0.5), 0, 1),
-  attemptCount: 0,
-  recentAccuracy: 0,
-  longTermAccuracy: 0,
-  confidence: 0,
-  commonConfusions: {},
-});
+function requireSkillId(skillId: string): void {
+  if (typeof skillId !== "string" || skillId.trim().length === 0) {
+    throw new TypeError("skillId is required.");
+  }
+  if (skillId.length > MAX_SKILL_ID_LENGTH) {
+    throw new RangeError(`skillId cannot exceed ${MAX_SKILL_ID_LENGTH} characters.`);
+  }
+  if (UNSAFE_DICTIONARY_KEYS.has(skillId)) {
+    throw new RangeError("skillId cannot name an object-prototype property.");
+  }
+}
+
+function requireConfusionKey(confusionKey: string, label = "confusionKey"): void {
+  if (typeof confusionKey !== "string" || confusionKey.trim().length === 0) {
+    throw new TypeError(`${label} is required.`);
+  }
+  if (confusionKey.length > MAX_CONFUSION_KEY_LENGTH) {
+    throw new RangeError(`${label} cannot exceed ${MAX_CONFUSION_KEY_LENGTH} characters.`);
+  }
+  if (UNSAFE_DICTIONARY_KEYS.has(confusionKey)) {
+    throw new RangeError(`${label} cannot name an object-prototype property.`);
+  }
+}
+
+function requireUnitInterval(value: number, label: string): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${label} must be a finite number from zero through one.`);
+  }
+}
+
+function requireFiniteNonnegative(value: number, label: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(`${label} must be finite and non-negative.`);
+  }
+}
+
+function validateSkillState(state: Readonly<SkillState>): void {
+  requireSkillId(state.skillId);
+  if (!Number.isSafeInteger(state.attemptCount) || state.attemptCount < 0) {
+    throw new RangeError("state.attemptCount must be a non-negative safe integer.");
+  }
+  for (const [label, value] of [
+    ["state.mastery", state.mastery],
+    ["state.difficulty", state.difficulty],
+    ["state.recentAccuracy", state.recentAccuracy],
+    ["state.longTermAccuracy", state.longTermAccuracy],
+    ["state.confidence", state.confidence],
+  ] as const) {
+    requireUnitInterval(value, label);
+  }
+  if (state.averageResponseTimeMs !== undefined) {
+    requireFiniteNonnegative(state.averageResponseTimeMs, "state.averageResponseTimeMs");
+  }
+  if (!state.commonConfusions || typeof state.commonConfusions !== "object" ||
+    Array.isArray(state.commonConfusions)) {
+    throw new TypeError("state.commonConfusions must be a plain record.");
+  }
+  const confusionPrototype = Object.getPrototypeOf(state.commonConfusions);
+  if (confusionPrototype !== Object.prototype && confusionPrototype !== null) {
+    throw new TypeError("state.commonConfusions must be a plain record.");
+  }
+  const confusionEntries = Object.entries(state.commonConfusions);
+  if (confusionEntries.length > MAX_CONFUSION_ENTRIES) {
+    throw new RangeError(`state.commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
+  }
+  for (const [key, count] of confusionEntries) {
+    requireConfusionKey(key, "state.commonConfusions key");
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new RangeError("state.commonConfusions must contain non-negative safe-integer counts.");
+    }
+  }
+  for (const [label, value] of [
+    ["state.lastPracticedAt", state.lastPracticedAt],
+    ["state.dueAt", state.dueAt],
+  ] as const) {
+    if (value !== undefined && !Number.isFinite(Date.parse(value))) {
+      throw new RangeError(`${label} must be a valid timestamp when present.`);
+    }
+  }
+}
+
+export const createInitialSkillState = (skillId: string, difficulty = 0.5): SkillState => {
+  requireSkillId(skillId);
+  requireUnitInterval(difficulty, "difficulty");
+  return {
+    skillId,
+    mastery: 0,
+    difficulty,
+    attemptCount: 0,
+    recentAccuracy: 0,
+    longTermAccuracy: 0,
+    confidence: 0,
+    commonConfusions: {},
+  };
+};
 
 const answerLabel = (answer: unknown): string => {
   if (typeof answer === "string") return answer;
@@ -57,19 +148,42 @@ const answerLabel = (answer: unknown): string => {
 };
 
 export const confusionKeyFor = (expectedAnswer: unknown, givenAnswer: unknown): string =>
-  `${answerLabel(expectedAnswer)} → ${answerLabel(givenAnswer)}`;
+  {
+    const key = `${answerLabel(expectedAnswer)} → ${answerLabel(givenAnswer)}`;
+    requireConfusionKey(key);
+    return key;
+  };
 
 export const recordSkillConfusion = (
   state: SkillState,
   confusionKey: string,
   increment = 1,
-): SkillState => ({
-  ...state,
-  commonConfusions: {
-    ...state.commonConfusions,
-    [confusionKey]: (state.commonConfusions[confusionKey] ?? 0) + Math.max(0, increment),
-  },
-});
+): SkillState => {
+  validateSkillState(state);
+  requireConfusionKey(confusionKey);
+  if (!Number.isSafeInteger(increment) || increment <= 0) {
+    throw new RangeError("increment must be a positive safe integer.");
+  }
+  const hasExistingKey = Object.hasOwn(state.commonConfusions, confusionKey);
+  if (!hasExistingKey && Object.keys(state.commonConfusions).length >= MAX_CONFUSION_ENTRIES) {
+    throw new RangeError(`commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
+  }
+  const current = hasExistingKey ? state.commonConfusions[confusionKey] : 0;
+  if (!Number.isSafeInteger(current) || current < 0) {
+    throw new RangeError("Existing confusion counts must be non-negative safe integers.");
+  }
+  const nextCount = current + increment;
+  if (!Number.isSafeInteger(nextCount)) {
+    throw new RangeError("The confusion count would exceed the safe-integer range.");
+  }
+  return {
+    ...state,
+    commonConfusions: {
+      ...state.commonConfusions,
+      [confusionKey]: nextCount,
+    },
+  };
+};
 
 export interface DueDateInput {
   accuracy: number;
@@ -82,16 +196,33 @@ export const calculateNextDueDate = (
   input: DueDateInput,
   options: SkillProgressionOptions = {},
 ): Date => {
-  const accuracy = clamp(finiteOr(input.accuracy, 0), 0, 1);
-  const mastery = clamp(finiteOr(input.mastery, 0), 0, 1);
+  requireUnitInterval(input.accuracy, "accuracy");
+  requireUnitInterval(input.mastery, "mastery");
+  const accuracy = input.accuracy;
+  const mastery = input.mastery;
+  if (!Number.isSafeInteger(input.attemptCount) || input.attemptCount < 0) {
+    throw new RangeError("attemptCount must be a non-negative safe integer.");
+  }
   const practicedAtMs = input.practicedAt.getTime();
   if (!Number.isFinite(practicedAtMs)) throw new TypeError("practicedAt must be a valid Date.");
-  if (accuracy < 0.55) {
-    const lapseMinutes = Math.max(1, finiteOr(options.lapseIntervalMinutes, 10));
-    return new Date(practicedAtMs + lapseMinutes * MINUTE_MS);
+  const lapseMinutes = options.lapseIntervalMinutes ?? 10;
+  const baseIntervalDays = options.baseIntervalDays ?? 1;
+  const maximumIntervalDays = options.maximumIntervalDays ?? 90;
+  requireFiniteNonnegative(lapseMinutes, "lapseIntervalMinutes");
+  requireFiniteNonnegative(baseIntervalDays, "baseIntervalDays");
+  requireFiniteNonnegative(maximumIntervalDays, "maximumIntervalDays");
+  if (lapseMinutes === 0) throw new RangeError("lapseIntervalMinutes must be greater than zero.");
+  if (baseIntervalDays === 0) throw new RangeError("baseIntervalDays must be greater than zero.");
+  if (maximumIntervalDays < baseIntervalDays) {
+    throw new RangeError("maximumIntervalDays cannot be shorter than baseIntervalDays.");
   }
-  const baseIntervalDays = Math.max(1 / 24, finiteOr(options.baseIntervalDays, 1));
-  const maximumIntervalDays = Math.max(baseIntervalDays, finiteOr(options.maximumIntervalDays, 90));
+  if (accuracy < 0.55) {
+    const dueAt = new Date(practicedAtMs + lapseMinutes * MINUTE_MS);
+    if (!Number.isFinite(dueAt.getTime())) {
+      throw new RangeError("The calculated due date is outside the representable date range.");
+    }
+    return dueAt;
+  }
   const repetitions = Math.sqrt(Math.max(1, input.attemptCount));
   const qualityFactor = 0.6 + accuracy * 0.8;
   const masteryFactor = 0.75 + mastery * 4.25;
@@ -99,7 +230,11 @@ export const calculateNextDueDate = (
     maximumIntervalDays,
     baseIntervalDays * repetitions * qualityFactor * masteryFactor,
   );
-  return new Date(practicedAtMs + intervalDays * DAY_MS);
+  const dueAt = new Date(practicedAtMs + intervalDays * DAY_MS);
+  if (!Number.isFinite(dueAt.getTime())) {
+    throw new RangeError("The calculated due date is outside the representable date range.");
+  }
+  return dueAt;
 };
 
 /** Applies one exercise observation without depending on its UI or audio source. */
@@ -109,15 +244,38 @@ export const updateSkillState = (
   observation: SkillObservation,
   options: SkillProgressionOptions = {},
 ): SkillState => {
-  if (!skillId) throw new TypeError("skillId is required.");
-  if (!Number.isFinite(observation.accuracy)) {
-    throw new TypeError("observation.accuracy must be finite.");
-  }
+  requireSkillId(skillId);
+  requireUnitInterval(observation.accuracy, "observation.accuracy");
   const state = previous ?? createInitialSkillState(skillId, observation.difficulty);
+  validateSkillState(state);
   if (state.skillId !== skillId) {
     throw new Error(`Cannot apply an observation for ${skillId} to state ${state.skillId}.`);
   }
-  const accuracy = clamp(observation.accuracy, 0, 1);
+  if (observation.confidence !== undefined) {
+    requireUnitInterval(observation.confidence, "observation.confidence");
+  }
+  if (observation.difficulty !== undefined) {
+    requireUnitInterval(observation.difficulty, "observation.difficulty");
+  }
+  if (observation.responseTimeMs !== undefined) {
+    requireFiniteNonnegative(observation.responseTimeMs, "observation.responseTimeMs");
+  }
+  for (const [name, value] of [
+    ["recentAccuracyAlpha", options.recentAccuracyAlpha],
+    ["longTermAccuracyAlpha", options.longTermAccuracyAlpha],
+    ["masteryAlpha", options.masteryAlpha],
+    ["confidenceAlpha", options.confidenceAlpha],
+    ["difficultyAlpha", options.difficultyAlpha],
+  ] as const) {
+    if (value !== undefined) requireUnitInterval(value, name);
+  }
+  if (options.difficultExerciseCredit !== undefined) {
+    requireFiniteNonnegative(options.difficultExerciseCredit, "difficultExerciseCredit");
+  }
+  const accuracy = observation.accuracy;
+  if (state.attemptCount === Number.MAX_SAFE_INTEGER) {
+    throw new RangeError("state.attemptCount cannot be incremented beyond the safe-integer range.");
+  }
   const attemptCount = state.attemptCount + 1;
   const practicedAt = observation.practicedAt ?? new Date();
   if (!Number.isFinite(practicedAt.getTime())) throw new TypeError("practicedAt must be a valid Date.");
@@ -176,9 +334,18 @@ export const updateSkillState = (
     (!isCorrect && observation.givenAnswer !== undefined
       ? confusionKeyFor(observation.expectedAnswer, observation.givenAnswer)
       : undefined);
+  if (confusionKey !== undefined) requireConfusionKey(confusionKey, "observation.confusionKey");
   const commonConfusions = { ...state.commonConfusions };
   if (!isCorrect && confusionKey) {
-    commonConfusions[confusionKey] = (commonConfusions[confusionKey] ?? 0) + 1;
+    const hasExistingKey = Object.hasOwn(commonConfusions, confusionKey);
+    if (!hasExistingKey && Object.keys(commonConfusions).length >= MAX_CONFUSION_ENTRIES) {
+      throw new RangeError(`commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
+    }
+    const currentCount = hasExistingKey ? commonConfusions[confusionKey] : 0;
+    if (currentCount === Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("The confusion count cannot be incremented beyond the safe-integer range.");
+    }
+    commonConfusions[confusionKey] = currentCount + 1;
   }
   const dueAt = calculateNextDueDate(
     { accuracy, mastery, attemptCount, practicedAt },
@@ -212,7 +379,13 @@ export const updateSkillStates = (
 ): Record<string, SkillState> => {
   const result: Record<string, SkillState> = {};
   for (const [skillId, state] of Object.entries(states)) {
-    if (state) result[skillId] = state;
+    if (state) {
+      validateSkillState(state);
+      if (state.skillId !== skillId) {
+        throw new RangeError(`State ${state.skillId} is stored under ${skillId}.`);
+      }
+      result[skillId] = state;
+    }
   }
   for (const entry of observations) {
     result[entry.skillId] = updateSkillState(

@@ -1,7 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import type { Timbre } from "@/audio/synth";
+import type { ChordPresetId, ScalePresetId } from "@/lib/music-display";
+import { isViewId, type ViewId } from "@/navigation";
 
-export type ViewId = "home" | "sound" | "mirror" | "hum" | "control" | "ear" | "intervals" | "harmony" | "melody" | "song" | "skills";
+export type { ViewId } from "@/navigation";
 export type PlaybackMode = "simultaneous" | "sequential";
 
 interface LabContextValue {
@@ -17,10 +19,10 @@ interface LabContextValue {
   setCompareCents: (cents: number) => void;
   tonicPitchClass: number;
   setTonicPitchClass: (pitchClass: number) => void;
-  scaleId: string;
-  setScaleId: (scaleId: string) => void;
-  chordQuality: string;
-  setChordQuality: (quality: string) => void;
+  scaleId: ScalePresetId;
+  setScaleId: (scaleId: ScalePresetId) => void;
+  chordQuality: ChordPresetId;
+  setChordQuality: (quality: ChordPresetId) => void;
   timbre: Timbre;
   setTimbre: (timbre: Timbre) => void;
   playbackMode: PlaybackMode;
@@ -36,10 +38,8 @@ interface LabContextValue {
 const LabContext = createContext<LabContextValue | null>(null);
 
 function viewFromHash(): ViewId {
-  const value = window.location.hash.slice(1) as ViewId;
-  return ["home", "sound", "mirror", "hum", "control", "ear", "intervals", "harmony", "melody", "song", "skills"].includes(value)
-    ? value
-    : "home";
+  const value = window.location.hash.slice(1);
+  return isViewId(value) ? value : "home";
 }
 
 export function LabProvider({ children }: PropsWithChildren) {
@@ -49,8 +49,8 @@ export function LabProvider({ children }: PropsWithChildren) {
   const [compareMidi, setCompareMidi] = useState(62);
   const [compareCents, setCompareCents] = useState(0);
   const [tonicPitchClass, setTonicPitchClass] = useState(0);
-  const [scaleId, setScaleId] = useState("major");
-  const [chordQuality, setChordQuality] = useState("major");
+  const [scaleId, setScaleId] = useState<ScalePresetId>("major");
+  const [chordQuality, setChordQuality] = useState<ChordPresetId>("major");
   const [timbre, setTimbre] = useState<Timbre>("sine");
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("sequential");
   const [labelsHidden, setLabelsHidden] = useState(false);
@@ -63,18 +63,20 @@ export function LabProvider({ children }: PropsWithChildren) {
     return () => window.removeEventListener("hashchange", handleHash);
   }, []);
 
-  const setView = (next: ViewId) => {
+  const setView = useCallback((next: ViewId) => {
     setViewState(next);
-    window.history.pushState(null, "", `#${next}`);
+    if (window.location.hash !== `#${next}`) {
+      window.history.pushState(null, "", `#${next}`);
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  };
+  }, []);
 
   const value = useMemo<LabContextValue>(() => ({
     view, setView, selectedMidi, setSelectedMidi, centsOffset, setCentsOffset, compareMidi, setCompareMidi,
     compareCents, setCompareCents, tonicPitchClass, setTonicPitchClass, scaleId, setScaleId, chordQuality,
     setChordQuality, timbre, setTimbre, playbackMode, setPlaybackMode, labelsHidden, setLabelsHidden,
     toleranceCents, setToleranceCents, expertMode, setExpertMode
-  }), [view, selectedMidi, centsOffset, compareMidi, compareCents, tonicPitchClass, scaleId, chordQuality, timbre,
+  }), [view, setView, selectedMidi, centsOffset, compareMidi, compareCents, tonicPitchClass, scaleId, chordQuality, timbre,
     playbackMode, labelsHidden, toleranceCents, expertMode]);
 
   return <LabContext.Provider value={value}>{children}</LabContext.Provider>;

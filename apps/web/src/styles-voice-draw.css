@@ -1,0 +1,702 @@
+/* Voice Draw ------------------------------------------------------------- */
+
+.arcade-page.mode-draw {
+  --arcade-accent: #ff75d8;
+  --arcade-accent-rgb: 255, 117, 216;
+}
+
+.arcade-cabinet.accent-pink {
+  --cabinet-accent: #ff75d8;
+  --cabinet-rgb: 255, 117, 216;
+}
+
+.arcade-demo-draw {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 9%;
+}
+
+.arcade-demo-draw::before {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border: 1px solid rgba(255, 117, 216, .13);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255, 117, 216, .045) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(rgba(255, 117, 216, .045) 1px, transparent 1px) 0 0 / 24px 24px;
+}
+
+.arcade-demo-draw svg {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: visible;
+}
+
+.arcade-demo-draw path {
+  fill: none;
+  stroke: #ff75d8;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 310;
+  filter: drop-shadow(0 0 7px rgba(255, 117, 216, .72));
+  animation: arcade-demo-draw-line 3.6s ease-in-out infinite;
+}
+
+.arcade-demo-draw circle {
+  fill: var(--cream);
+  stroke: #ff75d8;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 8px rgba(255, 117, 216, .9));
+  animation: arcade-demo-draw-cursor 3.6s ease-in-out infinite;
+}
+
+.arcade-demo-draw text {
+  fill: #ff75d8;
+  font: 8px var(--mono);
+  letter-spacing: .8px;
+}
+
+.voice-draw {
+  min-width: 0;
+  min-height: 660px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--arcade-accent-rgb), .2);
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 73% 3%, rgba(var(--arcade-accent-rgb), .07), transparent 31%),
+    linear-gradient(145deg, #171b17, #0d100e 72%);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .025), 0 28px 75px rgba(0, 0, 0, .28);
+}
+
+.voice-draw-header {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(10, 13, 11, .74);
+}
+
+.voice-draw-header h1 {
+  margin: 5px 0 3px;
+  font-size: clamp(26px, 3vw, 42px);
+  line-height: 1;
+  letter-spacing: -1.8px;
+}
+
+.voice-draw-header p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.voice-draw-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(100px, 1fr));
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0b0e0c;
+}
+
+.voice-draw-mode-tabs button {
+  display: grid;
+  gap: 3px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--dim);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.voice-draw-mode-tabs button b {
+  color: inherit;
+  font-size: 9px;
+}
+
+.voice-draw-mode-tabs button small {
+  color: var(--dim);
+  font-size: 6px;
+}
+
+.voice-draw-mode-tabs button:hover,
+.voice-draw-mode-tabs button.active {
+  border-color: rgba(var(--arcade-accent-rgb), .32);
+  color: var(--cream);
+  background: rgba(var(--arcade-accent-rgb), .075);
+}
+
+.voice-draw-mode-tabs button.active {
+  box-shadow: inset 0 -2px var(--arcade-accent);
+}
+
+.voice-draw-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(420px, 1fr) 226px;
+  gap: 10px;
+  padding: 10px;
+}
+
+.voice-draw-tools,
+.voice-draw-guide {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-draw-tool-group,
+.voice-draw-guide-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 13, 11, .82);
+}
+
+.voice-draw-tool-group > h2,
+.voice-draw-guide-card > h2 {
+  margin: 0 0 10px;
+  color: var(--dim);
+  font: 7px var(--mono);
+  letter-spacing: .9px;
+  text-transform: uppercase;
+}
+
+.voice-draw-palette {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.voice-draw-swatch {
+  min-width: 0;
+  aspect-ratio: 1;
+  min-height: 44px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .17);
+  cursor: pointer;
+}
+
+.voice-draw-swatch.active {
+  border-color: var(--cream);
+  box-shadow: 0 0 0 2px rgba(var(--arcade-accent-rgb), .35), inset 0 0 0 1px rgba(255, 255, 255, .3);
+}
+
+.voice-draw-color-input {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+  color: var(--dim);
+  font: 6px var(--mono);
+}
+
+.voice-draw-color-input input[type="color"] {
+  width: 100%;
+  height: 44px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0b0e0c;
+  cursor: pointer;
+}
+
+.voice-draw-size {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.voice-draw-size input {
+  min-height: 44px;
+  accent-color: var(--arcade-accent);
+}
+
+.voice-draw-size output {
+  color: var(--arcade-accent);
+  font: 8px var(--mono);
+}
+
+.voice-draw-tool-buttons,
+.voice-draw-history-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.voice-draw-tool-buttons button,
+.voice-draw-history-buttons button,
+.voice-draw-pen-button {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: #0c0f0d;
+  font: 7px var(--mono);
+  cursor: pointer;
+}
+
+.voice-draw-tool-buttons button.active,
+.voice-draw-pen-button.active {
+  border-color: rgba(var(--arcade-accent-rgb), .42);
+  color: var(--arcade-accent);
+  background: rgba(var(--arcade-accent-rgb), .075);
+}
+
+.voice-draw-pen-button {
+  width: 100%;
+  margin-top: 7px;
+}
+
+.voice-draw-stage-wrap {
+  min-width: 0;
+}
+
+.voice-draw-status-bar {
+  min-height: 47px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.voice-draw-status-bar > span {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 13, 11, .88);
+}
+
+.voice-draw-status-bar small {
+  color: var(--dim);
+  font: 6px var(--mono);
+  text-transform: uppercase;
+}
+
+.voice-draw-status-bar b {
+  overflow: hidden;
+  color: var(--cream);
+  font: 10px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-draw-status-bar .active b {
+  color: var(--arcade-accent);
+}
+
+.voice-draw-surface {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(var(--arcade-accent-rgb), .24);
+  border-radius: 12px;
+  background: #090c0b;
+  box-shadow: inset 0 0 65px rgba(0, 0, 0, .55), 0 15px 40px rgba(0, 0, 0, .22);
+}
+
+.voice-draw-canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  aspect-ratio: 1;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.voice-draw-grid line {
+  stroke: rgba(255, 255, 255, .035);
+  stroke-width: 1;
+}
+
+.voice-draw-target {
+  fill: none;
+  stroke: rgba(var(--arcade-accent-rgb), .42);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 12 12;
+  filter: drop-shadow(0 0 6px rgba(var(--arcade-accent-rgb), .22));
+}
+
+.voice-draw-segment {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.voice-draw-cursor-halo {
+  fill: rgba(var(--arcade-accent-rgb), .08);
+  stroke: rgba(var(--arcade-accent-rgb), .38);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+
+.voice-draw-cursor-dot {
+  fill: var(--cream);
+  stroke: var(--arcade-accent);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 7px rgba(var(--arcade-accent-rgb), .8));
+}
+
+.voice-draw-cursor-label {
+  fill: var(--cream);
+  paint-order: stroke;
+  stroke: #090c0b;
+  stroke-width: 5;
+  stroke-linejoin: round;
+  font: 700 18px var(--mono);
+}
+
+.voice-draw-surface-note {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  padding: 6px 8px;
+  border: 1px solid rgba(var(--arcade-accent-rgb), .18);
+  border-radius: 6px;
+  color: var(--dim);
+  background: rgba(5, 7, 6, .8);
+  font: 6px var(--mono);
+  pointer-events: none;
+}
+
+.voice-draw-enable {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 25px;
+  background: rgba(6, 8, 7, .9);
+  text-align: center;
+  backdrop-filter: blur(5px);
+}
+
+.voice-draw-enable strong {
+  color: var(--cream);
+  font-size: 17px;
+}
+
+.voice-draw-enable p {
+  max-width: 440px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.voice-draw-enable .action-button {
+  min-width: 190px;
+  border-color: rgba(var(--arcade-accent-rgb), .42);
+  color: var(--cream);
+  background: rgba(var(--arcade-accent-rgb), .11);
+}
+
+.voice-draw-mode-brief {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.voice-draw-select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--cream);
+  background: #0b0e0c;
+  font: 8px var(--mono);
+}
+
+.voice-draw-finish {
+  width: 100%;
+  margin-top: 10px;
+  border-color: rgba(var(--arcade-accent-rgb), .42) !important;
+  color: var(--cream) !important;
+  background: rgba(var(--arcade-accent-rgb), .1) !important;
+}
+
+.voice-draw-prompt {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px dashed rgba(var(--arcade-accent-rgb), .36);
+  border-radius: 8px;
+  background: rgba(var(--arcade-accent-rgb), .045);
+}
+
+.voice-draw-prompt small {
+  color: var(--dim);
+  font: 6px var(--mono);
+  text-transform: uppercase;
+}
+
+.voice-draw-prompt strong {
+  color: var(--arcade-accent);
+  font-size: 14px;
+}
+
+.voice-draw-score-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(var(--arcade-accent-rgb), .35);
+  border-radius: 8px;
+  background: rgba(var(--arcade-accent-rgb), .065);
+}
+
+.voice-draw-score-card > strong {
+  grid-row: 1 / 3;
+  color: var(--arcade-accent);
+  font: 29px/1 var(--mono);
+}
+
+.voice-draw-score-card b,
+.voice-draw-score-card small {
+  display: block;
+}
+
+.voice-draw-score-card b {
+  color: var(--cream);
+  font-size: 9px;
+}
+
+.voice-draw-score-card small {
+  margin-top: 3px;
+  color: var(--dim);
+  font-size: 6px;
+  line-height: 1.45;
+}
+
+.voice-draw-compass {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(43px, auto));
+  gap: 4px;
+}
+
+.voice-draw-direction {
+  min-width: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 2px;
+  padding: 5px 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  background: #0c0f0d;
+}
+
+.voice-draw-direction[data-direction="up"] { grid-area: 1 / 2; }
+.voice-draw-direction[data-direction="up-right"] { grid-area: 1 / 3; }
+.voice-draw-direction[data-direction="right"] { grid-area: 2 / 3; }
+.voice-draw-direction[data-direction="down-right"] { grid-area: 3 / 3; }
+.voice-draw-direction[data-direction="down"] { grid-area: 3 / 2; }
+.voice-draw-direction[data-direction="down-left"] { grid-area: 3 / 1; }
+.voice-draw-direction[data-direction="left"] { grid-area: 2 / 1; }
+.voice-draw-direction[data-direction="up-left"] { grid-area: 1 / 1; }
+
+.voice-draw-direction.active {
+  border-color: rgba(var(--arcade-accent-rgb), .62);
+  color: var(--cream);
+  background: rgba(var(--arcade-accent-rgb), .12);
+  box-shadow: 0 0 14px rgba(var(--arcade-accent-rgb), .1);
+}
+
+.voice-draw-direction.outside-profile:not(.active) {
+  border-style: dashed;
+  opacity: .54;
+}
+
+.voice-draw-direction b {
+  color: var(--arcade-accent);
+  font: 13px var(--mono);
+}
+
+.voice-draw-direction small {
+  overflow: hidden;
+  max-width: 100%;
+  font: 6px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-draw-compass-center {
+  grid-area: 2 / 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  border: 1px dashed rgba(var(--arcade-accent-rgb), .25);
+  border-radius: 50%;
+  color: var(--dim);
+  background: rgba(var(--arcade-accent-rgb), .035);
+  font: 6px var(--mono);
+  text-align: center;
+}
+
+.voice-draw-bank-note {
+  margin: 9px 0 0;
+  color: var(--dim);
+  font-size: 6px;
+  line-height: 1.45;
+}
+
+.voice-draw-live-readout {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: baseline;
+}
+
+.voice-draw-live-readout strong {
+  color: var(--arcade-accent);
+  font: 24px/1 var(--mono);
+}
+
+.voice-draw-live-readout b {
+  color: var(--cream);
+  font: 10px var(--mono);
+}
+
+.voice-draw-live-readout small {
+  grid-column: 1 / -1;
+  color: var(--dim);
+  font: 6px var(--mono);
+}
+
+.voice-draw-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px 13px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font: 6px/1.5 var(--mono);
+}
+
+.voice-draw-footer b {
+  color: var(--arcade-accent);
+}
+
+.voice-draw-screen-reader-status {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
+}
+
+@keyframes arcade-demo-draw-line {
+  0%, 9% { stroke-dashoffset: 310; opacity: .35; }
+  72%, 88% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: -310; opacity: .3; }
+}
+
+@keyframes arcade-demo-draw-cursor {
+  0%, 9% { transform: translate(-183px, 94px); }
+  72%, 88% { transform: translate(0, 0); }
+  100% { transform: translate(-183px, 94px); }
+}
+
+@media (max-width: 1180px) {
+  .voice-draw-layout {
+    grid-template-columns: 174px minmax(380px, 1fr);
+  }
+
+  .voice-draw-guide {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .voice-draw-header,
+  .voice-draw-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-mode-tabs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .voice-draw-tools {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .voice-draw-stage-wrap {
+    grid-row: 1;
+  }
+
+  .voice-draw-guide {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .voice-draw-header,
+  .voice-draw-layout {
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+
+  .voice-draw-mode-tabs,
+  .voice-draw-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-status-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .voice-draw-status-bar > span:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arcade-demo-draw path,
+  .arcade-demo-draw circle {
+    animation: none;
+  }
+}

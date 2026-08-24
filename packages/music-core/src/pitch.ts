@@ -30,9 +30,26 @@ function requirePositive(value: number, label: string): void {
   }
 }
 
+function requireFiniteResult(value: number, label: string): number {
+  if (!Number.isFinite(value)) {
+    throw new RangeError(`${label} is outside the finite numeric range`);
+  }
+  return value;
+}
+
+function requirePositiveResult(value: number, label: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${label} is outside the finite positive numeric range`);
+  }
+  return value;
+}
+
 /** Normalize an integer or fractional pitch class into [0, 12). */
 export function normalizePitchClass(pitchClass: number): number {
   requireFinite(pitchClass, 'pitchClass');
+  if (Math.abs(pitchClass) > Number.MAX_SAFE_INTEGER) {
+    throw new RangeError('pitchClass is outside the safely representable coordinate range');
+  }
   return ((pitchClass % SEMITONES_PER_OCTAVE) + SEMITONES_PER_OCTAVE) % SEMITONES_PER_OCTAVE;
 }
 
@@ -43,7 +60,11 @@ export function frequencyToMidi(
 ): number {
   requirePositive(frequencyHz, 'frequencyHz');
   requirePositive(referenceFrequencyHz, 'referenceFrequencyHz');
-  return A4_MIDI + SEMITONES_PER_OCTAVE * Math.log2(frequencyHz / referenceFrequencyHz);
+  return requireFiniteResult(
+    A4_MIDI + SEMITONES_PER_OCTAVE *
+      (Math.log2(frequencyHz) - Math.log2(referenceFrequencyHz)),
+    'MIDI result',
+  );
 }
 
 /** Convert an integer or fractional MIDI coordinate to hertz. */
@@ -53,35 +74,44 @@ export function midiToFrequency(
 ): number {
   requireFinite(midi, 'midi');
   requirePositive(referenceFrequencyHz, 'referenceFrequencyHz');
-  return referenceFrequencyHz * 2 ** ((midi - A4_MIDI) / SEMITONES_PER_OCTAVE);
+  return requirePositiveResult(
+    referenceFrequencyHz * 2 ** ((midi - A4_MIDI) / SEMITONES_PER_OCTAVE),
+    'Frequency result',
+  );
 }
 
 /** Signed cents from one frequency to another. Positive values move upward. */
 export function centsBetweenFrequencies(fromHz: number, toHz: number): number {
   requirePositive(fromHz, 'fromHz');
   requirePositive(toHz, 'toHz');
-  return CENTS_PER_OCTAVE * Math.log2(toHz / fromHz);
+  return requireFiniteResult(
+    CENTS_PER_OCTAVE * (Math.log2(toHz) - Math.log2(fromHz)),
+    'Cents result',
+  );
 }
 
 /** Signed cents between two continuous MIDI coordinates. */
 export function centsBetweenMidi(fromMidi: number, toMidi: number): number {
   requireFinite(fromMidi, 'fromMidi');
   requireFinite(toMidi, 'toMidi');
-  return (toMidi - fromMidi) * CENTS_PER_SEMITONE;
+  return requireFiniteResult((toMidi - fromMidi) * CENTS_PER_SEMITONE, 'Cents result');
 }
 
 /** Transpose a frequency by a continuous number of cents. */
 export function transposeFrequency(frequencyHz: number, cents: number): number {
   requirePositive(frequencyHz, 'frequencyHz');
   requireFinite(cents, 'cents');
-  return frequencyHz * 2 ** (cents / CENTS_PER_OCTAVE);
+  return requirePositiveResult(
+    frequencyHz * 2 ** (cents / CENTS_PER_OCTAVE),
+    'Transposed frequency',
+  );
 }
 
 /** Transpose a MIDI coordinate by a continuous number of cents. */
 export function transposeMidi(midi: number, cents: number): number {
   requireFinite(midi, 'midi');
   requireFinite(cents, 'cents');
-  return midi + cents / CENTS_PER_SEMITONE;
+  return requireFiniteResult(midi + cents / CENTS_PER_SEMITONE, 'Transposed MIDI');
 }
 
 /**
@@ -91,9 +121,15 @@ export function transposeMidi(midi: number, cents: number): number {
 export function splitMidiPitch(midiFloat: number): SplitMidiPitch {
   requireFinite(midiFloat, 'midiFloat');
 
-  // floor(x + .5), rather than Math.round(x), makes negative half steps
-  // symmetric and keeps the cents range half-open at the upper edge.
-  const nearestMidi = Math.floor(midiFloat + 0.5);
+  // Splitting the integer and fractional parts avoids overflowing the safe
+  // integer boundary through `midiFloat + 0.5`. Ties still resolve upward, so
+  // negative half steps are symmetric and the cents range stays half-open.
+  const lowerMidi = Math.floor(midiFloat);
+  const roundedMidi = midiFloat - lowerMidi < 0.5 ? lowerMidi : lowerMidi + 1;
+  if (!Number.isSafeInteger(roundedMidi)) {
+    throw new RangeError('nearest MIDI is outside the safe-integer range');
+  }
+  const nearestMidi = Object.is(roundedMidi, -0) ? 0 : roundedMidi;
   const centsFromNearest = (midiFloat - nearestMidi) * CENTS_PER_SEMITONE;
 
   return {

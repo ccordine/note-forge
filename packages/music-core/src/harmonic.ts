@@ -1,6 +1,6 @@
 import { CHORD_QUALITIES, type Chord, type ChordQuality } from './chord';
 import { getIntervalMetadata, harmonicIntervalName, type IntervalMetadata } from './interval';
-import { noteName, parseNote, type AccidentalPreference } from './note';
+import { midiToNote, noteName, parseNote, type AccidentalPreference } from './note';
 import { frequencyToMidi, normalizePitchClass, splitMidiPitch } from './pitch';
 import { CHROMATIC_SCALE_DEGREES, type Scale } from './scale';
 
@@ -108,8 +108,8 @@ interface NormalizedPitch {
 const MICROTONAL_EPSILON_CENTS = 1e-6;
 
 function requireInteger(value: number, label: string): void {
-  if (!Number.isInteger(value)) {
-    throw new RangeError(`${label} must be an integer`);
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError(`${label} must be a safe integer`);
   }
 }
 
@@ -162,11 +162,25 @@ function normalizePitchInput(input: HarmonicPitchInput): NormalizedPitch {
 function validateContext(context: HarmonicContext): void {
   requireInteger(context.tonicPitchClass, 'context.tonicPitchClass');
   requireInteger(context.chordRoot, 'context.chordRoot');
-  if (!context.scalePitchClasses.every(Number.isInteger)) {
-    throw new RangeError('context.scalePitchClasses must contain only integers');
+  if (!context.scalePitchClasses.every(Number.isSafeInteger)) {
+    throw new RangeError('context.scalePitchClasses must contain only safe integers');
   }
-  if (!context.chordPitchClasses.every(Number.isInteger)) {
-    throw new RangeError('context.chordPitchClasses must contain only integers');
+  if (!context.chordPitchClasses.every(Number.isSafeInteger)) {
+    throw new RangeError('context.chordPitchClasses must contain only safe integers');
+  }
+  if (context.scalePitchClasses.length === 0) {
+    throw new RangeError('context.scalePitchClasses cannot be empty');
+  }
+  if (context.chordPitchClasses.length === 0) {
+    throw new RangeError('context.chordPitchClasses cannot be empty');
+  }
+  const tonic = normalizePitchClass(context.tonicPitchClass);
+  const root = normalizePitchClass(context.chordRoot);
+  if (!context.scalePitchClasses.map(normalizePitchClass).includes(tonic)) {
+    throw new RangeError('context.scalePitchClasses must contain the tonic');
+  }
+  if (!context.chordPitchClasses.map(normalizePitchClass).includes(root)) {
+    throw new RangeError('context.chordPitchClasses must contain the chord root');
   }
 }
 
@@ -314,10 +328,9 @@ export function analyzeHarmonicRelationship(
   }
 
   const pitchClassName = noteName(pitch.pitchClass, accidentalPreference);
-  const pitchLabelBase = pitch.nearestMidi === null
-    ? pitchClassName
-    : `${pitchClassName}${Math.floor(pitch.nearestMidi / 12) - 1}`;
-  const pitchLabel = `${pitchLabelBase}${centsLabel(pitch.centsFromNearest)}`;
+  const pitchLabel = pitch.midi === null
+    ? `${pitchClassName}${centsLabel(pitch.centsFromNearest)}`
+    : midiToNote(pitch.midi, { accidentalPreference, centsPrecision: 1 });
   const rootName = noteName(chordRoot, accidentalPreference);
   const tonicName = noteName(tonicPitchClass, accidentalPreference);
   const chordContextName = context.chordName ?? `${rootName} ${String(context.chordQuality).replaceAll('-', ' ')}`;

@@ -44,6 +44,8 @@
   .page-title { min-width: 0; flex: 1; }
   .page-title h2 { font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .coordinate-strip { display: none; }
+  .global-mic-control > span { font-size: 0; }
+  .global-mic-control > span::after { content: "Mic"; font-size: 8px; }
   .page { padding: 23px 14px 60px; }
   .lab-intro { display: block; margin-bottom: 20px; }
   .lab-intro h1 { font-size: 34px; letter-spacing: -1.5px; }
@@ -65,20 +67,18 @@
   .mirror-mode-panel,.control-config,.ear-config,.interval-config,.harmony-config,.melody-config { display: block; overflow: hidden; }
   .mirror-mode-panel > *, .control-config > *, .ear-config > *, .interval-config > *, .harmony-config > *, .melody-config > * { margin-top: 10px; }
   .mirror-settings,.control-config-fields,.harmony-fields,.melody-fields { display: grid; grid-template-columns: 1fr 1fr; }
-  .ear-switches { padding: 10px 0 0; justify-content: space-between; }
   .instrument-top { grid-template-columns: 1fr; }
   .pitch-slots { grid-template-columns: 1fr; }
   .relationship-mark { height: 25px; }
   .relationship-mark > span { transform: rotate(90deg); }
   .sound-side { display: block; }
   .sound-side > * { margin-top: 13px; }
-  .keyboard { height: 145px; }
+  .sound-lab-keyboard { height: 145px; }
   .note-wheel { width: 270px; }
   .context-controls { grid-template-columns: 1fr 1fr; }
   .context-controls .field:last-child { grid-column: 1 / -1; }
   .relationship-content dl { grid-template-columns: 1fr 1fr; }
   .relationship-content dl div { padding: 9px; }
-  .mic-pill { min-width: 0; width: 100%; }
   .pitch-ribbon-wrap { margin-left: 30px; margin-right: 0; }
   .pitch-ribbon { height: 220px; }
   .ribbon-y-labels { height: 220px; }

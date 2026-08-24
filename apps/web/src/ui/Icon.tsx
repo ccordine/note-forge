@@ -1,12 +1,13 @@
 import type { SVGProps } from "react";
 
-type IconName = "forge" | "sound" | "mirror" | "hum" | "control" | "ear" | "interval" | "harmony" | "melody" | "song" | "skills" | "play" | "pause" | "mic" | "chevron" | "spark" | "settings" | "headphones" | "arrow" | "eye" | "eyeOff" | "record" | "loop" | "lock";
+export type IconName = "forge" | "sound" | "mirror" | "hum" | "arcade" | "control" | "ear" | "interval" | "harmony" | "melody" | "song" | "skills" | "play" | "pause" | "mic" | "chevron" | "spark" | "settings" | "headphones" | "arrow" | "eye" | "eyeOff" | "record" | "loop" | "lock";
 
 const paths: Record<IconName, string> = {
   forge: "M5 18V6l14 12V6M5 6h4m10 12h-4",
   sound: "M4 14.5v-5m4 8v-11m4 14v-17m4 14v-11m4 8v-5",
   mirror: "M4 20V4h16v16H4Zm4-4c1.2-2.5 2.5-3.8 4-3.8s2.8 1.3 4 3.8M9 9h.01M15 9h.01",
   hum: "M3 12h2m2-3v6m4-8v10m4-8v6m2-3h2M5 19c2 1.4 4.3 2 7 2s5-.6 7-2",
+  arcade: "M8 8h8a5 5 0 0 1 4.7 3.3l1 3A3.6 3.6 0 0 1 18.3 19l-2.7-3H8.4l-2.7 3a3.6 3.6 0 0 1-3.4-4.7l1-3A5 5 0 0 1 8 8Zm0 3v4m-2-2h4m6-1h.01M18 14h.01",
   control: "M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6",
   ear: "M12 20c-2 0-3-1.2-3-3.2 0-1.7 1.5-2.4 2.4-3.5.7-.9.5-2.3-.5-2.8-1.5-.8-3 .3-3 2 0 .8.3 1.5.9 2M6.2 7.4A7 7 0 1 1 17 16",
   interval: "M4 18h16M5 15V7m14 8V4M8 7H3m19-3h-6",

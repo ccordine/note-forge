@@ -3,25 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "description": "A local-first auditory-motor music laboratory.",
   "scripts": {
     "dev": "vite --config vite.config.ts",
-    "build": "tsc -b && vite build --config vite.config.ts",
+    "build": "tsc -b && vite build --config vite.config.ts && node scripts/stamp-service-worker.mjs",
     "preview": "vite preview --config vite.config.ts",
+    "proof:note-input:browser": "npm run build && node scripts/prove-note-input-browser.mjs",
+    "proof:voice-draw:browser": "npm run build && node scripts/prove-voice-draw-browser.mjs",
+    "proof:offline:browser": "npm run build && node scripts/prove-offline-browser.mjs",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --testTimeout=30000",
     "test:watch": "vitest",
-    "typecheck": "tsc -b",
-    "lint": "tsc -b --pretty false"
+    "typecheck": "tsc -b"
   },
   "dependencies": {
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
+    "@types/node": "24.10.1",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.5",
+    "@vitest/coverage-v8": "4.1.10",
     "typescript": "6.0.3",
     "vite": "8.2.0",
     "vitest": "4.1.10"

@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "flows": {
+    "audio-input": true,
+    "range-simulator": true,
+    "range-loop": true,
+    "voice-arcade": true,
+    "pitch-mirror": true,
+    "hum-lab": true,
+    "pitch-control": true
+  },
+  "observationKinds": {
+    "voiced": true,
+    "unvoiced": true,
+    "uncertain": true
+  }
+}

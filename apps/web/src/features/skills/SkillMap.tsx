@@ -34,11 +34,19 @@ export function SkillMap() {
   const selected = SKILL_CATALOG.find((item) => item.skillId === selectedId) ?? SKILL_CATALOG[0];
   const filtered = domain === "all" ? SKILL_CATALOG : SKILL_CATALOG.filter((item) => item.domain === domain);
   const byDomain = useMemo(() => domains.slice(1).map((item) => ({ ...item, skills: SKILL_CATALOG.filter((skill) => skill.domain === item.id) })), []);
-  const session = useMemo(() => generateAdaptiveSession(SKILL_CATALOG, {}, { sessionSize: 10, rng: createSeededRng(sessionSeed), respectPrerequisites: false }), [sessionSeed]);
+  const session = useMemo(() => generateAdaptiveSession(SKILL_CATALOG, {}, {
+    sessionSize: 10,
+    rng: createSeededRng(sessionSeed),
+    respectPrerequisites: true,
+  }), [sessionSeed]);
+  const sessionBuckets = useMemo(() => session.reduce((counts, item) => ({
+    ...counts,
+    [item.bucket]: counts[item.bucket] + 1,
+  }), { weak_due: 0, recent: 0, exploration: 0, maintenance: 0 }), [session]);
 
   return (
     <div className="page skills-page">
-      <div className="lab-intro"><div><Eyebrow>No lessons · no global grade</Eyebrow><h1>A graph of trainable primitives.</h1><p>Every attempt strengthens a specific edge between heard sound, vocal mechanics, musical label, harmonic function, and instrument space.</p></div><ActionButton className="primary" onClick={() => setSessionSeed((seed) => seed + 1)}><Icon name="spark" size={17} /> Generate session</ActionButton></div>
+      <div className="lab-intro"><div><Eyebrow>Catalog preview · no global grade</Eyebrow><h1>A graph of trainable primitives.</h1><p>This map describes explicit connections between heard sound, vocal mechanics, musical labels, harmonic function, and instrument space. Global mastery is not measured yet.</p></div><ActionButton className="primary" onClick={() => setSessionSeed((seed) => seed + 1)}><Icon name="spark" size={17} /> Generate starter preview</ActionButton></div>
 
       <Panel className="representation-map">
         <div className="rep-center"><span className="brand-mark">N<span /></span><small>ONE NAVIGABLE</small><strong>PITCH OBJECT</strong></div>
@@ -58,7 +66,7 @@ export function SkillMap() {
             <div className={`skill-detail-icon ${selected.domain}`}><Icon name={domainIcon(selected.domain)} size={25} /></div><Eyebrow>{selected.domain} · difficulty {Math.round(selected.difficulty * 100)}</Eyebrow><h2>{selected.label}</h2><code>{selected.skillId}</code><p>{selected.description}</p><div className="representation-tags">{selected.representations.map((item) => <span key={item}>{item.replaceAll("-", " ")}</span>)}</div><dl><div><dt>Prerequisites</dt><dd>{selected.prerequisites.length || "none"}</dd></div><div><dt>Tags</dt><dd>{selected.tags.length}</dd></div><div><dt>Status</dt><dd>unmeasured</dd></div></dl>{selected.prerequisites.length > 0 && <div className="prerequisite-list"><span>CONNECTED FROM</span>{selected.prerequisites.map((id) => <button key={id} onClick={() => setSelectedId(id)}>{SKILL_CATALOG.find((skill) => skill.skillId === id)?.label ?? id}<Icon name="arrow" size={13} /></button>)}</div>}<ActionButton className="wide primary" onClick={() => setView(skillView(selected))}>Open connected laboratory <Icon name="arrow" size={16} /></ActionButton>
           </Panel>
 
-          <Panel className="adaptive-mix-card"><Eyebrow>Session engine</Eyebrow><h2>60 / 20 / 20</h2><div className="mix-bar"><span style={{ width: "60%" }}>WEAK / DUE</span><span style={{ width: "20%" }}>RECENT</span><span style={{ width: "20%" }}>NEW</span></div><p>The generator changes the musical surface—key, octave, direction, timbre, duration, and amplitude—without changing the underlying skill.</p><div className="generated-session">{session.slice(0, 5).map((item, index) => <button key={`${item.skillId}-${index}`} onClick={() => { setSelectedId(item.skillId); setView(skillView(item.definition)); }}><span>{String(index + 1).padStart(2, "0")}</span><span><b>{item.definition.label}</b><small>{pitchClassLabel(item.variation.keyPitchClass)}{item.variation.octave} · {item.variation.timbre} · {item.variation.direction}</small></span><i>{item.plannedBucket === "weak_due" ? "60" : item.plannedBucket === "recent" ? "20" : "20"}</i></button>)}</div><ActionButton className="wide" onClick={() => setSessionSeed((seed) => seed + 1)}><Icon name="spark" size={15} /> Reroll musical surfaces</ActionButton></Panel>
+          <Panel className="adaptive-mix-card"><Eyebrow>Unmeasured catalog starter</Eyebrow><h2>{session.length} prerequisite-safe items</h2><div className="mix-bar">{sessionBuckets.exploration > 0 && <span style={{ width: `${sessionBuckets.exploration / session.length * 100}%` }}>UNMEASURED · {sessionBuckets.exploration}</span>}{sessionBuckets.weak_due > 0 && <span style={{ width: `${sessionBuckets.weak_due / session.length * 100}%` }}>WEAK/DUE · {sessionBuckets.weak_due}</span>}{sessionBuckets.recent > 0 && <span style={{ width: `${sessionBuckets.recent / session.length * 100}%` }}>RECENT · {sessionBuckets.recent}</span>}{sessionBuckets.maintenance > 0 && <span style={{ width: `${sessionBuckets.maintenance / session.length * 100}%` }}>MAINTENANCE · {sessionBuckets.maintenance}</span>}</div><p>No observation history is connected here, so this is a randomized starter preview from currently unlocked foundations—not a personalized adaptive prescription.</p><div className="generated-session">{session.slice(0, 5).map((item, index) => <button key={`${item.skillId}-${index}`} onClick={() => { setSelectedId(item.skillId); setView(skillView(item.definition)); }}><span>{String(index + 1).padStart(2, "0")}</span><span><b>{item.definition.label}</b><small>{pitchClassLabel(item.variation.keyPitchClass)}{item.variation.octave} · {item.variation.timbre} · {item.variation.direction}</small></span><i>{item.bucket === "exploration" ? "NEW" : item.bucket.replace("_", " ").toUpperCase()}</i></button>)}</div><ActionButton className="wide" onClick={() => setSessionSeed((seed) => seed + 1)}><Icon name="spark" size={15} /> Reroll starter surfaces</ActionButton></Panel>
         </div>
       </div>
     </div>

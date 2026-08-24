@@ -1,4 +1,8 @@
-import { getUnlockedSkillDefinitions, SKILL_CATALOG } from "./skill-graph";
+import {
+  getUnlockedSkillDefinitions,
+  validateSkillGraph,
+} from "./skill-graph";
+import { normalizePitchClass } from "@noteforge/music-core";
 import type { SkillDefinition, SkillState } from "./types";
 
 export type RandomSource = () => number;
@@ -55,6 +59,7 @@ export interface ScheduledPractice {
 
 const DEFAULT_MIX: SessionMix = { weakDue: 0.6, recent: 0.2, exploration: 0.2 };
 const DAY_MS = 86_400_000;
+const MAX_SESSION_SIZE = 10_000;
 
 const DEFAULT_VARIATION_POOLS: VariationPools = {
   keyPitchClasses: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -67,7 +72,7 @@ const DEFAULT_VARIATION_POOLS: VariationPools = {
     "bass",
     "flute",
     "voice",
-    "harmonic-synth",
+    "rich synth",
   ],
   directions: ["ascending", "descending"],
   noteDurationsMs: [500, 750, 1_000, 1_500, 2_000],
@@ -79,8 +84,10 @@ const clamp = (value: number, minimum: number, maximum: number): number =>
 
 const normalizedRandom = (rng: RandomSource): number => {
   const value = rng();
-  if (!Number.isFinite(value)) throw new TypeError("The injected RNG must return a finite number.");
-  return clamp(value, 0, 1 - Number.EPSILON);
+  if (!Number.isFinite(value) || value < 0 || value >= 1) {
+    throw new RangeError("The injected RNG must return a finite number from zero (inclusive) to one (exclusive).");
+  }
+  return value;
 };
 
 const choose = <T>(values: readonly T[], rng: RandomSource): T => {
@@ -90,6 +97,9 @@ const choose = <T>(values: readonly T[], rng: RandomSource): T => {
 
 /** Mulberry32: a small repeatable RNG for reproducible sessions and tests. */
 export const createSeededRng = (seed: number): RandomSource => {
+  if (!Number.isSafeInteger(seed)) {
+    throw new RangeError("seed must be a safe integer.");
+  }
   let state = seed >>> 0;
   return () => {
     state = (state + 0x6d2b79f5) >>> 0;
@@ -107,13 +117,19 @@ const timestamp = (isoDate: string | undefined): number | undefined => {
 };
 
 const normalizedMix = (mix: Partial<SessionMix> | undefined): SessionMix => {
+  for (const [name, value] of Object.entries(mix ?? {})) {
+    if (!Number.isFinite(value) || (value as number) < 0) {
+      throw new RangeError(`${name} must be a finite non-negative number.`);
+    }
+  }
   const candidate = {
     weakDue: Math.max(0, mix?.weakDue ?? DEFAULT_MIX.weakDue),
     recent: Math.max(0, mix?.recent ?? DEFAULT_MIX.recent),
     exploration: Math.max(0, mix?.exploration ?? DEFAULT_MIX.exploration),
   };
   const total = candidate.weakDue + candidate.recent + candidate.exploration;
-  if (!(total > 0) || !Number.isFinite(total)) return DEFAULT_MIX;
+  if (!Number.isFinite(total)) throw new RangeError("The total session mix weight must be finite.");
+  if (!(total > 0)) throw new RangeError("At least one session mix weight must be positive.");
   return {
     weakDue: candidate.weakDue / total,
     recent: candidate.recent / total,
@@ -126,8 +142,11 @@ export const allocateSessionMix = (sessionSize: number, mix?: Partial<SessionMix
   Exclude<SessionBucket, "maintenance">,
   number
 > => {
-  if (!Number.isInteger(sessionSize) || sessionSize < 0) {
-    throw new RangeError("sessionSize must be a non-negative integer.");
+  if (!Number.isSafeInteger(sessionSize) || sessionSize < 0) {
+    throw new RangeError("sessionSize must be a non-negative safe integer.");
+  }
+  if (sessionSize > MAX_SESSION_SIZE) {
+    throw new RangeError(`sessionSize cannot exceed ${MAX_SESSION_SIZE}.`);
   }
   const normalized = normalizedMix(mix);
   const rows = [
@@ -194,16 +213,38 @@ const resolveVariationPools = (overrides: Partial<VariationPools> | undefined): 
   for (const [name, values] of Object.entries(result)) {
     if (values.length === 0) throw new RangeError(`${name} cannot be empty.`);
   }
+  if (!result.keyPitchClasses.every(Number.isSafeInteger)) {
+    throw new RangeError("keyPitchClasses must contain only safe integers.");
+  }
+  if (!result.octaves.every(Number.isSafeInteger)) {
+    throw new RangeError("octaves must contain only safe integers.");
+  }
+  if (!result.timbres.every((value) => typeof value === "string" && value.trim().length > 0)) {
+    throw new RangeError("timbres must contain only non-empty strings.");
+  }
+  if (!result.directions.every((value) => value === "ascending" || value === "descending")) {
+    throw new RangeError("directions contains an unsupported direction.");
+  }
+  if (!result.noteDurationsMs.every((value) => Number.isFinite(value) && value > 0)) {
+    throw new RangeError("noteDurationsMs must contain only finite positive values.");
+  }
+  if (!result.amplitudes.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) {
+    throw new RangeError("amplitudes must contain only finite values from zero through one.");
+  }
   return result;
 };
 
 const makeVariation = (pools: VariationPools, rng: RandomSource): ExerciseVariation => {
-  const keyPitchClass = ((Math.round(choose(pools.keyPitchClasses, rng)) % 12) + 12) % 12;
-  const octave = Math.round(choose(pools.octaves, rng));
+  const keyPitchClass = normalizePitchClass(choose(pools.keyPitchClasses, rng));
+  const octave = choose(pools.octaves, rng);
+  const startingMidi = keyPitchClass + 12 * (octave + 1);
+  if (!Number.isSafeInteger(startingMidi)) {
+    throw new RangeError("The generated starting MIDI coordinate must be a safe integer.");
+  }
   return {
     keyPitchClass,
     octave,
-    startingMidi: keyPitchClass + 12 * (octave + 1),
+    startingMidi,
     timbre: choose(pools.timbres, rng),
     direction: choose(pools.directions, rng),
     noteDurationMs: choose(pools.noteDurationsMs, rng),
@@ -217,6 +258,38 @@ const fallbackOrder: Record<Exclude<SessionBucket, "maintenance">, SessionBucket
   exploration: ["exploration", "weak_due", "recent", "maintenance"],
 };
 
+function validateSchedulerState(key: string, state: Readonly<SkillState>): void {
+  if (state.skillId !== key) {
+    throw new RangeError(`State ${state.skillId} is stored under ${key}.`);
+  }
+  if (!Number.isSafeInteger(state.attemptCount) || state.attemptCount < 0) {
+    throw new RangeError(`attemptCount for ${key} must be a non-negative safe integer.`);
+  }
+  for (const [name, value] of [
+    ["mastery", state.mastery],
+    ["difficulty", state.difficulty],
+    ["recentAccuracy", state.recentAccuracy],
+    ["longTermAccuracy", state.longTermAccuracy],
+    ["confidence", state.confidence],
+  ] as const) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new RangeError(`${name} for ${key} must be between zero and one.`);
+    }
+  }
+  if (state.averageResponseTimeMs !== undefined &&
+    (!Number.isFinite(state.averageResponseTimeMs) || state.averageResponseTimeMs < 0)) {
+    throw new RangeError(`averageResponseTimeMs for ${key} must be finite and non-negative.`);
+  }
+  for (const [name, value] of [
+    ["lastPracticedAt", state.lastPracticedAt],
+    ["dueAt", state.dueAt],
+  ] as const) {
+    if (value !== undefined && !Number.isFinite(Date.parse(value))) {
+      throw new RangeError(`${name} for ${key} must be a valid timestamp.`);
+    }
+  }
+}
+
 /**
  * Builds an adaptive practice queue. It only consumes persisted skill observations;
  * exercise generation and audio capture remain outside this package.
@@ -228,19 +301,51 @@ export function generateAdaptiveSession(
 ): ScheduledPractice[] {
   if (!options) throw new TypeError("Adaptive session options are required.");
   const allocations = allocateSessionMix(options.sessionSize, options.mix);
-  if (options.sessionSize === 0 || definitions.length === 0) return [];
+  const graphValidation = validateSkillGraph(definitions);
+  if (!graphValidation.valid) {
+    throw new RangeError(`Invalid skill graph: ${graphValidation.errors.join("; ")}`);
+  }
   const rng = options.rng ?? Math.random;
+  if (typeof rng !== "function") throw new TypeError("rng must be a function.");
   const nowMs = (options.now ?? new Date()).getTime();
-  const weakMasteryThreshold = clamp(options.weakMasteryThreshold ?? 0.62, 0, 1);
-  const weakRecentAccuracyThreshold = clamp(options.weakRecentAccuracyThreshold ?? 0.65, 0, 1);
-  const recentCutoff = nowMs - (options.recentWindowDays ?? 7) * DAY_MS;
+  if (!Number.isFinite(nowMs)) throw new TypeError("now must be a valid Date.");
+  const weakMasteryThreshold = options.weakMasteryThreshold ?? 0.62;
+  const weakRecentAccuracyThreshold = options.weakRecentAccuracyThreshold ?? 0.65;
+  const prerequisiteMasteryThreshold = options.prerequisiteMasteryThreshold ?? 0.6;
+  for (const [name, value] of [
+    ["weakMasteryThreshold", weakMasteryThreshold],
+    ["weakRecentAccuracyThreshold", weakRecentAccuracyThreshold],
+    ["prerequisiteMasteryThreshold", prerequisiteMasteryThreshold],
+  ] as const) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new RangeError(`${name} must be a finite number from zero through one.`);
+    }
+  }
+  const recentWindowDays = options.recentWindowDays ?? 7;
+  if (!Number.isFinite(recentWindowDays) || recentWindowDays < 0) {
+    throw new RangeError("recentWindowDays must be a finite non-negative number.");
+  }
+  if (options.respectPrerequisites !== undefined && typeof options.respectPrerequisites !== "boolean") {
+    throw new TypeError("respectPrerequisites must be a boolean.");
+  }
+  const variationPools = resolveVariationPools(options.variationPools);
+  for (const definition of definitions) {
+    const state = states[definition.skillId];
+    if (state) validateSchedulerState(definition.skillId, state);
+  }
+  if (options.sessionSize === 0 || definitions.length === 0) return [];
+  const recentWindowMilliseconds = recentWindowDays * DAY_MS;
+  const recentCutoff = nowMs - recentWindowMilliseconds;
+  if (!Number.isFinite(recentWindowMilliseconds) || !Number.isFinite(recentCutoff)) {
+    throw new RangeError("recentWindowDays is outside the finite scheduling range.");
+  }
   const respectPrerequisites = options.respectPrerequisites ?? true;
   const allowedIds = new Set(
     (respectPrerequisites
       ? getUnlockedSkillDefinitions(
           states,
           definitions,
-          options.prerequisiteMasteryThreshold ?? 0.6,
+          prerequisiteMasteryThreshold,
         )
       : definitions
     ).map((definition) => definition.skillId),
@@ -302,7 +407,6 @@ export function generateAdaptiveSession(
   }
   shuffle(plannedBuckets, rng);
   const selectionCounts: Record<string, number> = {};
-  const variationPools = resolveVariationPools(options.variationPools);
   const session: ScheduledPractice[] = [];
   for (const plannedBucket of plannedBuckets) {
     const sourceBucket = fallbackOrder[plannedBucket].find((bucket) => pools[bucket].length > 0);
@@ -319,10 +423,3 @@ export function generateAdaptiveSession(
   }
   return session;
 }
-
-export const scheduleSession = generateAdaptiveSession;
-
-export const generateDefaultAdaptiveSession = (
-  states: Readonly<Record<string, SkillState | undefined>>,
-  options: AdaptiveSessionOptions,
-): ScheduledPractice[] => generateAdaptiveSession(SKILL_CATALOG, states, options);

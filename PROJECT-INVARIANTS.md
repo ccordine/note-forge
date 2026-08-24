@@ -1,3 +1,8 @@
+> Status: this is the product/design brief, including deliberate future work. It
+> is not an inventory of shipped behavior or a second implementation contract.
+> `AGENTS.md` owns current engineering invariants, the source types own data
+> schemas, and `README.md` lists verified shipped behavior.
+
 You need to build one local-first auditory-motor music laboratory, not three disconnected quiz apps.
 
 Call it NoteForge for now.
@@ -433,6 +438,21 @@ The app synthesizes it, then asks you to reproduce it.
 
 That is extremely compatible with your visual and manifestation-oriented way of working. You’re effectively drawing a vocal gesture, hearing it, and then embodying it.
 
+Voice-controlled spatial drawing
+
+The inverse interaction is a Voice Arcade instrument: a continuously detected
+pitch moves a drawing cursor while silence stops it. The first absolute control
+bank maps eight neighboring chromatic notes clockwise to up, the four
+diagonals, and the other cardinal directions. Free Draw creates without a
+score; Trace exposes and scores a target route; Puzzle names an object but does
+not pretend that path geometry can recognize a free-form picture.
+
+Advanced variants may make intervals rotate a turtle-style heading rather than
+mapping notes to absolute directions. Pitch stability, level, or independently
+proved timbre dimensions may eventually affect line texture, width, or opacity,
+but those dimensions must not be inferred from F0 or shipped without their own
+signal proof.
+
 Phrase transcription
 
 The app plays a short phrase and lets you place notes on a piano roll. Then you sing what you transcribed.
@@ -606,26 +626,17 @@ microphone
 getUserMedia
    │
    ▼
-AudioWorklet
+AudioWorklet PCM window
    │
    ▼
-ring buffer
-   │
-   ▼
-pitch detector
-   │
-   ├──► voicing/confidence detector
-   ├──► smoothing/octave correction
-   └──► continuous pitch track
-                 │
-                 ▼
-              scorer
-                 │
-                 ▼
-          exercise engine
-                 │
-                 ▼
-                UI
+stateless pitch detector ─────► shared live frame ─────► rendered note
+   │                                  │
+   └──► voicing/confidence result     └──► feature-local scorer
+                                                │
+                                                ▼
+                                         exercise state
+
+AudioWorklet level window ─────► diagnostic meter (never pitch admission)
 
 Request microphone constraints approximately like:
 
@@ -650,156 +661,86 @@ Implementation strategy:
 
 * mono samples;
 * configurable minimum and maximum frequency;
-* 2,048- or 4,096-sample analysis windows;
+* sample-rate-scaled power-of-two analysis windows that preserve the canonical
+  capture duration and contain enough samples for the 45 Hz lower boundary;
 * regular hop size;
 * parabolic interpolation;
 * confidence/periodicity threshold;
-* short median smoothing;
-* continuity-based octave correction.
+* one direct result for every live PCM window;
+* optional post-hoc smoothing for recorded contours and aggregate scoring only.
 
-Use a larger window for low notes because you need enough waveform periods to estimate the fundamental reliably.
+Live note display must not wait for smoothing, multi-frame agreement, calibration,
+an amplitude gate, or a lesson/scoring phase. Once microphone input is enabled,
+every worklet pitch window is analyzed across the canonical 45–1,200 Hz range
+until explicit Stop or stream failure. Prompts and navigation do not pause,
+mute, clear, or replace that result.
 
-Convert detected frequency into a continuous MIDI coordinate:
+Use a capture window long enough for the 45 Hz lower boundary at every supported
+sample rate. The production capture-size function and detector proof must verify
+every enclosed semitone and both literal boundaries.
+
+Conceptually, detected frequency maps to a continuous MIDI coordinate:
 
 m = 69 + 12\log_2\left(\frac{f}{440}\right)
 
-Then:
-
-const nearestMidi = Math.round(midiFloat);
-const cents = 100 * (midiFloat - nearestMidi);
-const pitchClass = ((nearestMidi % 12) + 12) % 12;
-const octave = Math.floor(nearestMidi / 12) - 1;
-
-And the inverse:
+with the inverse:
 
 f = 440 \cdot 2^{(m-69)/12}
 
+Production code must use `frequencyToMidi`, `splitMidiPitch`, and
+`midiToFrequency` from `music-core` for those coordinates. Do not repeat the
+rounding, signed-zero, pitch-class, octave, or numeric-boundary formulas in a
+feature or detector package.
+
 Do not snap the raw signal to a note before scoring. Preserve the continuous value.
 
-Later, you could add a neural detector such as CREPE as an optional high-robustness engine. CREPE operates directly on monophonic time-domain audio, but it brings model weight and inference complexity that your first useful version does not need. 
+Do not run a second live detector beside the canonical detector. Any future
+replacement, neural or otherwise, must replace the production route in place
+and pass the same full-range browser acceptance contract before it becomes
+authoritative.
 
 10. Recommended project architecture
 
-Keep it backend-free until synchronization becomes genuinely useful.
+Keep musical work local-first. The shipped Go boundary exists only to serve the
+built application, expose health, and accept bounded same-origin derived
+diagnostics. It must not become an account, synchronization, raw-audio, device
+identity, or general telemetry backend.
 
-noteforge/
-├── apps/
-│   └── web/
-│       ├── src/
-│       │   ├── features/
-│       │   │   ├── calibration/
-│       │   │   ├── pitch-mirror/
-│       │   │   ├── note-recognition/
-│       │   │   ├── intervals/
-│       │   │   ├── scales/
-│       │   │   ├── chords/
-│       │   │   ├── melody/
-│       │   │   ├── harmony/
-│       │   │   └── song-lab/
-│       │   ├── audio/
-│       │   │   ├── audio-context.ts
-│       │   │   ├── microphone.ts
-│       │   │   ├── synth.ts
-│       │   │   ├── scheduler.ts
-│       │   │   └── worklets/
-│       │   ├── storage/
-│       │   └── ui/
-│       └── public/
-├── packages/
-│   ├── music-core/
-│   │   ├── pitch.ts
-│   │   ├── note.ts
-│   │   ├── interval.ts
-│   │   ├── scale.ts
-│   │   ├── chord.ts
-│   │   └── voicing.ts
-│   ├── pitch-engine/
-│   │   ├── yin.ts
-│   │   ├── smoothing.ts
-│   │   ├── voicing.ts
-│   │   └── note-segmentation.ts
-│   ├── trainer-core/
-│   │   ├── exercise.ts
-│   │   ├── scorer.ts
-│   │   ├── scheduler.ts
-│   │   ├── skill-graph.ts
-│   │   └── progression.ts
-│   └── fixtures/
-│       ├── synthetic-tones/
-│       └── recorded-voice/
-└── tests/
+The maintained ownership map is intentionally short so this document cannot
+invent files that do not exist:
 
-Use:
+```text
+apps/web                  React UI, Web Audio ownership, IndexedDB, diagnostics client
+apps/web/public/worklets  production real-time capture processor
+cmd/noteforge-server      static/SPA serving, health, bounded diagnostic validation
+packages/music-core       canonical browser-independent pitch and harmony meaning
+packages/pitch-engine     canonical detector frame and stateless YIN implementation
+packages/trainer-core     audio-agnostic scoring, skill graph, progression, scheduling
+tests                     cross-package and feature model tests
+scripts                   build stamping and real-Chromium microphone proof
+```
 
-* TypeScript;
-* your preferred component framework;
-* Web Audio;
-* AudioWorklet;
-* a Web Worker for heavier non-real-time analysis;
-* IndexedDB for sessions and results;
-* service-worker caching for offline use;
-* optional WASM only after profiling proves it worthwhile.
-
-The music theory package should be completely independent of the browser. The pitch detector should be testable against generated sample arrays. The trainer should consume observations without knowing how audio was captured.
+Use TypeScript, React, Web Audio, AudioWorklet, IndexedDB, service-worker
+caching, and the bounded Go server according to those ownership boundaries.
+Add a worker or WASM only after profiling demonstrates a concrete need. The
+music theory package remains browser-independent; the pitch detector accepts
+sample arrays; the trainer consumes canonical observations without owning
+capture.
 
 11. Core data structures
 
-interface PitchFrame {
-  timeSeconds: number;
-  frequencyHz: number | null;
-  midiFloat: number | null;
-  nearestMidi: number | null;
-  centsFromNearest: number | null;
-  rms: number;
-  confidence: number;
-  voiced: boolean;
-}
-interface NoteTarget {
-  midi: number;
-  centsOffset: number;
-  durationMs: number;
-  timbre: string;
-  amplitude: number;
-}
-interface HarmonicContext {
-  tonicPitchClass: number;
-  scalePitchClasses: number[];
-  chordPitchClasses: number[];
-  chordRoot: number;
-  chordQuality: string;
-}
-interface AttemptMetrics {
-  attackErrorCents?: number;
-  medianErrorCents?: number;
-  meanAbsoluteErrorCents?: number;
-  stabilityCents?: number;
-  driftCentsPerSecond?: number;
-  inToleranceRatio?: number;
-  onsetLatencyMs?: number;
-  holdDurationMs?: number;
-  detectorConfidence?: number;
-}
-interface ExerciseAttempt {
-  id: string;
-  exerciseType: string;
-  target: unknown;
-  context?: HarmonicContext;
-  answer?: unknown;
-  pitchFrames?: PitchFrame[];
-  metrics: AttemptMetrics;
-  startedAt: string;
-  completedAt: string;
-}
-interface SkillState {
-  skillId: string;
-  mastery: number;
-  difficulty: number;
-  attemptCount: number;
-  recentAccuracy: number;
-  commonConfusions: Record<string, number>;
-  lastPracticedAt?: string;
-  dueAt?: string;
-}
+Do not copy schema declarations into prose. The canonical structures are:
+
+* detector frames and reasons in `packages/pitch-engine/src/types.ts`;
+* harmonic context in `packages/music-core/src/harmonic.ts`;
+* targets, attempts, metrics, and skill state in
+  `packages/trainer-core/src/types.ts`; and
+* bounded diagnostic transport fields in
+  `apps/web/src/diagnostics/pitch-diagnostics.ts` and the matching Go request
+  types.
+
+Package boundaries import or re-export those definitions instead of
+redeclaring structurally similar copies.
 
 Store raw recordings only when you explicitly enable them. The normal trainer can retain pitch contours and metrics without collecting a warehouse full of you singing “oooooo.”
 

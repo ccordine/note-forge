@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { playTone, playToneSequence, TIMBRES, type Timbre } from "@/audio/synth";
+import { normalizePitchClass } from "@noteforge/music-core";
+import { playSafely, playTone, playToneSequence, TIMBRES, type Timbre } from "@/audio/synth";
 import { useLab } from "@/state/LabContext";
 import { continuousMidiToHz, noteLabel, pitchClassLabel } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select, Switch } from "@/ui/Controls";
@@ -91,7 +92,7 @@ export function EarLab() {
     setSubmitted(false);
   }, [mode, crossTimbre]);
 
-  const targetPc = ((trial.targetMidi % 12) + 12) % 12;
+  const targetPc = normalizePitchClass(trial.targetMidi);
   const targetOctave = Math.floor(trial.targetMidi / 12) - 1;
   const correctSimple = mode === "sameDifferent"
     ? (trial.firstMidi === trial.targetMidi ? "same" : "different")
@@ -100,27 +101,27 @@ export function EarLab() {
   const playTrial = () => {
     if (isFoundationMode(mode)) return;
     if (mode === "pitchClass" || mode === "octave" || mode === "complete") {
-      void playTone({
+      playSafely(playTone({
         frequencyHz: continuousMidiToHz(trial.targetMidi),
         timbre: crossTimbre ? trial.timbreB : timbre,
         duration: 1.15
-      });
+      }), "Ear-training tone");
       return;
     }
     if (mode === "family") {
       const notes = [36 + targetPc, 48 + targetPc, 60 + targetPc, 72 + targetPc].filter((midi) => midi >= 40 && midi <= 84);
-      void playToneSequence(notes.map((midi, index) => ({
+      playSafely(playToneSequence(notes.map((midi, index) => ({
         frequencyHz: continuousMidiToHz(midi),
         timbre: crossTimbre ? (index % 2 ? trial.timbreB : trial.timbreA) : timbre,
         duration: 0.55,
         amplitude: 0.2
-      })), { gap: 0.12 });
+      })), { gap: 0.12 }), "Ear-training note family");
       return;
     }
-    void playToneSequence([
+    playSafely(playToneSequence([
       { frequencyHz: continuousMidiToHz(trial.firstMidi), timbre: crossTimbre ? trial.timbreA : timbre, duration: 0.72, amplitude: 0.24, gapAfter: 0.16 },
       { frequencyHz: continuousMidiToHz(trial.targetMidi), timbre: crossTimbre ? trial.timbreB : timbre, duration: 0.72, amplitude: 0.24 }
-    ]);
+    ]), "Ear-training comparison");
   };
 
   const submit = () => {
@@ -280,7 +281,7 @@ export function EarLab() {
             </Panel>
           </div>
 
-          <Panel className="timbre-strip"><div><Eyebrow>Incidental clues can be challenged deliberately</Eyebrow><h3>One pitch · eight surfaces</h3></div><div>{TIMBRES.map((item) => <button type="button" key={item} onClick={() => playTone({ frequencyHz: continuousMidiToHz(trial.targetMidi), timbre: item, duration: .65 })}><span className={`timbre-wave wave-${item.replace(" ", "-")}`} />{item}</button>)}</div></Panel>
+          <Panel className="timbre-strip"><div><Eyebrow>Incidental clues can be challenged deliberately</Eyebrow><h3>One pitch · eight surfaces</h3></div><div>{TIMBRES.map((item) => <button type="button" key={item} onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(trial.targetMidi), timbre: item, duration: .65 }), `${item} timbre example`)}><span className={`timbre-wave wave-${item.replace(" ", "-")}`} />{item}</button>)}</div></Panel>
         </>
       )}
     </div>

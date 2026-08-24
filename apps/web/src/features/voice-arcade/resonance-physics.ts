@@ -1,646 +1,40 @@
-import { frequencyToMidi, midiToFrequency } from "@noteforge/music-core";
+import { resonanceAcousticTransmission } from "./resonance-field";
+import type {
+  FrequencyTunedResonator,
+  ResonanceAdvanceResult,
+  ResonanceBallState,
+  ResonanceGameState,
+  ResonanceMicrophoneSource,
+  ResonanceObstacle,
+  ResonanceRoom,
+  ResonanceVector,
+  ResonanceVoiceEvaluation,
+  ResonanceVoiceInput,
+  ResonatorActivation,
+} from "./resonance-types";
+import {
+  RESONANCE_EPSILON as EPSILON,
+  add,
+  clamp,
+  clamp01,
+  clampMagnitude,
+  distance,
+  dot,
+  magnitude,
+  magnitudeSquared,
+  normalize,
+  scale,
+  subtract,
+  vector,
+} from "./resonance-vector";
+import { evaluateResonanceVoice, evaluateResonatorActivation } from "./resonance-voice";
+import { ballIsInsideResonanceGoal } from "./resonance-world";
 
-/**
- * Deterministic, deliberately stylized acoustic puzzle physics.
- *
- * This module does not inspect PCM and does not claim to simulate real room
- * acoustics. It consumes pitch, confidence, stability, and a caller-normalized
- * level from the established microphone pipeline, then turns that evidence
- * into a repeatable pressure-field game mechanic.
- */
-
-export interface ResonanceVector {
-  readonly x: number;
-  readonly y: number;
-}
-
-export interface ResonanceRoom {
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface ResonanceObstacle {
-  readonly id: string;
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-  /** Fraction of visualized pressure transmitted through this obstacle. */
-  readonly acousticTransmission?: number;
-}
-
-export interface ResonanceBallDefinition {
-  readonly position: ResonanceVector;
-  readonly velocity?: ResonanceVector;
-  readonly radius: number;
-  readonly mass?: number;
-  readonly restitution?: number;
-  readonly linearDamping?: number;
-}
-
-export interface ResonanceGoal {
-  readonly position: ResonanceVector;
-  readonly radius: number;
-}
-
-export interface ResonanceMicrophoneSource {
-  readonly position: ResonanceVector;
-  /** Force produced by fully coherent, efficiently normalized input. */
-  readonly gain: number;
-  /** Distance at which direct pressure has fallen to half strength. */
-  readonly falloffRadius: number;
-  /** Optional forward axis for a directional microphone visualization. */
-  readonly direction?: ResonanceVector;
-  /** Zero is omnidirectional; one rejects all pressure behind `direction`. */
-  readonly directivity?: number;
-}
-
-export type ResonanceForceMode = "repel" | "attract" | "directional";
-
-export interface FrequencyTunedResonator {
-  readonly id: string;
-  readonly position: ResonanceVector;
-  readonly targetMidi: number;
-  /** Gaussian pitch-response width. This is not a hard pass/fail lane. */
-  readonly bandwidthCents: number;
-  readonly gain: number;
-  readonly influenceRadius: number;
-  readonly mode: ResonanceForceMode;
-  /** Required and used only for directional resonators. */
-  readonly direction?: ResonanceVector;
-}
-
-export interface ResonanceLevelDefinition {
-  readonly id: string;
-  readonly room: ResonanceRoom;
-  readonly obstacles: readonly ResonanceObstacle[];
-  readonly ball: ResonanceBallDefinition;
-  readonly goal: ResonanceGoal;
-  readonly microphone: ResonanceMicrophoneSource;
-  readonly resonators: readonly FrequencyTunedResonator[];
-}
-
-export interface ResonancePhysicsOptions {
-  readonly fixedStepSeconds?: number;
-  readonly maximumFrameDeltaSeconds?: number;
-  readonly maximumSpeed?: number;
-  readonly maximumForce?: number;
-  readonly waveSpeed?: number;
-  readonly waveIntervalSeconds?: number;
-  readonly waveShellWidth?: number;
-  readonly maximumWavePulses?: number;
-}
-
-export interface ResolvedResonancePhysicsOptions {
-  readonly fixedStepSeconds: number;
-  readonly maximumFrameDeltaSeconds: number;
-  readonly maximumSpeed: number;
-  readonly maximumForce: number;
-  readonly waveSpeed: number;
-  readonly waveIntervalSeconds: number;
-  readonly waveShellWidth: number;
-  readonly maximumWavePulses: number;
-}
-
-/** Caller-normalized, interpreted microphone evidence. */
-export interface ResonanceVoiceInput {
-  readonly voiced: boolean;
-  readonly midiFloat: number | null;
-  readonly frequencyHz: number | null;
-  /** Mapped by the caller onto zero through one. */
-  readonly normalizedLevel: number;
-  /**
-   * Authoritative, attack/release-smoothed level x coherence request from the
-   * voice controller. Physics may shape its level efficiency, but it must
-   * never manufacture energy when this value is zero.
-   */
-  readonly coherentDrive: number;
-  /** Detector/interpreter confidence on zero through one. */
-  readonly confidence: number;
-  /** Caller-provided recent pitch stability on zero through one. */
-  readonly stability: number;
-}
-
-export interface ResonanceVoiceEvaluation {
-  readonly active: boolean;
-  readonly midiFloat: number | null;
-  readonly frequencyHz: number | null;
-  readonly normalizedLevel: number;
-  readonly coherentDrive: number;
-  readonly effectiveIntensity: number;
-  readonly confidence: number;
-  readonly stability: number;
-  readonly evidenceCoherence: number;
-  readonly directEnergy: number;
-}
-
-export interface ResonatorActivation {
-  readonly resonatorId: string;
-  readonly targetMidi: number;
-  readonly centsError: number | null;
-  readonly pitchAccuracy: number;
-  readonly coherence: number;
-  readonly effectiveEnergy: number;
-}
-
-export type ResonanceWaveOriginKind = "microphone" | "resonator";
-
-export interface ResonanceWavePulse {
-  readonly id: number;
-  readonly originKind: ResonanceWaveOriginKind;
-  readonly originId: string;
-  readonly origin: ResonanceVector;
-  readonly radius: number;
-  readonly ageSeconds: number;
-  readonly amplitude: number;
-  readonly pitchMidi: number | null;
-  readonly targetMidi: number | null;
-  readonly coherence: number;
-}
-
-export interface ResonanceBallState {
-  readonly position: ResonanceVector;
-  readonly velocity: ResonanceVector;
-  readonly radius: number;
-  readonly mass: number;
-  readonly restitution: number;
-  readonly linearDamping: number;
-}
-
-export type ResonanceGameStatus = "playing" | "won";
-
-export interface ResonanceGameState {
-  readonly level: ResonanceLevelDefinition;
-  readonly options: ResolvedResonancePhysicsOptions;
-  readonly status: ResonanceGameStatus;
-  readonly ball: ResonanceBallState;
-  readonly voice: ResonanceVoiceEvaluation;
-  readonly resonatorActivations: readonly ResonatorActivation[];
-  readonly wavePulses: readonly ResonanceWavePulse[];
-  readonly elapsedSeconds: number;
-  readonly accumulatorSeconds: number;
-  readonly droppedSeconds: number;
-  readonly fixedStepCount: number;
-  readonly collisionCount: number;
-  readonly nextWaveId: number;
-  readonly waveClockSeconds: number;
-}
-
-export interface ResonanceAdvanceResult {
-  readonly state: ResonanceGameState;
-  readonly simulatedSteps: number;
-  readonly collisions: number;
-  readonly wonThisAdvance: boolean;
-}
-
-export interface ResonanceFieldSample {
-  /** Signed stylized pressure, useful for wave coloring. */
-  readonly pressure: number;
-  /** Sum of absolute pulse contributions. */
-  readonly intensity: number;
-  readonly gradient: ResonanceVector;
-  readonly contributingPulses: number;
-}
-
-/** Fixed production/controller evidence floor; gameplay never weakens it. */
-export const RESONANCE_MINIMUM_CONFIDENCE = 0.58;
-
-const DEFAULT_OPTIONS: ResolvedResonancePhysicsOptions = Object.freeze({
-  fixedStepSeconds: 1 / 120,
-  maximumFrameDeltaSeconds: 0.25,
-  maximumSpeed: 5,
-  maximumForce: 24,
-  waveSpeed: 5,
-  waveIntervalSeconds: 0.12,
-  waveShellWidth: 0.22,
-  maximumWavePulses: 96,
-});
-
-const EPSILON = 1e-9;
 const MAX_COLLISION_PASSES = 3;
 
-const SILENT_INPUT: ResonanceVoiceInput = Object.freeze({
-  voiced: false,
-  midiFloat: null,
-  frequencyHz: null,
-  normalizedLevel: 0,
-  coherentDrive: 0,
-  confidence: 0,
-  stability: 0,
-});
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function clamp01(value: number): number {
-  return clamp(value, 0, 1);
-}
-
-function finiteOr(value: number, fallback: number): number {
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function requireFinite(value: number, label: string): void {
-  if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
-}
-
-function requirePositive(value: number, label: string): void {
-  requireFinite(value, label);
-  if (value <= 0) throw new RangeError(`${label} must be greater than zero.`);
-}
-
 function requireNonNegative(value: number, label: string): void {
-  requireFinite(value, label);
+  if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
   if (value < 0) throw new RangeError(`${label} cannot be negative.`);
-}
-
-function vector(x: number, y: number): ResonanceVector {
-  return { x, y };
-}
-
-function add(first: ResonanceVector, second: ResonanceVector): ResonanceVector {
-  return vector(first.x + second.x, first.y + second.y);
-}
-
-function subtract(first: ResonanceVector, second: ResonanceVector): ResonanceVector {
-  return vector(first.x - second.x, first.y - second.y);
-}
-
-function scale(value: ResonanceVector, scalar: number): ResonanceVector {
-  return vector(value.x * scalar, value.y * scalar);
-}
-
-function dot(first: ResonanceVector, second: ResonanceVector): number {
-  return first.x * second.x + first.y * second.y;
-}
-
-function magnitudeSquared(value: ResonanceVector): number {
-  return dot(value, value);
-}
-
-function magnitude(value: ResonanceVector): number {
-  return Math.sqrt(magnitudeSquared(value));
-}
-
-function normalize(value: ResonanceVector, fallback: ResonanceVector = vector(1, 0)): ResonanceVector {
-  const length = magnitude(value);
-  return length <= EPSILON ? fallback : scale(value, 1 / length);
-}
-
-function clampMagnitude(value: ResonanceVector, maximum: number): ResonanceVector {
-  const length = magnitude(value);
-  return length > maximum ? scale(value, maximum / length) : value;
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  if (edge0 === edge1) return value < edge0 ? 0 : 1;
-  const position = clamp01((value - edge0) / (edge1 - edge0));
-  return position * position * (3 - 2 * position);
-}
-
-function distance(first: ResonanceVector, second: ResonanceVector): number {
-  return magnitude(subtract(first, second));
-}
-
-function normalizeDirection(value: ResonanceVector | undefined, label: string): ResonanceVector | undefined {
-  if (!value) return undefined;
-  requireFinite(value.x, `${label} x`);
-  requireFinite(value.y, `${label} y`);
-  if (magnitudeSquared(value) <= EPSILON) {
-    throw new RangeError(`${label} cannot be a zero vector.`);
-  }
-  return normalize(value);
-}
-
-function resolveOptions(
-  options: Readonly<ResonancePhysicsOptions> = {},
-): ResolvedResonancePhysicsOptions {
-  const resolved = {
-    fixedStepSeconds: options.fixedStepSeconds ?? DEFAULT_OPTIONS.fixedStepSeconds,
-    maximumFrameDeltaSeconds:
-      options.maximumFrameDeltaSeconds ?? DEFAULT_OPTIONS.maximumFrameDeltaSeconds,
-    maximumSpeed: options.maximumSpeed ?? DEFAULT_OPTIONS.maximumSpeed,
-    maximumForce: options.maximumForce ?? DEFAULT_OPTIONS.maximumForce,
-    waveSpeed: options.waveSpeed ?? DEFAULT_OPTIONS.waveSpeed,
-    waveIntervalSeconds: options.waveIntervalSeconds ?? DEFAULT_OPTIONS.waveIntervalSeconds,
-    waveShellWidth: options.waveShellWidth ?? DEFAULT_OPTIONS.waveShellWidth,
-    maximumWavePulses: options.maximumWavePulses ?? DEFAULT_OPTIONS.maximumWavePulses,
-  };
-  requirePositive(resolved.fixedStepSeconds, "Resonance fixed step");
-  requirePositive(resolved.maximumFrameDeltaSeconds, "Resonance maximum frame delta");
-  requirePositive(resolved.maximumSpeed, "Resonance maximum speed");
-  requirePositive(resolved.maximumForce, "Resonance maximum force");
-  requirePositive(resolved.waveSpeed, "Resonance wave speed");
-  requirePositive(resolved.waveIntervalSeconds, "Resonance wave interval");
-  requirePositive(resolved.waveShellWidth, "Resonance wave shell width");
-  if (!Number.isInteger(resolved.maximumWavePulses) || resolved.maximumWavePulses < 1) {
-    throw new RangeError("Resonance maximum wave pulses must be a positive integer.");
-  }
-  if (resolved.fixedStepSeconds > resolved.maximumFrameDeltaSeconds) {
-    throw new RangeError("Resonance fixed step cannot exceed the maximum frame delta.");
-  }
-  return Object.freeze(resolved);
-}
-
-function validatePointInRoom(
-  point: Readonly<ResonanceVector>,
-  room: Readonly<ResonanceRoom>,
-  label: string,
-): void {
-  requireFinite(point.x, `${label} x`);
-  requireFinite(point.y, `${label} y`);
-  if (point.x < 0 || point.x > room.width || point.y < 0 || point.y > room.height) {
-    throw new RangeError(`${label} must be inside the room.`);
-  }
-}
-
-function circleOverlapsObstacle(
-  position: Readonly<ResonanceVector>,
-  radius: number,
-  obstacle: Readonly<ResonanceObstacle>,
-): boolean {
-  const nearestX = clamp(position.x, obstacle.x, obstacle.x + obstacle.width);
-  const nearestY = clamp(position.y, obstacle.y, obstacle.y + obstacle.height);
-  const dx = position.x - nearestX;
-  const dy = position.y - nearestY;
-  return dx * dx + dy * dy < radius * radius - EPSILON;
-}
-
-function cloneAndValidateLevel(level: Readonly<ResonanceLevelDefinition>): ResonanceLevelDefinition {
-  if (!level || typeof level !== "object") {
-    throw new TypeError("A Resonance level definition is required.");
-  }
-  if (typeof level.id !== "string" || level.id.length === 0) {
-    throw new RangeError("Resonance level id cannot be empty.");
-  }
-  requirePositive(level.room.width, "Resonance room width");
-  requirePositive(level.room.height, "Resonance room height");
-  const room = Object.freeze({ width: level.room.width, height: level.room.height });
-
-  requirePositive(level.ball.radius, "Resonance ball radius");
-  const mass = level.ball.mass ?? 1;
-  const restitution = level.ball.restitution ?? 0.45;
-  const linearDamping = level.ball.linearDamping ?? 0.8;
-  requirePositive(mass, "Resonance ball mass");
-  requireNonNegative(restitution, "Resonance ball restitution");
-  requireNonNegative(linearDamping, "Resonance ball damping");
-  if (restitution > 1) throw new RangeError("Resonance ball restitution cannot exceed one.");
-  validatePointInRoom(level.ball.position, room, "Resonance ball position");
-  if (level.ball.position.x - level.ball.radius < 0
-    || level.ball.position.x + level.ball.radius > room.width
-    || level.ball.position.y - level.ball.radius < 0
-    || level.ball.position.y + level.ball.radius > room.height) {
-    throw new RangeError("Resonance ball must begin fully inside the room.");
-  }
-  const initialVelocity = level.ball.velocity ?? vector(0, 0);
-  requireFinite(initialVelocity.x, "Resonance ball velocity x");
-  requireFinite(initialVelocity.y, "Resonance ball velocity y");
-
-  requirePositive(level.goal.radius, "Resonance goal radius");
-  if (level.goal.radius + EPSILON < level.ball.radius) {
-    throw new RangeError("Resonance goal must be at least as large as the ball.");
-  }
-  validatePointInRoom(level.goal.position, room, "Resonance goal position");
-  if (level.goal.position.x - level.goal.radius < 0
-    || level.goal.position.x + level.goal.radius > room.width
-    || level.goal.position.y - level.goal.radius < 0
-    || level.goal.position.y + level.goal.radius > room.height) {
-    throw new RangeError("Resonance goal must fit inside the room.");
-  }
-
-  validatePointInRoom(level.microphone.position, room, "Resonance microphone position");
-  requirePositive(level.microphone.gain, "Resonance microphone gain");
-  requirePositive(level.microphone.falloffRadius, "Resonance microphone falloff radius");
-  const directivity = level.microphone.directivity ?? 0;
-  requireFinite(directivity, "Resonance microphone directivity");
-  if (directivity < 0 || directivity > 1) {
-    throw new RangeError("Resonance microphone directivity must be from zero through one.");
-  }
-  const microphoneDirection = normalizeDirection(
-    level.microphone.direction,
-    "Resonance microphone direction",
-  );
-  if (directivity > 0 && !microphoneDirection) {
-    throw new RangeError("A directional Resonance microphone requires a direction.");
-  }
-
-  const ids = new Set<string>();
-  const obstacles = level.obstacles.map((obstacle, index) => {
-    if (typeof obstacle.id !== "string" || obstacle.id.length === 0 || ids.has(obstacle.id)) {
-      throw new RangeError(`Resonance obstacle ${index + 1} needs a unique, nonempty id.`);
-    }
-    ids.add(obstacle.id);
-    requireNonNegative(obstacle.x, `Resonance obstacle ${obstacle.id} x`);
-    requireNonNegative(obstacle.y, `Resonance obstacle ${obstacle.id} y`);
-    requirePositive(obstacle.width, `Resonance obstacle ${obstacle.id} width`);
-    requirePositive(obstacle.height, `Resonance obstacle ${obstacle.id} height`);
-    if (obstacle.x + obstacle.width > room.width + EPSILON
-      || obstacle.y + obstacle.height > room.height + EPSILON) {
-      throw new RangeError(`Resonance obstacle ${obstacle.id} must fit inside the room.`);
-    }
-    const acousticTransmission = obstacle.acousticTransmission ?? 0.2;
-    requireFinite(acousticTransmission, `Resonance obstacle ${obstacle.id} transmission`);
-    if (acousticTransmission < 0 || acousticTransmission > 1) {
-      throw new RangeError(`Resonance obstacle ${obstacle.id} transmission must be zero through one.`);
-    }
-    if (circleOverlapsObstacle(level.ball.position, level.ball.radius, obstacle)) {
-      throw new RangeError(`Resonance ball overlaps obstacle ${obstacle.id}.`);
-    }
-    if (circleOverlapsObstacle(level.goal.position, level.goal.radius, obstacle)) {
-      throw new RangeError(`Resonance goal overlaps obstacle ${obstacle.id}.`);
-    }
-    return Object.freeze({ ...obstacle, acousticTransmission });
-  });
-
-  const resonators = level.resonators.map((resonator, index) => {
-    if (typeof resonator.id !== "string" || resonator.id.length === 0 || ids.has(resonator.id)) {
-      throw new RangeError(`Resonance resonator ${index + 1} needs a unique, nonempty id.`);
-    }
-    ids.add(resonator.id);
-    validatePointInRoom(resonator.position, room, `Resonance resonator ${resonator.id}`);
-    requireFinite(resonator.targetMidi, `Resonance resonator ${resonator.id} target MIDI`);
-    if (resonator.targetMidi < 0 || resonator.targetMidi > 127) {
-      throw new RangeError(`Resonance resonator ${resonator.id} target MIDI is out of range.`);
-    }
-    requirePositive(resonator.bandwidthCents, `Resonance resonator ${resonator.id} bandwidth`);
-    requirePositive(resonator.gain, `Resonance resonator ${resonator.id} gain`);
-    requirePositive(resonator.influenceRadius, `Resonance resonator ${resonator.id} radius`);
-    if (resonator.mode !== "repel"
-      && resonator.mode !== "attract"
-      && resonator.mode !== "directional") {
-      throw new RangeError(`Unknown Resonance force mode: ${String(resonator.mode)}`);
-    }
-    const direction = normalizeDirection(
-      resonator.direction,
-      `Resonance resonator ${resonator.id} direction`,
-    );
-    if (resonator.mode === "directional" && !direction) {
-      throw new RangeError(`Directional resonator ${resonator.id} requires a direction.`);
-    }
-    return Object.freeze({
-      ...resonator,
-      position: Object.freeze({ ...resonator.position }),
-      direction: direction ? Object.freeze(direction) : undefined,
-    });
-  });
-
-  return Object.freeze({
-    id: level.id,
-    room,
-    obstacles: Object.freeze(obstacles),
-    ball: Object.freeze({
-      position: Object.freeze({ ...level.ball.position }),
-      velocity: Object.freeze({ ...initialVelocity }),
-      radius: level.ball.radius,
-      mass,
-      restitution,
-      linearDamping,
-    }),
-    goal: Object.freeze({
-      position: Object.freeze({ ...level.goal.position }),
-      radius: level.goal.radius,
-    }),
-    microphone: Object.freeze({
-      ...level.microphone,
-      position: Object.freeze({ ...level.microphone.position }),
-      direction: microphoneDirection ? Object.freeze(microphoneDirection) : undefined,
-      directivity,
-    }),
-    resonators: Object.freeze(resonators),
-  });
-}
-
-/**
- * Comfortable normalized input is most efficient. Beyond the mapped
- * plateau, more level produces less force, preventing "yell louder" gameplay.
- */
-export function normalizeResonanceIntensity(normalizedLevel: number): number {
-  const level = clamp01(finiteOr(normalizedLevel, 0));
-  const onset = smoothstep(0.03, 0.55, level);
-  const overdrive = smoothstep(0.72, 1, level);
-  return clamp01(onset * (1 - 0.4 * overdrive));
-}
-
-function midiFromFrequency(frequencyHz: number): number {
-  return frequencyToMidi(frequencyHz);
-}
-
-function frequencyFromMidi(midiFloat: number): number {
-  return midiToFrequency(midiFloat);
-}
-
-export function evaluateResonanceVoice(
-  input: Readonly<ResonanceVoiceInput>,
-): ResonanceVoiceEvaluation {
-  const normalizedLevel = clamp01(finiteOr(input.normalizedLevel, 0));
-  const coherentDrive = clamp01(finiteOr(input.coherentDrive, 0));
-  const confidence = clamp01(finiteOr(input.confidence, 0));
-  const stability = clamp01(finiteOr(input.stability, 0));
-  const suppliedMidi = input.midiFloat !== null && Number.isFinite(input.midiFloat)
-    ? input.midiFloat
-    : null;
-  const suppliedFrequency = input.frequencyHz !== null
-    && Number.isFinite(input.frequencyHz)
-    && input.frequencyHz > 0
-    ? input.frequencyHz
-    : null;
-  const midiFloat = suppliedMidi ?? (suppliedFrequency === null ? null : midiFromFrequency(suppliedFrequency));
-  // MIDI is the canonical interpreted coordinate when both are present. This
-  // prevents contradictory caller fields from entering a replay/state record.
-  const frequencyHz = suppliedMidi !== null
-    ? frequencyFromMidi(suppliedMidi)
-    : suppliedFrequency;
-  const active = input.voiced
-    && midiFloat !== null
-    && midiFloat >= 0
-    && midiFloat <= 127
-    && confidence >= RESONANCE_MINIMUM_CONFIDENCE
-    && normalizedLevel > EPSILON
-    && coherentDrive > EPSILON;
-  const effectiveIntensity = active ? normalizeResonanceIntensity(normalizedLevel) : 0;
-  // Confidence and stability have already been combined exactly once by the
-  // controller. Recover that bounded coherence fraction from its authoritative
-  // level x coherence drive, then apply the comfortable-level efficiency curve
-  // without grading the same evidence a second time.
-  const evidenceCoherence = active
-    ? clamp01(coherentDrive / normalizedLevel)
-    : 0;
-  return {
-    active,
-    midiFloat: active ? midiFloat : null,
-    frequencyHz: active ? frequencyHz : null,
-    normalizedLevel,
-    coherentDrive,
-    effectiveIntensity,
-    confidence,
-    stability,
-    evidenceCoherence,
-    directEnergy: effectiveIntensity * evidenceCoherence,
-  };
-}
-
-export function evaluateResonatorActivation(
-  voice: Readonly<ResonanceVoiceEvaluation>,
-  resonator: Readonly<FrequencyTunedResonator>,
-): ResonatorActivation {
-  const centsError = voice.midiFloat === null
-    ? null
-    : (voice.midiFloat - resonator.targetMidi) * 100;
-  const pitchAccuracy = centsError === null
-    ? 0
-    : Math.exp(-0.5 * (centsError / resonator.bandwidthCents) ** 2);
-  const coherence = pitchAccuracy * voice.evidenceCoherence;
-  return {
-    resonatorId: resonator.id,
-    targetMidi: resonator.targetMidi,
-    centsError,
-    pitchAccuracy,
-    coherence,
-    effectiveEnergy: voice.effectiveIntensity * coherence,
-  };
-}
-
-function isBallInsideGoal(
-  ball: Readonly<Pick<ResonanceBallState, "position" | "radius">>,
-  goal: Readonly<ResonanceGoal>,
-): boolean {
-  return distance(ball.position, goal.position) <= Math.max(0, goal.radius - ball.radius) + EPSILON;
-}
-
-export function createResonanceGame(
-  level: Readonly<ResonanceLevelDefinition>,
-  options: Readonly<ResonancePhysicsOptions> = {},
-): ResonanceGameState {
-  const normalizedLevel = cloneAndValidateLevel(level);
-  const ball = normalizedLevel.ball;
-  const state: ResonanceGameState = {
-    level: normalizedLevel,
-    options: resolveOptions(options),
-    status: "playing",
-    ball: {
-      position: { ...ball.position },
-      velocity: { ...(ball.velocity ?? vector(0, 0)) },
-      radius: ball.radius,
-      mass: ball.mass ?? 1,
-      restitution: ball.restitution ?? 0.45,
-      linearDamping: ball.linearDamping ?? 0.8,
-    },
-    voice: evaluateResonanceVoice(SILENT_INPUT),
-    resonatorActivations: normalizedLevel.resonators.map((resonator) =>
-      evaluateResonatorActivation(evaluateResonanceVoice(SILENT_INPUT), resonator)),
-    wavePulses: [],
-    elapsedSeconds: 0,
-    accumulatorSeconds: 0,
-    droppedSeconds: 0,
-    fixedStepCount: 0,
-    collisionCount: 0,
-    nextWaveId: 1,
-    waveClockSeconds: 0,
-  };
-  return isBallInsideGoal(state.ball, normalizedLevel.goal)
-    ? { ...state, status: "won" }
-    : state;
 }
 
 function directivityWeight(
@@ -686,7 +80,7 @@ export function computeResonanceForce(
   const sourceFalloff = 1 / (
     1 + (sourceDistance / state.level.microphone.falloffRadius) ** 2
   );
-  const sourceTransmission = acousticTransmission(
+  const sourceTransmission = resonanceAcousticTransmission(
     state,
     state.level.microphone.position,
     state.ball.position,
@@ -707,7 +101,7 @@ export function computeResonanceForce(
     if (distanceFromResonator >= resonator.influenceRadius) return;
     const normalizedDistance = distanceFromResonator / resonator.influenceRadius;
     const falloff = (1 - normalizedDistance * normalizedDistance) ** 2;
-    const transmission = acousticTransmission(
+    const transmission = resonanceAcousticTransmission(
       state,
       resonator.position,
       state.ball.position,
@@ -720,7 +114,6 @@ export function computeResonanceForce(
       ),
     );
   });
-
   return clampMagnitude(force, state.options.maximumForce);
 }
 
@@ -858,13 +251,8 @@ function integrateBall(
   );
   let position = state.ball.position;
   let collisions = 0;
-
-  // No substep can cross an expanded obstacle, even at the configured speed cap.
   const maximumTravel = Math.max(state.ball.radius * 0.3, 0.01);
-  const substeps = Math.max(
-    1,
-    Math.ceil(magnitude(velocity) * deltaSeconds / maximumTravel),
-  );
+  const substeps = Math.max(1, Math.ceil(magnitude(velocity) * deltaSeconds / maximumTravel));
   const substepSeconds = deltaSeconds / substeps;
   for (let index = 0; index < substeps; index += 1) {
     const resolution = resolveCollisions(
@@ -947,13 +335,9 @@ function fixedStep(
   const deltaSeconds = state.options.fixedStepSeconds;
   const force = computeResonanceForce(state, voice, activations);
   const integrated = integrateBall(state, force, deltaSeconds);
-  const ball = {
-    ...state.ball,
-    position: integrated.position,
-    velocity: integrated.velocity,
-  };
+  const ball = { ...state.ball, position: integrated.position, velocity: integrated.velocity };
   const waves = advanceWaves(state, voice, activations, deltaSeconds);
-  const won = isBallInsideGoal(ball, state.level.goal);
+  const won = ballIsInsideResonanceGoal(ball, state.level.goal);
   return {
     collisions: integrated.collisions,
     state: {
@@ -970,10 +354,7 @@ function fixedStep(
   };
 }
 
-/**
- * Advance with a bounded accumulator. Identical fixed steps make replays
- * deterministic; excess tab-suspension time is reported instead of simulated.
- */
+/** Deterministic bounded fixed-step advancement; excess suspension time is dropped. */
 export function advanceResonanceGame(
   state: Readonly<ResonanceGameState>,
   input: Readonly<ResonanceVoiceInput>,
@@ -981,8 +362,12 @@ export function advanceResonanceGame(
 ): ResonanceAdvanceResult {
   requireNonNegative(deltaSeconds, "Resonance frame delta");
   if (state.status === "won" || deltaSeconds === 0) {
-    return { state: state as ResonanceGameState, simulatedSteps: 0, collisions: 0,
-      wonThisAdvance: false };
+    return {
+      state: state as ResonanceGameState,
+      simulatedSteps: 0,
+      collisions: 0,
+      wonThisAdvance: false,
+    };
   }
   const acceptedDelta = Math.min(deltaSeconds, state.options.maximumFrameDeltaSeconds);
   const droppedDelta = Math.max(0, deltaSeconds - acceptedDelta);
@@ -1012,117 +397,4 @@ export function advanceResonanceGame(
     if (current.status === "won") wonThisAdvance = true;
   }
   return { state: current, simulatedSteps, collisions, wonThisAdvance };
-}
-
-function orientation(
-  first: Readonly<ResonanceVector>,
-  second: Readonly<ResonanceVector>,
-  third: Readonly<ResonanceVector>,
-): number {
-  return (second.x - first.x) * (third.y - first.y)
-    - (second.y - first.y) * (third.x - first.x);
-}
-
-function pointOnSegment(
-  start: Readonly<ResonanceVector>,
-  end: Readonly<ResonanceVector>,
-  point: Readonly<ResonanceVector>,
-): boolean {
-  return point.x >= Math.min(start.x, end.x) - EPSILON
-    && point.x <= Math.max(start.x, end.x) + EPSILON
-    && point.y >= Math.min(start.y, end.y) - EPSILON
-    && point.y <= Math.max(start.y, end.y) + EPSILON;
-}
-
-function segmentsIntersect(
-  firstStart: Readonly<ResonanceVector>,
-  firstEnd: Readonly<ResonanceVector>,
-  secondStart: Readonly<ResonanceVector>,
-  secondEnd: Readonly<ResonanceVector>,
-): boolean {
-  const firstOrientation = orientation(firstStart, firstEnd, secondStart);
-  const secondOrientation = orientation(firstStart, firstEnd, secondEnd);
-  const thirdOrientation = orientation(secondStart, secondEnd, firstStart);
-  const fourthOrientation = orientation(secondStart, secondEnd, firstEnd);
-  if (((firstOrientation > EPSILON && secondOrientation < -EPSILON)
-      || (firstOrientation < -EPSILON && secondOrientation > EPSILON))
-    && ((thirdOrientation > EPSILON && fourthOrientation < -EPSILON)
-      || (thirdOrientation < -EPSILON && fourthOrientation > EPSILON))) return true;
-  if (Math.abs(firstOrientation) <= EPSILON
-    && pointOnSegment(firstStart, firstEnd, secondStart)) return true;
-  if (Math.abs(secondOrientation) <= EPSILON
-    && pointOnSegment(firstStart, firstEnd, secondEnd)) return true;
-  if (Math.abs(thirdOrientation) <= EPSILON
-    && pointOnSegment(secondStart, secondEnd, firstStart)) return true;
-  return Math.abs(fourthOrientation) <= EPSILON
-    && pointOnSegment(secondStart, secondEnd, firstEnd);
-}
-
-function segmentIntersectsObstacle(
-  start: Readonly<ResonanceVector>,
-  end: Readonly<ResonanceVector>,
-  obstacle: Readonly<ResonanceObstacle>,
-): boolean {
-  if (start.x >= obstacle.x && start.x <= obstacle.x + obstacle.width
-    && start.y >= obstacle.y && start.y <= obstacle.y + obstacle.height) return false;
-  const corners = [
-    vector(obstacle.x, obstacle.y),
-    vector(obstacle.x + obstacle.width, obstacle.y),
-    vector(obstacle.x + obstacle.width, obstacle.y + obstacle.height),
-    vector(obstacle.x, obstacle.y + obstacle.height),
-  ];
-  for (let index = 0; index < corners.length; index += 1) {
-    const edgeStart = corners[index]!;
-    const edgeEnd = corners[(index + 1) % corners.length]!;
-    if (segmentsIntersect(start, end, edgeStart, edgeEnd)) return true;
-  }
-  return false;
-}
-
-function acousticTransmission(
-  state: Readonly<ResonanceGameState>,
-  origin: Readonly<ResonanceVector>,
-  sample: Readonly<ResonanceVector>,
-): number {
-  return state.level.obstacles.reduce((transmission, obstacle) =>
-    segmentIntersectsObstacle(origin, sample, obstacle)
-      ? transmission * (obstacle.acousticTransmission ?? 0.2)
-      : transmission, 1);
-}
-
-/** Sample the deterministic visualization field generated by active pulses. */
-export function sampleResonanceField(
-  state: Readonly<ResonanceGameState>,
-  position: Readonly<ResonanceVector>,
-): ResonanceFieldSample {
-  requireFinite(position.x, "Resonance field sample x");
-  requireFinite(position.y, "Resonance field sample y");
-  let pressure = 0;
-  let intensity = 0;
-  let gradient = vector(0, 0);
-  let contributingPulses = 0;
-  for (const pulse of state.wavePulses) {
-    const offset = subtract(position, pulse.origin);
-    const sampleDistance = magnitude(offset);
-    const shellOffset = sampleDistance - pulse.radius;
-    const normalizedOffset = shellOffset / state.options.waveShellWidth;
-    if (Math.abs(normalizedOffset) > 3) continue;
-    const envelope = Math.exp(-0.5 * normalizedOffset * normalizedOffset);
-    const signedWave = Math.cos(normalizedOffset * Math.PI) * envelope;
-    const transmitted = acousticTransmission(state, pulse.origin, position);
-    const contribution = pulse.amplitude * signedWave * transmitted;
-    pressure += contribution;
-    intensity += Math.abs(contribution);
-    // The signed radial derivative is sufficient for arrows/particles; physics
-    // intentionally uses the stable force model rather than this visual sample.
-    gradient = add(
-      gradient,
-      scale(
-        normalize(offset, vector(0, 0)),
-        -pulse.amplitude * normalizedOffset * envelope * transmitted,
-      ),
-    );
-    contributingPulses += 1;
-  }
-  return { pressure, intensity, gradient, contributingPulses };
 }

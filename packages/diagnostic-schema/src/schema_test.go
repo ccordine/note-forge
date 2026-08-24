@@ -4,8 +4,8 @@ import "testing"
 
 func TestEmbeddedDiagnosticContract(t *testing.T) {
 	t.Parallel()
-	if got := Version(); got != 2 {
-		t.Fatalf("Version() = %d, want 2", got)
+	if got := Version(); got != 3 {
+		t.Fatalf("Version() = %d, want 3", got)
 	}
 	expectedFlows := []string{
 		"audio-input",
@@ -13,6 +13,7 @@ func TestEmbeddedDiagnosticContract(t *testing.T) {
 		"range-loop",
 		"voice-arcade",
 		"pitch-mirror",
+		"pitch-tunnel",
 		"hum-lab",
 		"pitch-control",
 	}

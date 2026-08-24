@@ -1,0 +1,91 @@
+/* Vocal Flight cabinet preview ------------------------------------------ */
+
+.arcade-page.mode-flight {
+  --arcade-accent: #5ee8ff;
+  --arcade-accent-rgb: 94, 232, 255;
+}
+
+.arcade-cabinet.accent-cyan {
+  --cabinet-accent: #5ee8ff;
+  --cabinet-rgb: 94, 232, 255;
+}
+
+.arcade-demo-flight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(76, 172, 228, .28), transparent 52%),
+    linear-gradient(180deg, transparent 49%, rgba(94, 232, 255, .14) 50%, rgba(5, 18, 23, .78) 51%);
+  perspective: 260px;
+}
+
+.arcade-demo-flight::before {
+  content: "";
+  position: absolute;
+  inset: 50% -30% -35%;
+  background:
+    linear-gradient(90deg, transparent 49%, rgba(94, 232, 255, .13) 50%, transparent 51%) 0 0 / 38px 100%,
+    linear-gradient(rgba(94, 232, 255, .13) 1px, transparent 1px) 0 0 / 100% 25%;
+  transform: rotateX(64deg);
+  transform-origin: top;
+}
+
+.arcade-demo-flight > i {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 22%;
+  aspect-ratio: 1;
+  border: 3px solid rgba(94, 232, 255, .68);
+  border-radius: 50%;
+  box-shadow: 0 0 14px rgba(94, 232, 255, .35), inset 0 0 10px rgba(94, 232, 255, .22);
+  transform: translate(-50%, -50%);
+  animation: arcade-demo-flight-ring 3.5s linear infinite;
+}
+
+.arcade-demo-flight > i:nth-child(2) {
+  left: 35%;
+  top: 38%;
+  animation-delay: -1.15s;
+}
+
+.arcade-demo-flight > i:nth-child(3) {
+  left: 67%;
+  top: 54%;
+  animation-delay: -2.3s;
+}
+
+.arcade-demo-flight > b {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  width: 36%;
+  height: 15%;
+  border-top: 3px solid var(--cream);
+  clip-path: polygon(0 25%, 41% 42%, 47% 0, 53% 0, 59% 42%, 100% 25%, 61% 63%, 54% 100%, 46% 100%, 39% 63%);
+  background: rgba(246, 244, 231, .46);
+  filter: drop-shadow(0 0 8px rgba(94, 232, 255, .55));
+}
+
+.arcade-demo-flight > span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border: 1px solid #5ee8ff;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #5ee8ff;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes arcade-demo-flight-ring {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.12); }
+  18% { opacity: .9; }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(3.8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arcade-demo-flight > i { animation: none; }
+}

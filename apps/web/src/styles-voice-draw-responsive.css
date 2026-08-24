@@ -1,0 +1,69 @@
+@media (max-width: 1180px) {
+  .voice-draw-layout {
+    grid-template-columns: 174px minmax(380px, 1fr);
+  }
+
+  .voice-draw-guide {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .voice-draw-header,
+  .voice-draw-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-mode-tabs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .voice-draw-tools {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .voice-draw-stage-wrap {
+    grid-row: 1;
+  }
+
+  .voice-draw-guide {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .voice-draw-header,
+  .voice-draw-layout {
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+
+  .voice-draw-mode-tabs,
+  .voice-draw-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-draw-status-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .voice-draw-status-bar > span:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arcade-demo-draw path,
+  .arcade-demo-draw circle {
+    animation: none;
+  }
+}

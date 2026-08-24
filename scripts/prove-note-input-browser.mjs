@@ -1,524 +1,66 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  amplitudeToDbfs,
+  browserProofSnapshot,
+  canonicalFrameKey,
+  collectRenderedNotes,
+  expectedRenderedTransitions,
+  includesContiguousSequence,
+  includesOrderedSequence,
+  lastWorkletSample,
+  longestMatchingRun,
+  maximumElapsedGap,
+  missingValues,
+  orderedPitchEvents,
+  pitchFramesFrom,
+  renderedFrameContinuity,
+  renderedNoteSample,
+  uniqueExpectedRenderedNotes,
+  waitForDiagnosticCount,
+} from "./proof-support/note-input-analysis.mjs";
+import {
+  assert,
+  availablePort,
+  captureProcessOutput,
+  delay,
+  DevToolsSession,
+  evaluate,
+  stopProcessGroup,
+  waitForBrowser,
+  waitForHttp,
+  waitForPageTarget,
+} from "./proof-support/devtools-runtime.mjs";
+import {
+  CAPTURE_HOP_BUDGET_MS,
+  CAPTURE_HOP_SAMPLES,
+  CAPTURE_WINDOW_SAMPLES,
+  EXPECTED_MIDIS,
+  EXPECTED_NOTES,
+  generatedMicrophoneWav,
+  HIGHEST_SUPPORTED_MIDI,
+  IMMEDIATE_CHANGE_MIDIS,
+  IMMEDIATE_CHANGE_SEGMENT_SAMPLES,
+  LOWEST_SUPPORTED_MIDI,
+  noteLabel,
+  OLD_GATE_RMS_AMPLITUDE,
+  OLD_GATE_RMS_DBFS,
+  QUIET_LOW_LABELS,
+  QUIET_LOW_MIDIS,
+  QUIET_LOW_NOTES,
+  SAMPLE_RATE,
+  SUPPORTED_MAX_FREQUENCY_HZ,
+  SUPPORTED_MIN_FREQUENCY_HZ,
+} from "./proof-support/note-input-fixture.mjs";
+import { BROWSER_INSTRUMENTATION_SOURCE } from "./proof-support/note-input-instrumentation.mjs";
+
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
 const CHROMIUM = process.env.NOTEFORGE_CHROMIUM || "/usr/bin/chromium";
-const SAMPLE_RATE = 48_000;
-const CHANNEL_COUNT = 1;
-const BITS_PER_SAMPLE = 16;
-const CAPTURE_WINDOW_SAMPLES = 4_096;
-const CAPTURE_HOP_SAMPLES = 960;
-const CAPTURE_HOP_BUDGET_MS = CAPTURE_HOP_SAMPLES / SAMPLE_RATE * 1_000;
-const SUPPORTED_MIN_FREQUENCY_HZ = 45;
-const SUPPORTED_MAX_FREQUENCY_HZ = 1_200;
-const LOWEST_SUPPORTED_MIDI = 30;
-const HIGHEST_SUPPORTED_MIDI = 86;
-const NORMAL_RMS_DBFS = -24;
-const QUIET_RMS_DBFS = -60;
-const NOISE_RMS_DBFS = -24;
-const OLD_GATE_RMS_DBFS = -42;
-const OLD_GATE_RMS_AMPLITUDE = 10 ** (OLD_GATE_RMS_DBFS / 20);
-const FULL_RANGE_SEGMENT_SECONDS = 0.3;
-const QUIET_LOW_SEGMENT_SECONDS = 0.4;
-const OPENING_SEGMENT_SECONDS = 1.25;
-const IMMEDIATE_CHANGE_SEGMENT_SECONDS = 0.7;
-const IMMEDIATE_CHANGE_MIDIS = [48, 52, 55];
-const IMMEDIATE_CHANGE_SEGMENT_SAMPLES = Math.round(
-  SAMPLE_RATE * IMMEDIATE_CHANGE_SEGMENT_SECONDS,
-);
-
-const NOTE_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
-
-function noteLabel(midi) {
-  return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
-}
-
-const EXPECTED_NOTES = Array.from(
-  { length: HIGHEST_SUPPORTED_MIDI - LOWEST_SUPPORTED_MIDI + 1 },
-  (_unused, index) => {
-    const midi = LOWEST_SUPPORTED_MIDI + index;
-    return { midi, label: noteLabel(midi) };
-  },
-);
-const QUIET_LOW_NOTES = EXPECTED_NOTES.filter(({ midi }) => midi <= 47);
-const EXPECTED_MIDIS = new Set(EXPECTED_NOTES.map(({ midi }) => midi));
-const EXPECTED_LABELS = new Set(EXPECTED_NOTES.map(({ label }) => label));
-const QUIET_LOW_MIDIS = new Set(QUIET_LOW_NOTES.map(({ midi }) => midi));
-const QUIET_LOW_LABELS = new Set(QUIET_LOW_NOTES.map(({ label }) => label));
-
-function delay(milliseconds) {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function midiToFrequency(midi) {
-  return 440 * 2 ** ((midi - 69) / 12);
-}
-
-function generatedMicrophoneWav() {
-  const segments = [
-    // A stable opening note gives the real Pitch Mirror prompt time to run.
-    { midi: LOWEST_SUPPORTED_MIDI, durationSeconds: OPENING_SEGMENT_SECONDS, rmsDbfs: NORMAL_RMS_DBFS },
-    // Each change is correlated by exact production endSample with the first
-    // detector frame and the DOM mutation that rendered it. Long stable tones
-    // make this an admission-delay proof without asking one 85 ms window to
-    // identify physically incompatible one-hop-duration notes.
-    ...IMMEDIATE_CHANGE_MIDIS.map((midi) => ({
-      midi,
-      durationSeconds: IMMEDIATE_CHANGE_SEGMENT_SECONDS,
-      rmsDbfs: NORMAL_RMS_DBFS,
-    })),
-    // Every semitone fully enclosed by the production 45-1200 Hz profile.
-    ...EXPECTED_NOTES.map(({ midi }) => ({
-      midi,
-      durationSeconds: FULL_RANGE_SEGMENT_SECONDS,
-      rmsDbfs: NORMAL_RMS_DBFS,
-      dominantSecond: midi <= 47,
-    })),
-    // The configured detector boundaries are not tempered semitones, so they
-    // get literal frequency segments in addition to the enclosed MIDI sweep.
-    { frequencyHz: SUPPORTED_MIN_FREQUENCY_HZ, durationSeconds: 0.45, rmsDbfs: NORMAL_RMS_DBFS },
-    { frequencyHz: SUPPORTED_MAX_FREQUENCY_HZ, durationSeconds: 0.45, rmsDbfs: NORMAL_RMS_DBFS },
-    // A known voiced bridge is long enough to visit a view with no microphone
-    // consumer without sacrificing either measured sweep.
-    { midi: 60, durationSeconds: 4.2, rmsDbfs: NORMAL_RMS_DBFS },
-    // Repeat the complete low register quietly to reproduce the historical
-    // meter-moving/no-note failure through Chromium's actual capture path.
-    ...QUIET_LOW_NOTES.map(({ midi }) => ({
-      midi,
-      durationSeconds: QUIET_LOW_SEGMENT_SECONDS,
-      rmsDbfs: QUIET_RMS_DBFS,
-      dominantSecond: true,
-    })),
-    { midi: 60, durationSeconds: 1.2, rmsDbfs: QUIET_RMS_DBFS },
-    // Browser-path negative controls: the live meter must distinguish real
-    // silence and loud non-periodic evidence without manufacturing a note.
-    { kind: "silence", durationSeconds: 1.2, rmsDbfs: Number.NEGATIVE_INFINITY },
-    // Leave ample non-periodic tail for the deterministic AudioContext
-    // suspend/resume exercise so Chromium never loops back to the first note.
-    { kind: "noise", durationSeconds: 10, rmsDbfs: NOISE_RMS_DBFS, noiseSeed: 0x4e_4f_49_53 },
-  ];
-  const segmentSampleCounts = segments.map(({ durationSeconds }) =>
-    Math.round(SAMPLE_RATE * durationSeconds));
-  const sampleCount = segmentSampleCounts.reduce((sum, count) => sum + count, 0);
-  const bytesPerSample = BITS_PER_SAMPLE / 8;
-  const dataByteLength = sampleCount * CHANNEL_COUNT * bytesPerSample;
-  const wav = Buffer.alloc(44 + dataByteLength);
-
-  wav.write("RIFF", 0, "ascii");
-  wav.writeUInt32LE(36 + dataByteLength, 4);
-  wav.write("WAVE", 8, "ascii");
-  wav.write("fmt ", 12, "ascii");
-  wav.writeUInt32LE(16, 16);
-  wav.writeUInt16LE(1, 20);
-  wav.writeUInt16LE(CHANNEL_COUNT, 22);
-  wav.writeUInt32LE(SAMPLE_RATE, 24);
-  wav.writeUInt32LE(SAMPLE_RATE * CHANNEL_COUNT * bytesPerSample, 28);
-  wav.writeUInt16LE(CHANNEL_COUNT * bytesPerSample, 32);
-  wav.writeUInt16LE(BITS_PER_SAMPLE, 34);
-  wav.write("data", 36, "ascii");
-  wav.writeUInt32LE(dataByteLength, 40);
-
-  const edgeSamples = Math.round(SAMPLE_RATE * 0.008);
-  const harmonicPhases = [0.1, 0.7, 1.3, 2.1];
-  let outputSample = 0;
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-    const segment = segments[segmentIndex];
-    const segmentSamples = segmentSampleCounts[segmentIndex];
-    const frequency = segment.kind ? null : segment.frequencyHz ?? midiToFrequency(segment.midi);
-    const targetRms = segment.kind === "silence" ? 0 : 10 ** (segment.rmsDbfs / 20);
-    const harmonicWeights = segment.dominantSecond
-      ? [segment.midi % 2 === 0 ? 0.08 : 0.2, 1, 0.24, 0.12]
-      : [1, 0.35, 0.173333];
-    const unitRms = Math.sqrt(
-      harmonicWeights.reduce((sum, weight) => sum + weight ** 2, 0) / 2,
-    );
-    const amplitudeScale = targetRms / unitRms;
-    let noiseState = segment.noiseSeed ?? 0;
-    for (let segmentSample = 0; segmentSample < segmentSamples; segmentSample += 1) {
-      const time = segmentSample / SAMPLE_RATE;
-      const edgeGain = Math.min(
-        1,
-        segmentSample / edgeSamples,
-        (segmentSamples - 1 - segmentSample) / edgeSamples,
-      );
-      let value = 0;
-      if (segment.kind === "noise") {
-        noiseState = (Math.imul(noiseState, 1_664_525) + 1_013_904_223) >>> 0;
-        const uniformNoise = noiseState / 0x1_0000_0000 * 2 - 1;
-        value = uniformNoise * Math.sqrt(3) * targetRms * edgeGain;
-      } else if (segment.kind !== "silence") {
-        const harmonicSignal = harmonicWeights.reduce((sum, weight, harmonicIndex) =>
-          sum + weight * Math.sin(
-            2 * Math.PI * frequency * (harmonicIndex + 1) * time + harmonicPhases[harmonicIndex],
-          ), 0);
-        value = harmonicSignal * amplitudeScale * edgeGain;
-      }
-      value = Math.max(-1, Math.min(1, value));
-      wav.writeInt16LE(Math.round(value * 0x7fff), 44 + outputSample * bytesPerSample);
-      outputSample += 1;
-    }
-  }
-
-  return wav;
-}
-
-async function availablePort() {
-  const server = createServer();
-  server.unref();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert(address && typeof address === "object", "Could not reserve a local test port.");
-  const port = address.port;
-  server.close();
-  await once(server, "close");
-  return port;
-}
-
-function captureProcessOutput(child, label) {
-  const lines = [];
-  const append = (chunk) => {
-    for (const line of String(chunk).split(/\r?\n/u)) {
-      if (!line.trim()) continue;
-      lines.push(`[${label}] ${line}`);
-      if (lines.length > 80) lines.shift();
-    }
-  };
-  child.stdout?.on("data", append);
-  child.stderr?.on("data", append);
-  return lines;
-}
-
-async function stopProcessGroup(child) {
-  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = once(child, "exit").catch(() => undefined);
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    try { child.kill("SIGTERM"); } catch { /* already exited */ }
-  }
-  await Promise.race([exited, delay(2_000)]);
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch {
-    try { child.kill("SIGKILL"); } catch { /* already exited */ }
-  }
-  await Promise.race([exited, delay(1_000)]);
-}
-
-async function waitForHttp(url, child, timeoutMilliseconds, output) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  let lastError = "no response";
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`Process exited before ${url} became ready.\n${output.join("\n")}`);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-      lastError = `HTTP ${response.status}`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await delay(100);
-  }
-  throw new Error(`Timed out waiting for ${url}: ${lastError}\n${output.join("\n")}`);
-}
-
-async function waitForPageTarget(debugPort, chromium, output) {
-  const deadline = Date.now() + 12_000;
-  let lastError = "DevTools endpoint unavailable";
-  while (Date.now() < deadline) {
-    if (chromium.exitCode !== null || chromium.signalCode !== null) {
-      throw new Error(`Chromium exited before DevTools became ready.\n${output.join("\n")}`);
-    }
-    try {
-      const response = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-      if (response.ok) {
-        const targets = await response.json();
-        const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
-        if (page) return page;
-        lastError = "no page target";
-      } else {
-        lastError = `HTTP ${response.status}`;
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await delay(100);
-  }
-  throw new Error(`Timed out waiting for Chromium DevTools: ${lastError}\n${output.join("\n")}`);
-}
-
-class DevToolsSession {
-  constructor(webSocketUrl) {
-    this.nextId = 1;
-    this.pending = new Map();
-    this.listeners = new Map();
-    this.socket = new WebSocket(webSocketUrl);
-  }
-
-  async connect() {
-    if (this.socket.readyState === WebSocket.OPEN) return;
-    await Promise.race([
-      new Promise((resolveConnection, rejectConnection) => {
-        this.socket.addEventListener("open", resolveConnection, { once: true });
-        this.socket.addEventListener("error", rejectConnection, { once: true });
-      }),
-      delay(5_000).then(() => { throw new Error("Timed out connecting to Chromium DevTools."); }),
-    ]);
-    this.socket.addEventListener("message", (event) => this.receive(event.data));
-    this.socket.addEventListener("close", () => {
-      for (const { reject } of this.pending.values()) reject(new Error("Chromium DevTools disconnected."));
-      this.pending.clear();
-    });
-  }
-
-  receive(data) {
-    const message = JSON.parse(String(data));
-    if (message.id !== undefined) {
-      const pending = this.pending.get(message.id);
-      if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(`${pending.method}: ${message.error.message}`));
-      else pending.resolve(message.result ?? {});
-      return;
-    }
-    for (const listener of this.listeners.get(message.method) ?? []) {
-      try { listener(message.params ?? {}); } catch { /* a proof assertion handles collected data later */ }
-    }
-  }
-
-  on(method, listener) {
-    const listeners = this.listeners.get(method) ?? [];
-    listeners.push(listener);
-    this.listeners.set(method, listeners);
-  }
-
-  send(method, params = {}) {
-    const id = this.nextId++;
-    return new Promise((resolveCommand, rejectCommand) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        rejectCommand(new Error(`Timed out waiting for DevTools command ${method}.`));
-      }, 8_000);
-      this.pending.set(id, {
-        method,
-        resolve: (value) => { clearTimeout(timer); resolveCommand(value); },
-        reject: (error) => { clearTimeout(timer); rejectCommand(error); },
-      });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  close() {
-    try { this.socket.close(); } catch { /* already closed */ }
-  }
-}
-
-async function evaluate(session, expression, awaitPromise = false) {
-  const result = await session.send("Runtime.evaluate", {
-    expression,
-    awaitPromise,
-    returnByValue: true,
-    userGesture: true,
-  });
-  if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.exception?.description
-      || result.exceptionDetails.text
-      || `Browser evaluation failed: ${expression}`);
-  }
-  return result.result?.value;
-}
-
-async function waitForBrowser(session, expression, description, timeoutMilliseconds = 10_000) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    if (await evaluate(session, expression)) return;
-    await delay(100);
-  }
-  const body = await evaluate(session, "document.body?.innerText?.slice(0, 4000) || ''");
-  throw new Error(`Timed out waiting for ${description}.\nRendered page:\n${body}`);
-}
-
-async function renderedNoteSample(session) {
-  return evaluate(session, `(() => {
-    const scope = document.querySelector('.input-scope');
-    const pitch = document.querySelector('[data-detected-note]');
-    const meter = scope?.querySelector('[role="meter"]');
-    const diagnosis = scope?.querySelector('.scope-diagnosis b');
-    const frequency = [...(pitch?.querySelectorAll('span') || [])]
-      .find((element) => element.textContent?.includes('Hz'));
-    return {
-      note: pitch?.getAttribute('data-detected-note') || null,
-      frequency: frequency?.textContent?.trim() || null,
-      scopeState: scope?.className || null,
-      inputState: scope?.getAttribute('data-input-state') || null,
-      meterDbfs: meter?.getAttribute('aria-valuenow') == null
-        ? null
-        : Number(meter.getAttribute('aria-valuenow')),
-      diagnosis: diagnosis?.textContent?.trim() || null,
-      frameCount: Number(scope?.getAttribute('data-frame-count') || 0),
-      frameTime: Number(scope?.getAttribute('data-frame-time') || 0),
-      endSample: Number(scope?.getAttribute('data-end-sample') || 0),
-      captureEpoch: Number(scope?.getAttribute('data-capture-epoch') || 0),
-      continuityEpoch: Number(scope?.getAttribute('data-continuity-epoch') || 0),
-      graphGeneration: Number(scope?.getAttribute('data-graph-generation') || 0),
-      hash: location.hash,
-      at: performance.now(),
-    };
-  })()`);
-}
-
-async function collectRenderedNotes(session, durationMilliseconds) {
-  const samples = [];
-  const deadline = Date.now() + durationMilliseconds;
-  while (Date.now() < deadline) {
-    samples.push(await renderedNoteSample(session));
-    await delay(80);
-  }
-  return samples;
-}
-
-function pitchFramesFrom(requests) {
-  return requests.flatMap((batch) => batch.events ?? [])
-    .filter((event) => event.kind === "pitch-frame");
-}
-
-async function browserProofSnapshot(session) {
-  return evaluate(session, `(() => {
-    const control = window.__noteforgeNoteInputProof;
-    return typeof control?.snapshot === 'function' ? control.snapshot() : null;
-  })()`);
-}
-
-async function waitForDiagnosticCount(diagnosticBatches, expectedCount, timeoutMilliseconds = 6_000) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const count = pitchFramesFrom(diagnosticBatches).length;
-    if (count === expectedCount) return count;
-    if (count > expectedCount) {
-      throw new Error(`Production emitted ${count} detector frames for ${expectedCount} worklet sample messages.`);
-    }
-    await delay(100);
-  }
-  return pitchFramesFrom(diagnosticBatches).length;
-}
-
-function uniqueExpectedRenderedNotes(samples) {
-  return [...new Set(samples
-    .map((sample) => sample.note)
-    .filter((note) => EXPECTED_LABELS.has(note)))];
-}
-
-function expectedRenderedTransitions(samples) {
-  const transitions = [];
-  for (const note of samples.map((sample) => sample.note)) {
-    if (!EXPECTED_LABELS.has(note) || transitions.at(-1) === note) continue;
-    transitions.push(note);
-  }
-  return transitions;
-}
-
-function includesContiguousSequence(values, expected) {
-  return values.some((_value, start) =>
-    expected.every((expectedValue, offset) => values[start + offset] === expectedValue));
-}
-
-function includesOrderedSequence(values, expected) {
-  let expectedIndex = 0;
-  for (const value of values) {
-    if (value === expected[expectedIndex]) expectedIndex += 1;
-    if (expectedIndex === expected.length) return true;
-  }
-  return expected.length === 0;
-}
-
-function missingValues(expected, actual) {
-  return [...expected].filter((value) => !actual.has(value));
-}
-
-function amplitudeToDbfs(amplitude) {
-  return 20 * Math.log10(Math.max(amplitude, 1e-12));
-}
-
-function longestMatchingRun(samples, predicate) {
-  let longest = 0;
-  let current = 0;
-  for (const sample of samples) {
-    if (predicate(sample)) {
-      current += 1;
-      longest = Math.max(longest, current);
-    } else {
-      current = 0;
-    }
-  }
-  return longest;
-}
-
-function maximumElapsedGap(frames) {
-  let maximum = 0;
-  for (let index = 1; index < frames.length; index += 1) {
-    maximum = Math.max(maximum, frames[index].elapsedMs - frames[index - 1].elapsedMs);
-  }
-  return maximum;
-}
-
-function canonicalFrameKey(frame) {
-  return `${frame.captureEpoch}:${frame.endSample}`;
-}
-
-function orderedPitchEvents(requests) {
-  return [...pitchFramesFrom(requests)].sort((left, right) => {
-    const leftFrame = left.pitch?.frame;
-    const rightFrame = right.pitch?.frame;
-    return (leftFrame?.captureEpoch ?? -1) - (rightFrame?.captureEpoch ?? -1)
-      || (leftFrame?.endSample ?? -1) - (rightFrame?.endSample ?? -1);
-  });
-}
-
-function lastWorkletSample(snapshot) {
-  return snapshot.workletSampleEvents.at(-1) ?? null;
-}
-
-function renderedFrameContinuity(samples, label) {
-  const withFrames = samples.filter((sample) =>
-    Number.isFinite(sample.frameCount) && sample.frameCount > 0
-      && Number.isFinite(sample.frameTime) && sample.frameTime > 0);
-  assert(withFrames.length > 1, `${label} exposed no advancing production frame metadata.`);
-  let maximumAdvanceGapMilliseconds = 0;
-  let lastAdvanceAt = withFrames[0].at;
-  for (let index = 1; index < withFrames.length; index += 1) {
-    const previous = withFrames[index - 1];
-    const current = withFrames[index];
-    assert(current.frameCount >= previous.frameCount,
-      `${label} frame count moved backward from ${previous.frameCount} to ${current.frameCount}.`);
-    assert(current.frameTime >= previous.frameTime,
-      `${label} detector timestamp moved backward from ${previous.frameTime} to ${current.frameTime}.`);
-    if (current.frameCount > previous.frameCount) {
-      maximumAdvanceGapMilliseconds = Math.max(maximumAdvanceGapMilliseconds, current.at - lastAdvanceAt);
-      lastAdvanceAt = current.at;
-    }
-  }
-  return {
-    firstCount: withFrames[0].frameCount,
-    lastCount: withFrames.at(-1).frameCount,
-    firstTime: withFrames[0].frameTime,
-    lastTime: withFrames.at(-1).frameTime,
-    maximumAdvanceGapMilliseconds,
-  };
-}
 
 async function main() {
   let temporaryDirectory;
@@ -534,8 +76,20 @@ async function main() {
     const chromiumProfile = join(temporaryDirectory, "chromium-profile");
     const vitePort = await availablePort();
     const debugPort = await availablePort();
-    const pageUrl = `http://127.0.0.1:${vitePort}/#mirror`;
+    const pageUrl = `http://127.0.0.1:${vitePort}/#/practice/pitch-match/glide`;
     await writeFile(wavPath, generatedMicrophoneWav());
+    const builtServiceWorker = await readFile(
+      join(REPOSITORY_ROOT, "dist/sw.js"),
+      "utf8",
+    );
+    assert(!builtServiceWorker.includes("__NOTEFORGE_"),
+      "Run npm run build before the microphone proof; the service worker is unstamped.");
+    const precacheMatch = builtServiceWorker.match(/const PRECACHE = (\[[^\n]*\]);/u);
+    assert(precacheMatch,
+      "The stamped service worker does not contain a readable precache manifest.");
+    const stampedPrecache = JSON.parse(precacheMatch[1]);
+    assert(Array.isArray(stampedPrecache),
+      "The stamped service-worker precache manifest is not an array.");
 
     vite = spawn(process.execPath, [
       join(REPOSITORY_ROOT, "node_modules/vite/bin/vite.js"),
@@ -594,283 +148,14 @@ async function main() {
     await session.send("Runtime.enable");
     await session.send("Network.enable");
     await session.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: `(() => {
-        const proof = {
-          getUserMediaCalls: 0,
-          streams: 0,
-          tracks: 0,
-          audioContexts: 0,
-          audioContextStateEvents: [],
-          audioContextSuspendRequests: 0,
-          audioContextSuspendRequestedAt: null,
-          workletModuleUrls: [],
-          workletNodes: 0,
-          workletSampleMessages: 0,
-          workletLevelMessages: 0,
-          workletSampleEvents: [],
-          domFrameMutations: [],
-          trackInitialStates: [],
-          trackEnabledWrites: [],
-          trackStopCalls: [],
-          stopOnNextSample: false,
-          explicitStopRequestedAt: null,
-          explicitStopSampleMessageCount: null,
-          stopButtonClicks: 0,
-          stopButtonMissing: false,
-          instrumentationErrors: [],
-        };
-        let capturedAudioContext = null;
-        const proofControl = Object.freeze({
-          snapshot: () => JSON.parse(JSON.stringify(proof)),
-          suspendCapturedAudioContext: async () => {
-            if (!capturedAudioContext) return { suspended: false, state: null };
-            proof.audioContextSuspendRequests += 1;
-            proof.audioContextSuspendRequestedAt = performance.now();
-            await capturedAudioContext.suspend();
-            return { suspended: true, state: capturedAudioContext.state };
-          },
-          armStopOnNextSample: () => {
-            proof.stopOnNextSample = true;
-            return true;
-          },
-        });
-        Object.defineProperty(window, '__noteforgeNoteInputProof', {
-          configurable: false,
-          enumerable: false,
-          writable: false,
-          value: proofControl,
-        });
-        const NativeAudioContext = window.AudioContext;
-        if (typeof NativeAudioContext !== 'function') {
-          proof.instrumentationErrors.push('AudioContext unavailable');
-        } else {
-          try {
-            window.AudioContext = new Proxy(NativeAudioContext, {
-              construct(target, args) {
-                const context = Reflect.construct(target, args, target);
-                capturedAudioContext = context;
-                proof.audioContexts += 1;
-                proof.audioContextStateEvents.push({
-                  at: performance.now(),
-                  state: context.state,
-                });
-                context.addEventListener('statechange', () => {
-                  proof.audioContextStateEvents.push({
-                    at: performance.now(),
-                    state: context.state,
-                  });
-                });
-                return context;
-              },
-            });
-          } catch (error) {
-            proof.instrumentationErrors.push('AudioContext instrumentation: ' + String(error));
-          }
-        }
-        const audioWorkletPrototype = window.AudioWorklet?.prototype;
-        const nativeAddModule = audioWorkletPrototype?.addModule;
-        if (typeof nativeAddModule !== 'function') {
-          proof.instrumentationErrors.push('AudioWorklet.addModule unavailable');
-        } else {
-          try {
-            Object.defineProperty(audioWorkletPrototype, 'addModule', {
-              configurable: true,
-              writable: true,
-              value(...args) {
-                proof.workletModuleUrls.push(new URL(String(args[0]), document.baseURI).href);
-                return Reflect.apply(nativeAddModule, this, args);
-              },
-            });
-          } catch (error) {
-            proof.instrumentationErrors.push('AudioWorklet.addModule instrumentation: ' + String(error));
-          }
-        }
-        const NativeAudioWorkletNode = window.AudioWorkletNode;
-        if (typeof NativeAudioWorkletNode !== 'function') {
-          proof.instrumentationErrors.push('AudioWorkletNode unavailable');
-        } else {
-          try {
-            window.AudioWorkletNode = new Proxy(NativeAudioWorkletNode, {
-              construct(target, args) {
-                const node = Reflect.construct(target, args, target);
-                proof.workletNodes += 1;
-                node.port.addEventListener('message', (event) => {
-                  if (event.data?.type === 'level') {
-                    proof.workletLevelMessages += 1;
-                    return;
-                  }
-                  if (event.data?.type !== 'samples') return;
-                  proof.workletSampleMessages += 1;
-                  proof.workletSampleEvents.push({
-                    at: performance.now(),
-                    capturedAt: event.data.capturedAt,
-                    sampleCount: event.data.samples?.length ?? null,
-                    startSample: event.data.startSample,
-                    endSample: event.data.endSample,
-                    captureEpoch: event.data.captureEpoch,
-                    continuityEpoch: event.data.continuityEpoch,
-                    graphGeneration: event.data.graphGeneration,
-                    processCount: event.data.processCount,
-                    processedSampleCount: event.data.processedSampleCount,
-                    discontinuity: event.data.discontinuity,
-                  });
-                  if (proof.workletSampleEvents.length > 8192) proof.workletSampleEvents.shift();
-                  if (proof.stopOnNextSample && proof.explicitStopRequestedAt === null) {
-                    proof.explicitStopRequestedAt = performance.now();
-                    // A zero-delay task runs after the entire MessagePort event
-                    // dispatch, including production's port.onmessage handler.
-                    // A microtask here can run between listeners in Chromium and
-                    // create a one-frame stop-boundary race.
-                    setTimeout(() => {
-                      const button = [...document.querySelectorAll('button')]
-                        .find((candidate) => candidate.textContent?.trim() === 'Stop input');
-                      if (!button) {
-                        proof.stopButtonMissing = true;
-                        return;
-                      }
-                      // Establish the boundary synchronously with the actual
-                      // user control. Messages queued before this task are
-                      // pre-Stop evidence; none may arrive after button.click().
-                      proof.explicitStopSampleMessageCount = proof.workletSampleMessages;
-                      proof.stopButtonClicks += 1;
-                      button.click();
-                    }, 0);
-                  }
-                });
-                return node;
-              },
-            });
-          } catch (error) {
-            proof.instrumentationErrors.push('AudioWorkletNode instrumentation: ' + String(error));
-          }
-        }
-        const recordRenderedFrame = () => {
-          const scope = document.querySelector('[data-note-input]');
-          const pitch = document.querySelector('[data-detected-note]');
-          const rawEndSample = scope?.getAttribute('data-end-sample');
-          const rawHeldSamples = scope?.getAttribute('data-held-samples');
-          const rawHeldSeconds = scope?.getAttribute('data-held-seconds');
-          if (!scope || !pitch || rawEndSample === null || rawEndSample === '') return;
-          const observation = {
-            at: performance.now(),
-            note: pitch.getAttribute('data-detected-note') || null,
-            frameCount: Number(scope.getAttribute('data-frame-count')),
-            endSample: Number(rawEndSample),
-            captureEpoch: Number(scope.getAttribute('data-capture-epoch')),
-            continuityEpoch: Number(scope.getAttribute('data-continuity-epoch')),
-            graphGeneration: Number(scope.getAttribute('data-graph-generation')),
-            heldSamples: rawHeldSamples === null || rawHeldSamples === ''
-              ? null
-              : Number(rawHeldSamples),
-            heldSeconds: rawHeldSeconds === null || rawHeldSeconds === ''
-              ? null
-              : Number(rawHeldSeconds),
-            inputState: scope.getAttribute('data-input-state'),
-            hash: location.hash,
-          };
-          if (!Number.isSafeInteger(observation.endSample) || observation.endSample < 0) return;
-          const previous = proof.domFrameMutations.at(-1);
-          if (previous
-            && previous.endSample === observation.endSample
-            && previous.note === observation.note
-            && previous.hash === observation.hash) return;
-          proof.domFrameMutations.push(observation);
-          if (proof.domFrameMutations.length > 8192) proof.domFrameMutations.shift();
-        };
-        const renderedFrameObserver = new MutationObserver(recordRenderedFrame);
-        renderedFrameObserver.observe(document, {
-          subtree: true,
-          childList: true,
-          attributes: true,
-          attributeFilter: [
-            'data-detected-note',
-            'data-frame-count',
-            'data-end-sample',
-            'data-capture-epoch',
-            'data-continuity-epoch',
-            'data-graph-generation',
-            'data-held-samples',
-            'data-held-seconds',
-            'data-input-state',
-          ],
-        });
-        const devices = navigator.mediaDevices;
-        if (!devices?.getUserMedia) {
-          proof.instrumentationErrors.push('navigator.mediaDevices.getUserMedia unavailable');
-          return;
-        }
-        const originalGetUserMedia = devices.getUserMedia.bind(devices);
-        const instrumentTrack = (track) => {
-          proof.tracks += 1;
-          proof.trackInitialStates.push({
-            at: performance.now(),
-            enabled: track.enabled,
-            kind: track.kind,
-            readyState: track.readyState,
-          });
-          let prototype = track;
-          let enabledDescriptor;
-          while (prototype && !enabledDescriptor) {
-            prototype = Object.getPrototypeOf(prototype);
-            enabledDescriptor = prototype && Object.getOwnPropertyDescriptor(prototype, 'enabled');
-          }
-          if (enabledDescriptor?.get && enabledDescriptor?.set) {
-            try {
-              Object.defineProperty(track, 'enabled', {
-                configurable: true,
-                enumerable: enabledDescriptor.enumerable,
-                get() { return enabledDescriptor.get.call(track); },
-                set(value) {
-                  proof.trackEnabledWrites.push({
-                    at: performance.now(),
-                    value: Boolean(value),
-                    kind: track.kind,
-                    readyState: track.readyState,
-                  });
-                  return enabledDescriptor.set.call(track, value);
-                },
-              });
-            } catch (error) {
-              proof.instrumentationErrors.push('enabled instrumentation: ' + String(error));
-            }
-          } else {
-            proof.instrumentationErrors.push('MediaStreamTrack.enabled descriptor unavailable');
-          }
-          const originalStop = track.stop.bind(track);
-          try {
-            Object.defineProperty(track, 'stop', {
-              configurable: true,
-              value() {
-                proof.trackStopCalls.push({ at: performance.now(), kind: track.kind, readyState: track.readyState });
-                return originalStop();
-              },
-            });
-          } catch (error) {
-            proof.instrumentationErrors.push('stop instrumentation: ' + String(error));
-          }
-        };
-        try {
-          Object.defineProperty(devices, 'getUserMedia', {
-            configurable: true,
-            value: async (...args) => {
-              proof.getUserMediaCalls += 1;
-              const stream = await originalGetUserMedia(...args);
-              proof.streams += 1;
-              stream.getAudioTracks().forEach(instrumentTrack);
-              return stream;
-            },
-          });
-        } catch (error) {
-          proof.instrumentationErrors.push('getUserMedia instrumentation: ' + String(error));
-        }
-      })();`,
+      source: BROWSER_INSTRUMENTATION_SOURCE,
     });
 
     await session.send("Page.navigate", { url: pageUrl });
     await waitForBrowser(
       session,
-      "document.readyState === 'complete' && [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Enable input'))",
-      "the Pitch Mirror input controls",
+      "document.readyState === 'complete' && Boolean(document.querySelector('[data-global-mic-enable]'))",
+      "the global voice input control above Pitch Match",
     );
     const loadedEntryScripts = await evaluate(session, `[
       ...document.querySelectorAll('script[src]'),
@@ -884,12 +169,11 @@ async function main() {
       `The browser loaded a Vite development/source module: ${JSON.stringify(loadedEntryScripts)}`,
     );
     const clicked = await evaluate(session, `(() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((candidate) => candidate.textContent?.trim() === 'Enable input');
+      const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
       return Boolean(button);
     })()`);
-    assert(clicked, "The real Enable input control was not clickable.");
+    assert(clicked, "The sole global Enable voice control was not clickable.");
     await waitForBrowser(
       session,
       "document.querySelector('.input-scope.running') && Boolean(document.querySelector('[data-detected-note]')?.getAttribute('data-detected-note'))",
@@ -910,45 +194,43 @@ async function main() {
       "Pitch Mirror Delayed mode",
     );
     const attemptClicked = await evaluate(session, `(() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((candidate) => candidate.textContent?.trim() === 'Begin attempt');
+      const button = document.querySelector('[data-pitch-mirror-action="start-trace"]');
       button?.click();
-      return Boolean(button);
+      return Boolean(button && !button.disabled);
     })()`);
-    assert(attemptClicked, "Pitch Mirror's real Begin attempt control was not clickable.");
+    assert(attemptClicked, "Pitch Mirror's real Begin 4 s trace control was not clickable.");
     await waitForBrowser(
       session,
-      "document.querySelector('.mirror-stage.active .stage-status > span')?.textContent?.trim() === 'LISTEN'",
-      "Pitch Mirror's active LISTEN prompt",
+      "document.querySelector('.mirror-stage.active .stage-status > span')?.textContent?.trim() === 'MEASURING LIVE STREAM'",
+      "Pitch Mirror's active live trace",
     );
     await waitForBrowser(
       session,
       "Number(document.querySelector('[data-note-input]')?.getAttribute('data-frame-count')) >= 2 && Boolean(document.querySelector('[data-detected-note]')?.getAttribute('data-detected-note'))",
-      "post-clear detector frames during the Pitch Mirror prompt",
+      "detector frames during the Pitch Mirror trace",
     );
     const promptStartProof = await browserProofSnapshot(session);
     const promptSamples = await collectRenderedNotes(session, 800);
     const promptEndProof = await browserProofSnapshot(session);
-    const promptContinuity = renderedFrameContinuity(promptSamples, "Pitch Mirror LISTEN prompt");
+    const promptContinuity = renderedFrameContinuity(promptSamples, "Pitch Mirror live trace");
     assert(promptContinuity.lastCount - promptContinuity.firstCount >= 6,
-      `Pitch Mirror's prompt frame count advanced only ${promptContinuity.firstCount}->${promptContinuity.lastCount}.`);
+      `Pitch Mirror's trace frame count advanced only ${promptContinuity.firstCount}->${promptContinuity.lastCount}.`);
     assert(promptContinuity.lastTime > promptContinuity.firstTime,
-      `Pitch Mirror's detector time did not advance during LISTEN (${promptContinuity.firstTime}->${promptContinuity.lastTime}).`);
+      `Pitch Mirror's detector time did not advance during the trace (${promptContinuity.firstTime}->${promptContinuity.lastTime}).`);
     assert(promptSamples.every((sample) => sample.note && sample.inputState === "running"),
-      `A rendered note disappeared during Pitch Mirror's LISTEN prompt: ${JSON.stringify(promptSamples)}`);
+      `A rendered note disappeared during Pitch Mirror's live trace: ${JSON.stringify(promptSamples)}`);
     assert(promptSamples.some((sample) => sample.note === noteLabel(LOWEST_SUPPORTED_MIDI)),
-      `Pitch Mirror's LISTEN prompt never rendered the opening ${noteLabel(LOWEST_SUPPORTED_MIDI)}.`);
+      `Pitch Mirror's live trace never rendered the opening ${noteLabel(LOWEST_SUPPORTED_MIDI)}.`);
     const finishClicked = await evaluate(session, `(() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((candidate) => candidate.textContent?.trim() === 'Finish now');
+      const button = document.querySelector('[data-pitch-mirror-action="finish-trace"]');
       button?.click();
-      return Boolean(button);
+      return Boolean(button && !button.disabled);
     })()`);
-    assert(finishClicked, "Pitch Mirror's real Finish now control was not clickable.");
+    assert(finishClicked, "Pitch Mirror's real Finish trace control was not clickable.");
     await waitForBrowser(
       session,
       "!document.querySelector('.mirror-stage.active')",
-      "Pitch Mirror prompt completion",
+      "Pitch Mirror trace completion",
     );
 
     // The visible Pitch Mirror remains mounted for the complete MIDI 30-86
@@ -958,10 +240,10 @@ async function main() {
     const beforeNavigationProof = await browserProofSnapshot(session);
     const beforeNavigationEndSample = lastWorkletSample(beforeNavigationProof)?.endSample ?? -1;
     const navigationMark = await evaluate(session, "performance.now()");
-    await evaluate(session, "location.hash = '#sound'; true");
+    await evaluate(session, "location.hash = '#/explore/sound/dyad'; true");
     await waitForBrowser(
       session,
-      "location.hash === '#sound' && Boolean(document.querySelector('.sound-lab-page')) && !document.querySelector('[data-note-input]')",
+      "location.hash === '#/explore/sound/dyad' && Boolean(document.querySelector('.sound-lab-page')) && !document.querySelector('[data-note-input]')",
       "Sound Laboratory with no microphone consumer mounted",
     );
     const noConsumerStartProof = await browserProofSnapshot(session);
@@ -981,10 +263,10 @@ async function main() {
     assert(noConsumerEndProof.trackStopCalls.length === 0 && noConsumerFalseWrites.length === 0,
       `The microphone was stopped or disabled on the non-microphone view: ${JSON.stringify(noConsumerEndProof)}`);
 
-    await evaluate(session, "location.hash = '#hum'; true");
+    await evaluate(session, "location.hash = '#/practice/hum/anchor'; true");
     await waitForBrowser(
       session,
-      "location.hash === '#hum' && Boolean(document.querySelector('.input-scope.running'))",
+      "location.hash === '#/practice/hum/anchor' && Boolean(document.querySelector('.input-scope.running'))",
       "the retained microphone on Hum Lab after the no-consumer view",
     );
     const afterNavigationSamples = await collectRenderedNotes(session, 14_000);
@@ -1028,21 +310,20 @@ async function main() {
     const preStopFalseWrites = beforeStopProof.trackEnabledWrites.filter((write) =>
       write.value === false && write.at >= (beforeStopProof.trackInitialStates[0]?.at ?? 0));
     assert(beforeStopProof.trackStopCalls.length === 0,
-      `Production stopped the microphone before the explicit Stop input click: ${JSON.stringify(beforeStopProof.trackStopCalls)}`);
+      `Production stopped the microphone before the explicit global Disable click: ${JSON.stringify(beforeStopProof.trackStopCalls)}`);
     assert(preStopFalseWrites.length === 0,
-      `Production disabled the microphone before the explicit Stop input click: ${JSON.stringify(preStopFalseWrites)}`);
+      `Production disabled the microphone before the explicit global Disable click: ${JSON.stringify(preStopFalseWrites)}`);
     const stopArmed = await evaluate(session, `(() => {
       const proofControl = window.__noteforgeNoteInputProof;
-      const button = [...document.querySelectorAll('button')]
-        .find((candidate) => candidate.textContent?.trim() === 'Stop input');
+      const button = document.querySelector('button[data-global-mic-disable]');
       if (!proofControl || !button || button.disabled) return false;
       return proofControl.armStopOnNextSample();
     })()`);
-    assert(stopArmed, "The real enabled Stop input control was unavailable.");
+    assert(stopArmed, "The real enabled global microphone Disable control was unavailable.");
     await waitForBrowser(
       session,
       "document.querySelector('[data-note-input]')?.getAttribute('data-input-state') === 'disabled'",
-      "the explicit Stop input action",
+      "the explicit global microphone Disable action",
       5_000,
     );
     await delay(500);
@@ -1347,10 +628,15 @@ async function main() {
     const missingRenderedRange = EXPECTED_NOTES
       .map(({ label }) => label)
       .filter((label) => !renderedAll.has(label));
-    const quietRenderedSamples = afterNavigationSamples.filter((sample) =>
-      sample.meterDbfs !== null
-        && sample.meterDbfs < OLD_GATE_RMS_DBFS
-        && QUIET_LOW_LABELS.has(sample.note));
+    const diagnosticFrameForRenderedSample = (sample) =>
+      diagnosticByFrame.get(canonicalFrameKey(sample))?.pitch?.frame ?? null;
+    const quietRenderedSamples = afterNavigationSamples.filter((sample) => {
+      const frame = diagnosticFrameForRenderedSample(sample);
+      return QUIET_LOW_LABELS.has(sample.note)
+        && frame?.voiced === true
+        && frame.rms > 0
+        && frame.rms < OLD_GATE_RMS_AMPLITUDE;
+    });
     const quietRenderedLabels = new Set(quietRenderedSamples.map((sample) => sample.note));
     const missingQuietRendered = QUIET_LOW_NOTES
       .map(({ label }) => label)
@@ -1358,12 +644,15 @@ async function main() {
     const quietRenderedTransitions = expectedRenderedTransitions(quietRenderedSamples);
     const weakQuietRuns = QUIET_LOW_NOTES.map(({ label }) => ({
       label,
-      run: longestMatchingRun(afterNavigationSamples, (sample) =>
-        sample.note === label
-          && sample.meterDbfs !== null
-          && sample.meterDbfs < OLD_GATE_RMS_DBFS
+      run: longestMatchingRun(afterNavigationSamples, (sample) => {
+        const frame = diagnosticFrameForRenderedSample(sample);
+        return sample.note === label
+          && frame?.voiced === true
+          && frame.rms > 0
+          && frame.rms < OLD_GATE_RMS_AMPLITUDE
           && sample.inputState === "running"
-          && sample.diagnosis?.endsWith("detected")),
+          && sample.diagnosis?.endsWith("detected");
+      }),
     })).filter(({ run }) => run < 2);
     const renderedContinuityBefore = renderedFrameContinuity(beforeNavigationSamples, "Pitch Mirror");
     const renderedContinuityAfter = renderedFrameContinuity(afterNavigationSamples, "Hum Lab");
@@ -1390,10 +679,20 @@ async function main() {
       }
     }
     const noiseFrames = diagnosticFrames.slice(silenceEndIndex + 3);
-    const browserSilenceRun = longestMatchingRun(afterNavigationSamples, (sample) =>
-      sample.note === null && sample.meterDbfs !== null && sample.meterDbfs <= -90);
-    const browserNoiseRun = longestMatchingRun(afterNavigationSamples, (sample) =>
-      sample.note === null && sample.meterDbfs !== null && sample.meterDbfs >= NOISE_RMS_DBFS - 3);
+    const browserSilenceRun = longestMatchingRun(afterNavigationSamples, (sample) => {
+      const frame = diagnosticFrameForRenderedSample(sample);
+      return sample.note === null
+        && frame?.voiced === false
+        && frame.reason === "below-rms-threshold"
+        && frame.rms === 0;
+    });
+    const browserNoiseRun = longestMatchingRun(afterNavigationSamples, (sample) => {
+      const frame = diagnosticFrameForRenderedSample(sample);
+      return sample.note === null
+        && frame?.voiced === false
+        && frame.rms >= OLD_GATE_RMS_AMPLITUDE
+        && frame.reason !== "below-rms-threshold";
+    });
     const promptStartCounter = lastWorkletSample(promptStartProof);
     const promptEndCounter = lastWorkletSample(promptEndProof);
     const noConsumerStartCounter = lastWorkletSample(noConsumerStartProof);
@@ -1401,6 +700,8 @@ async function main() {
     const workletRequestPaths = [...new Set(settledProof.workletModuleUrls
       .map((url) => new URL(url).pathname)
       .filter((path) => path.includes("pitch-capture-worklet")))];
+    const precachedWorkletPaths = stampedPrecache.filter((path) =>
+      /^\/assets\/pitch-capture-worklet-[A-Za-z0-9_-]+\.js$/u.test(path));
 
     assert(settledProof.instrumentationErrors.length === 0,
       `Browser instrumentation failed: ${JSON.stringify(settledProof.instrumentationErrors)}`);
@@ -1461,6 +762,9 @@ async function main() {
     assert(workletRequestPaths.length === 1
       && /^\/assets\/pitch-capture-worklet-[A-Za-z0-9_-]+\.js$/u.test(workletRequestPaths[0]),
     `The production graph did not request exactly one content-hashed worklet authority: ${JSON.stringify(workletRequestPaths)}.`);
+    assert(precachedWorkletPaths.length === 1
+      && precachedWorkletPaths[0] === workletRequestPaths[0],
+    `The exact AudioWorklet requested by production was not the sole stamped precache authority: requested=${JSON.stringify(workletRequestPaths)}, precached=${JSON.stringify(precachedWorkletPaths)}.`);
     assert(!settledProof.workletModuleUrls.some((url) => new URL(url).pathname === "/worklets/pitch-capture.js"),
       "The browser requested the obsolete stable pitch-worklet path.");
     assert(workletEvents.length === settledProof.workletSampleMessages,
@@ -1470,13 +774,13 @@ async function main() {
     assert(workletSequenceFailures.length === 0,
       `Worklet sample/counter sequence was not continuous: ${JSON.stringify(workletSequenceFailures)}`);
     assert(settledProof.stopButtonMissing === false && settledProof.stopButtonClicks === 1,
-      `The explicit real Stop input click was not observed exactly once: ${JSON.stringify(settledProof)}`);
+      `The explicit real global Disable click was not observed exactly once: ${JSON.stringify(settledProof)}`);
     assert(settledProof.trackStopCalls.length === 1,
-      `Expected exactly one track.stop() after explicit Stop input; saw ${settledProof.trackStopCalls.length}.`);
+      `Expected exactly one track.stop() after explicit global Disable; saw ${settledProof.trackStopCalls.length}.`);
     assert(postStartFalseWrites.length === 0,
       `Production wrote track.enabled=false: ${JSON.stringify(postStartFalseWrites)} (first navigation at ${navigationMark.toFixed(1)}ms).`);
     assert(settledProof.explicitStopSampleMessageCount === settledProof.workletSampleMessages,
-      `A boundary worklet message escaped after explicit Stop: click at ${settledProof.explicitStopSampleMessageCount}, final ${settledProof.workletSampleMessages}.`);
+      `A boundary worklet message escaped after explicit Disable: click at ${settledProof.explicitStopSampleMessageCount}, final ${settledProof.workletSampleMessages}.`);
     assert(flushedDetectorCount === settledProof.workletSampleMessages
       && allFrames.length === settledProof.workletSampleMessages,
     `Independent worklet count ${settledProof.workletSampleMessages} != production detector-frame count ${allFrames.length}.`);
@@ -1491,7 +795,7 @@ async function main() {
     assert(promptStartCounter && promptEndCounter
       && promptEndCounter.processCount > promptStartCounter.processCount
       && promptEndCounter.processedSampleCount > promptStartCounter.processedSampleCount,
-    `Worklet counters did not advance through the active game prompt: ${JSON.stringify({ promptStartCounter, promptEndCounter })}.`);
+    `Worklet counters did not advance through the active pitch trace: ${JSON.stringify({ promptStartCounter, promptEndCounter })}.`);
     assert(noConsumerStartCounter && noConsumerEndCounter
       && noConsumerEndCounter.processCount > noConsumerStartCounter.processCount
       && noConsumerEndCounter.processedSampleCount > noConsumerStartCounter.processedSampleCount,
@@ -1509,15 +813,25 @@ async function main() {
         && rendered.inputState === "running"),
     `A changed note was not rendered on the detector's first exact endSample: ${JSON.stringify(immediateChangeProof)}.`);
     assert(stableOccupancyProgression.length >= 6
-      && stableOccupancyProgression.slice(0, 6).every((observation, index, progression) => {
-        const expectedHeldSamples = index * CAPTURE_HOP_SAMPLES;
-        return observation.heldSamples === expectedHeldSamples
+      && stableOccupancyProgression[0].heldSamples === 0
+      && stableOccupancyProgression[0].heldSeconds === 0
+      && stableOccupancyProgression.some((observation) =>
+        observation.heldSamples >= CAPTURE_HOP_SAMPLES * 5)
+      && stableOccupancyProgression.every((observation, index, progression) => {
+        const heldSamples = observation.heldSamples;
+        const previous = progression[index - 1];
+        return Number.isSafeInteger(heldSamples)
+          && heldSamples >= 0
+          && heldSamples % CAPTURE_HOP_SAMPLES === 0
+          && observation.endSample - progression[0].endSample === heldSamples
           && Number.isFinite(observation.heldSeconds)
-          && Math.abs(observation.heldSeconds - expectedHeldSamples / SAMPLE_RATE) <= 1e-9
-          && (index === 0
-            || observation.endSample - progression[index - 1].endSample === CAPTURE_HOP_SAMPLES);
+          && Math.abs(observation.heldSeconds - heldSamples / SAMPLE_RATE) <= 1e-9
+          && (!previous
+            || (observation.endSample > previous.endSample
+              && heldSamples > previous.heldSamples
+              && (observation.endSample - previous.endSample) % CAPTURE_HOP_SAMPLES === 0));
       }),
-    `Rendered same-note occupancy did not enter at zero and advance by exact hops: ${JSON.stringify(stableOccupancyProgression.slice(0, 8))}.`);
+    `Rendered same-note occupancy did not enter at zero and preserve exact coalesced sample authority: ${JSON.stringify(stableOccupancyProgression.slice(0, 8))}.`);
     assert(occupancyDepartureObservation
       && occupancyDepartureObservation.note === immediateChangeProof[1].label
       && occupancyDepartureObservation.heldSamples === 0
@@ -1589,12 +903,13 @@ async function main() {
     console.log(`  quiet low pass: all ${QUIET_LOW_NOTES.length} notes MIDI ${LOWEST_SUPPORTED_MIDI}-47 detected; measured median ${quietMedianDbfs.toFixed(1)} dBFS (range ${quietDbfs[0].toFixed(1)} to ${quietDbfs.at(-1).toFixed(1)} dBFS), below old ${OLD_GATE_RMS_DBFS} dBFS gate`);
     console.log(`  negative controls: silence unvoiced for ${silenceRun} detector frames; loud seeded broadband noise unvoiced for ${noiseFrames.length}/${noiseFrames.length} frames; rendered note-free runs ${browserSilenceRun} silence samples and ${browserNoiseRun} noise samples`);
     console.log(`  independent accounting: exact ${workletEvents.length}/${allFrames.length} AudioWorklet→detector endSample pairs; hop=${CAPTURE_HOP_SAMPLES} samples`);
+    console.log(`  build identity: requested ${workletRequestPaths[0]} and matched the sole stamped service-worker precache worklet`);
     console.log(`  immediate changes: ${immediateChangeProof.map(({ label, detectorFrame }) => `${label}@${detectorFrame.endSample}`).join(", ")} rendered on each first detector frame`);
-    console.log(`  rendered occupancy: ${occupancyEntryProof.label} ${stableOccupancyProgression.slice(0, 6).map(({ endSample, heldSamples }) => `${endSample}:${heldSamples}`).join(", ")}; departure reset=0; silence cleared`);
+    console.log(`  rendered occupancy: ${occupancyEntryProof.label} entered at ${stableOccupancyProgression[0].endSample}:0, then ${stableOccupancyProgression.slice(1, 6).map(({ endSample, heldSamples }) => `${endSample}:${heldSamples}`).join(", ")} as bounded exact projections; departure reset=0; silence cleared`);
     console.log(`  transport recovery: AudioContext suspended→running; continuity ${recoveryBeforeCounter.continuityEpoch}->${recoveryFirstWindow.continuityEpoch} with discontinuity=true; getUserMedia/track/worklet remained 1/1/1`);
     console.log(`  detector processing: median ${processingMedianMs.toFixed(3)}ms, p95 ${processingP95Ms.toFixed(3)}ms, max ${processingMaximumMs.toFixed(3)}ms; every frame below ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms capture-hop budget`);
     console.log(`  detector continuity: ${beforeFrames.length} mirror, ${noConsumerFrames.length} with no consumer, ${afterFrames.length} hum; maximum gap ${maximumGap}ms (no-consumer ${noConsumerMaximumGap}ms)`);
-    console.log(`  prompt continuity: rendered frames ${promptContinuity.firstCount}->${promptContinuity.lastCount}, time ${promptContinuity.firstTime.toFixed(3)}->${promptContinuity.lastTime.toFixed(3)}s, notes always visible`);
+    console.log(`  active-trace continuity: rendered frames ${promptContinuity.firstCount}->${promptContinuity.lastCount}, time ${promptContinuity.firstTime.toFixed(3)}->${promptContinuity.lastTime.toFixed(3)}s, notes always visible`);
     console.log(`  rendered continuity: mirror ${renderedContinuityBefore.firstCount}->${renderedContinuityBefore.lastCount}, hum ${renderedContinuityAfter.firstCount}->${renderedContinuityAfter.lastCount}; all range notes and all quiet low notes visible`);
     console.log(`  microphone lifecycle: getUserMedia=${settledProof.getUserMediaCalls}, disabled-before-stop=${preStopFalseWrites.length}, stopped-before-click=${beforeStopProof.trackStopCalls.length}, stopped-after-click=${settledProof.trackStopCalls.length}`);
   } catch (error) {

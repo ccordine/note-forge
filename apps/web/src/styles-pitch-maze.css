@@ -5,88 +5,84 @@
   --maze-orange-rgb: 255, 107, 69;
 }
 
-.pitch-maze-setup {
+.pitch-maze-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr);
+  gap: 16px;
+  padding: clamp(18px, 3vw, 34px);
+  border-color: rgba(255, 107, 69, .22);
+  background:
+    radial-gradient(circle at 77% 0, rgba(255, 107, 69, .055), transparent 32%),
+    linear-gradient(90deg, rgba(255, 107, 69, .025) 1px, transparent 1px) 0 0 / 42px 42px,
+    var(--panel);
+}
+
+.pitch-maze-shell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.pitch-maze-shell-header h1 {
+  margin: 7px 0 6px;
+  font-size: clamp(32px, 5vw, 58px);
+  line-height: .95;
+  letter-spacing: -.045em;
+}
+
+.pitch-maze-shell-header p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.pitch-maze-shell-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.pitch-maze-play-layout {
+  display: grid;
+  grid-template-columns: minmax(330px, .85fr) minmax(500px, 1.15fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.pitch-maze-map-stack {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.pitch-maze-setup-panel,
+.pitch-maze-map-panel,
+.pitch-maze-controller-panel {
+  min-width: 0;
+  padding: clamp(15px, 2vw, 23px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(9, 12, 10, .84);
+}
+
+.pitch-maze-setup-panel {
+  display: grid;
   gap: 14px;
 }
 
-.pitch-maze-briefing,
-.pitch-maze-loadout {
-  min-width: 0;
-  padding: clamp(24px, 4vw, 44px);
+.pitch-maze-setup-panel h2 {
+  margin: 6px 0;
+  font-size: 24px;
 }
 
-.pitch-maze-briefing {
-  position: relative;
-  overflow: hidden;
-  background:
-    linear-gradient(90deg, rgba(255, 107, 69, .04) 1px, transparent 1px) 0 0 / 42px 42px,
-    linear-gradient(rgba(255, 107, 69, .04) 1px, transparent 1px) 0 0 / 42px 42px,
-    radial-gradient(circle at 83% 22%, rgba(255, 107, 69, .12), transparent 33%),
-    linear-gradient(145deg, #1d1e19, #111411);
-}
-
-.pitch-maze-briefing::after {
-  position: absolute;
-  right: -13px;
-  bottom: -18px;
-  color: rgba(255, 107, 69, .055);
-  content: "N E S W";
-  font: 900 clamp(54px, 9vw, 118px)/1 var(--mono);
-  letter-spacing: -.12em;
-  pointer-events: none;
-}
-
-.pitch-maze-briefing h1 {
-  max-width: 720px;
-  margin: 12px 0 14px;
-  font-size: clamp(40px, 6vw, 72px);
-  line-height: .94;
-  letter-spacing: -.055em;
-}
-
-.pitch-maze-briefing > p {
-  max-width: 680px;
+.pitch-maze-setup-panel header p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.7;
+  line-height: 1.5;
 }
-
-.pitch-maze-loop-contract {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 28px;
-  position: relative;
-  z-index: 1;
-}
-
-.pitch-maze-loop-contract > div {
-  display: grid;
-  gap: 5px;
-  padding: 14px;
-  border: 1px solid rgba(255, 107, 69, .18);
-  border-radius: 10px;
-  background: rgba(8, 11, 9, .72);
-}
-
-.pitch-maze-loop-contract span {
-  color: var(--maze-orange);
-  font: 800 15px var(--mono);
-}
-
-.pitch-maze-loop-contract b { font-size: 10px; }
-.pitch-maze-loop-contract small { color: var(--dim); font-size: 8px; line-height: 1.45; }
-
-.pitch-maze-loadout {
-  display: grid;
-  align-content: start;
-  gap: 20px;
-}
-
-.pitch-maze-loadout h2 { margin: 6px 0; font-size: 26px; }
-.pitch-maze-loadout > header p { margin: 0; color: var(--muted); line-height: 1.55; }
 
 .pitch-maze-mode-picker {
   display: grid;
@@ -109,7 +105,7 @@
 .pitch-maze-mode-picker label {
   display: grid;
   gap: 6px;
-  padding: 14px;
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: rgba(0, 0, 0, .13);
@@ -141,7 +137,7 @@
 .pitch-maze-setup-summary > div {
   display: grid;
   gap: 4px;
-  padding: 12px;
+  padding: 11px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: #0d100d;
@@ -150,94 +146,10 @@
 .pitch-maze-setup-summary span { color: var(--dim); font: 7px var(--mono); letter-spacing: .08em; }
 .pitch-maze-setup-summary b { color: var(--cream); font: 700 13px var(--mono); }
 
-.pitch-maze-start-note {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  padding: 12px 14px;
-  border: 1px solid rgba(99, 215, 255, .17);
-  border-radius: 10px;
-  color: var(--muted);
-  background: rgba(99, 215, 255, .035);
-  font-size: 9px;
-  line-height: 1.55;
-}
-
-.pitch-maze-start-note svg { flex: 0 0 auto; color: var(--blue); }
-.pitch-maze-start-note b { color: var(--text); }
-
 .pitch-maze-loadout-actions {
   display: grid;
+  grid-template-columns: auto 1fr;
   gap: 8px;
-}
-
-.pitch-maze-loadout-actions small { color: var(--dim); line-height: 1.45; }
-
-.nf-workflow-dialog.pitch-maze-workflow {
-  width: min(1440px, 100%);
-  border-color: rgba(255, 107, 69, .22);
-  background:
-    radial-gradient(circle at 77% 0, rgba(255, 107, 69, .045), transparent 30%),
-    var(--panel);
-}
-
-.pitch-maze-connecting {
-  min-height: 520px;
-  display: grid;
-  place-items: center;
-  text-align: center;
-}
-
-.pitch-maze-connecting > div { display: grid; justify-items: center; gap: 12px; max-width: 520px; }
-.pitch-maze-connecting .pitch-maze-connecting-orb {
-  display: grid;
-  width: 94px;
-  height: 94px;
-  place-items: center;
-  border: 1px solid rgba(255, 107, 69, .48);
-  border-radius: 50%;
-  color: var(--maze-orange);
-  background: rgba(255, 107, 69, .065);
-  box-shadow: 0 0 0 16px rgba(255, 107, 69, .025), 0 0 62px rgba(255, 107, 69, .16);
-  animation: pitch-maze-breathe 1.4s ease-in-out infinite;
-}
-
-.pitch-maze-connecting h2 { margin: 6px 0 0; font-size: clamp(28px, 5vw, 46px); }
-.pitch-maze-connecting p { margin: 0; color: var(--muted); line-height: 1.6; }
-
-.pitch-maze-connection-help {
-  display: grid;
-  width: min(100%, 560px);
-  gap: 7px;
-  margin-top: 10px;
-  padding: 13px;
-  border: 1px solid rgba(99, 215, 255, .26);
-  border-radius: 10px;
-  color: var(--muted);
-  background: rgba(99, 215, 255, .04);
-  text-align: left;
-}
-
-.pitch-maze-connection-help b { color: var(--text); font-size: 10px; }
-.pitch-maze-connection-help span { font-size: 9px; line-height: 1.5; }
-.pitch-maze-connection-help .action-button { justify-self: start; margin-top: 3px; }
-
-.pitch-maze-run-stage { display: grid; gap: 15px; }
-
-.pitch-maze-play-layout {
-  display: grid;
-  grid-template-columns: minmax(330px, .85fr) minmax(500px, 1.15fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.pitch-maze-map-panel,
-.pitch-maze-controller-panel {
-  min-width: 0;
-  padding: clamp(15px, 2vw, 23px);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(9, 12, 10, .8);
 }
 
 .pitch-maze-map-heading,
@@ -256,7 +168,7 @@
 
 .pitch-maze-board-wrap {
   display: grid;
-  min-height: 390px;
+  min-height: 330px;
   padding: 13px;
   place-items: center;
   border: 1px solid rgba(255, 107, 69, .16);
@@ -360,21 +272,23 @@
   border-radius: 10px;
   background: rgba(255, 255, 255, .018);
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
 }
 
+.pitch-maze-direction[aria-label*="play short reference"] { cursor: pointer; }
 .pitch-maze-direction.north { grid-area: 1 / 2; }
 .pitch-maze-direction.west { grid-area: 2 / 1; }
 .pitch-maze-direction.east { grid-area: 2 / 3; }
 .pitch-maze-direction.south { grid-area: 3 / 2; }
-
 .pitch-maze-direction:hover { border-color: rgba(255, 107, 69, .38); color: var(--text); }
+
 .pitch-maze-direction.active {
   border-color: rgba(255, 107, 69, .72);
   color: var(--cream);
   background: rgba(255, 107, 69, .1);
   box-shadow: 0 0 22px rgba(255, 107, 69, .08), inset 0 -2px rgba(255, 107, 69, .7);
 }
+
 .pitch-maze-direction.blocked { border-style: dashed; opacity: .68; }
 .pitch-maze-direction.active.blocked { opacity: 1; }
 .pitch-maze-direction > span { color: var(--maze-orange); font: 800 15px var(--mono); }
@@ -395,7 +309,6 @@
 
 .pitch-maze-compass-center b { font: 700 8px var(--mono); }
 .pitch-maze-compass-center small { color: var(--dim); font: 6px var(--mono); }
-
 .pitch-maze-controller-panel .nf-voice-coach { gap: 10px; }
 .pitch-maze-controller-panel .nf-voice-target { display: none; }
 .pitch-maze-controller-panel .nf-voice-guidance { padding-top: 12px; padding-bottom: 12px; }
@@ -417,7 +330,6 @@
 }
 
 .pitch-maze-command-state b { color: var(--text); }
-.pitch-maze-command-state.releasing { border-color: rgba(99, 215, 255, .3); background: rgba(99, 215, 255, .04); }
 .pitch-maze-command-state.wall { border-color: rgba(255, 107, 69, .42); background: rgba(255, 107, 69, .055); }
 .pitch-maze-command-state.moved { border-color: rgba(216, 255, 62, .35); background: rgba(216, 255, 62, .035); }
 
@@ -439,52 +351,34 @@
 .pitch-maze-run-stats span { color: var(--dim); font: 7px var(--mono); }
 .pitch-maze-run-stats b { font: 700 12px var(--mono); }
 
-.pitch-maze-live-notice {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  border: 1px solid rgba(255, 107, 69, .15);
-  border-radius: 9px;
-  color: var(--muted);
-  background: rgba(255, 107, 69, .025);
-  font-size: 9px;
-}
-
 .pitch-maze-result {
   display: grid;
-  max-width: 1050px;
-  min-height: 610px;
-  margin: 0 auto;
-  align-content: center;
-  gap: 20px;
-  text-align: center;
-}
-
-.pitch-maze-result .nf-workflow-stage__body {
-  display: grid;
-  gap: 20px;
+  gap: 17px;
+  padding: clamp(18px, 3vw, 30px);
+  border: 1px solid rgba(216, 255, 62, .18);
+  border-radius: 14px;
+  background: rgba(9, 12, 10, .84);
   text-align: center;
 }
 
 .pitch-maze-result-mark {
   display: grid;
-  width: 102px;
-  height: 102px;
+  width: 76px;
+  height: 76px;
   margin: 0 auto;
   place-items: center;
   border: 1px solid rgba(216, 255, 62, .55);
   border-radius: 50%;
   color: var(--lime);
   background: rgba(216, 255, 62, .055);
-  box-shadow: 0 0 0 16px rgba(216, 255, 62, .02), 0 0 58px rgba(216, 255, 62, .12);
-  font: 900 27px var(--mono);
+  box-shadow: 0 0 0 12px rgba(216, 255, 62, .02), 0 0 42px rgba(216, 255, 62, .11);
+  font: 900 24px var(--mono);
 }
 
-.pitch-maze-result h2 { margin: 0; font-size: clamp(34px, 6vw, 58px); }
-.pitch-maze-result .nf-workflow-stage__body > p { max-width: 700px; margin: 0 auto; color: var(--muted); line-height: 1.6; }
+.pitch-maze-result h2 { margin: 0; font-size: clamp(28px, 5vw, 48px); }
 
-.pitch-maze-result-grid {
+.pitch-maze-result-grid,
+.pitch-maze-move-proof {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
@@ -499,17 +393,12 @@
   background: rgba(0, 0, 0, .16);
 }
 
-.pitch-maze-result-grid span { color: var(--dim); font: 7px var(--mono); letter-spacing: .08em; }
+.pitch-maze-result-grid span,
+.pitch-maze-move-proof span { color: var(--dim); font: 7px var(--mono); letter-spacing: .08em; }
 .pitch-maze-result-grid strong { color: var(--cream); font: 700 clamp(17px, 3vw, 25px) var(--mono); }
 .pitch-maze-result-grid small { color: var(--dim); font-size: 7px; }
 
-.pitch-maze-move-proof {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 7px;
-  text-align: left;
-}
-
+.pitch-maze-move-proof { text-align: left; }
 .pitch-maze-move-proof > div {
   display: grid;
   gap: 3px;
@@ -517,8 +406,6 @@
   border-left: 2px solid rgba(255, 107, 69, .45);
   background: rgba(255, 107, 69, .025);
 }
-
-.pitch-maze-move-proof span { color: var(--dim); font: 7px var(--mono); }
 .pitch-maze-move-proof b { font: 700 10px var(--mono); }
 
 .pitch-maze-result-actions {
@@ -528,20 +415,16 @@
   gap: 8px;
 }
 
-@keyframes pitch-maze-breathe {
-  50% { transform: scale(1.06); box-shadow: 0 0 0 23px rgba(255, 107, 69, .035), 0 0 82px rgba(255, 107, 69, .22); }
-}
-
 @media (max-width: 1050px) {
-  .pitch-maze-setup,
   .pitch-maze-play-layout { grid-template-columns: 1fr; }
-  .pitch-maze-board-wrap { min-height: 330px; }
+  .pitch-maze-board-wrap { min-height: 300px; }
   .pitch-maze-board { width: min(100%, 430px); }
 }
 
 @media (max-width: 700px) {
-  .pitch-maze-loop-contract { grid-template-columns: 1fr 1fr; }
-  .pitch-maze-board-wrap { min-height: 280px; }
+  .pitch-maze-shell-header { display: grid; }
+  .pitch-maze-shell-actions { justify-content: flex-start; }
+  .pitch-maze-board-wrap { min-height: 260px; }
   .pitch-maze-run-stats { grid-template-columns: repeat(2, 1fr); }
   .pitch-maze-run-stats > div:last-child { grid-column: 1 / -1; }
   .pitch-maze-result-grid,
@@ -552,13 +435,13 @@
 
 @media (max-width: 430px) {
   .pitch-maze-mode-picker,
-  .pitch-maze-setup-summary { grid-template-columns: 1fr; }
+  .pitch-maze-setup-summary,
+  .pitch-maze-loadout-actions { grid-template-columns: 1fr; }
   .pitch-maze-compass { gap: 4px; }
   .pitch-maze-direction { min-height: 66px; padding: 6px; }
   .pitch-maze-direction > strong { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pitch-maze-connecting-orb,
-  .pitch-maze-player { animation: none; transition: none; }
+  .pitch-maze-player { transition: none; }
 }

@@ -115,6 +115,7 @@ describe("pitch diagnostic transport contract", () => {
       "range-loop",
       "voice-arcade",
       "pitch-mirror",
+      "pitch-tunnel",
       "hum-lab",
       "pitch-control",
     ]);
@@ -189,7 +190,7 @@ describe("pitch diagnostic transport contract", () => {
 
     const batch = batchFrom(calls[0]!);
     expect(batch).toMatchObject({
-      version: 2,
+      version: 3,
       sessionId: "contract-max-events",
       sequence: 0,
       flow: "range-simulator",
@@ -332,6 +333,8 @@ describe("pitch diagnostic transport contract", () => {
       centsFromNearest: 0.043821,
       rms: 0.0812345678,
       confidence: 0.987654,
+      brightness: 0.284765,
+      brightnessConfidence: 0.93456,
       voiced: true,
       detector: "yin",
       periodSamples: 366.928123,
@@ -395,6 +398,8 @@ describe("pitch diagnostic transport contract", () => {
 
     expect(event.pitch.processingMs).toBe(2.375);
     expect(Object.keys(event.pitch.frame).sort()).toEqual([
+      "brightness",
+      "brightnessConfidence",
       "captureEpoch",
       "centsFromNearest",
       "confidence",
@@ -432,6 +437,8 @@ describe("pitch diagnostic transport contract", () => {
       centsFromNearest: 0.0438,
       rms: 0.081235,
       confidence: 0.9877,
+      brightness: 0.28477,
+      brightnessConfidence: 0.9346,
       periodicity: 0.9877,
       yinValue: 0.01235,
       periodSamples: 366.9281,
@@ -465,6 +472,8 @@ describe("pitch diagnostic transport contract", () => {
       centsFromNearest: 0,
       rms: 0.1,
       confidence: 0.98,
+      brightness: 0.25,
+      brightnessConfidence: 0.9,
       yinValue: 0.02,
       periodSamples: 109.09,
       reason: "detected",
@@ -486,6 +495,8 @@ describe("pitch diagnostic transport contract", () => {
       midiFloat: null,
       nearestMidi: null,
       centsFromNearest: null,
+      brightness: null,
+      brightnessConfidence: 0,
       reason: "below-confidence-threshold",
     })).toMatchObject({
       observationKind: "uncertain",

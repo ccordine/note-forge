@@ -10,8 +10,8 @@ import {
 } from "../apps/web/src/features/voice-arcade/resonance-scoring";
 import {
   createResonanceGame,
-  type ResonanceGameState,
-} from "../apps/web/src/features/voice-arcade/resonance-physics";
+} from "../apps/web/src/features/voice-arcade/resonance-world";
+import type { ResonanceGameState } from "../apps/web/src/features/voice-arcade/resonance-types";
 
 function chamber(): ResonanceGameState {
   return createResonanceGame(generateResonanceLevel({
@@ -36,7 +36,7 @@ describe("Resonance grading invariants", () => {
 
     const stats = createResonanceRunStats(game);
     stats.pathDistance = authored;
-    stats.effectiveIntensityIntegral = 8;
+    stats.fieldEnergyIntegral = 8;
     stats.coherentDriveIntegral = 8;
     stats.tunedEnergyIntegral = 8;
     const result = summarizeResonanceRun({ ...game, elapsedSeconds: 20 }, stats);
@@ -51,7 +51,7 @@ describe("Resonance grading invariants", () => {
     const game = chamber();
     const stats = createResonanceRunStats(game);
     stats.pathDistance = authoredResonanceRouteDistance(game);
-    stats.effectiveIntensityIntegral = 12;
+    stats.fieldEnergyIntegral = 12;
     stats.coherentDriveIntegral = 9;
     stats.tunedEnergyIntegral = 6;
     const result = summarizeResonanceRun({ ...game, elapsedSeconds: 50 }, stats);

@@ -14,8 +14,7 @@
 }
 
 .hum-config .randomize-button:disabled,
-.hum-config select:disabled,
-.hum-shapes button:disabled {
+.hum-config select:disabled {
   cursor: not-allowed;
   opacity: .42;
 }
@@ -61,7 +60,7 @@
   transition: border-color .18s ease, background .18s ease, transform .18s ease;
 }
 
-.hum-shapes button:hover:not(:disabled) {
+.hum-shapes button:hover {
   border-color: var(--line-strong);
   transform: translateY(-1px);
 }
@@ -115,27 +114,6 @@
   color: var(--muted);
   font-size: 8px;
   line-height: 1.55;
-}
-
-.hum-lab-page .headphone-note {
-  display: flex;
-  gap: 10px;
-  margin-top: 13px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-  color: var(--blue);
-}
-
-.hum-lab-page .headphone-note span {
-  color: var(--muted);
-  font-size: 8px;
-  line-height: 1.45;
-}
-
-.hum-lab-page .headphone-note b {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--text);
 }
 
 .hum-stage {
@@ -255,8 +233,6 @@
   font: 25px var(--mono);
 }
 
-.hum-stage-copy > strong.in-band { color: var(--lime); }
-
 .hum-stage-copy > small {
   color: var(--dim);
   font: 7px var(--mono);
@@ -271,31 +247,6 @@
 .hum-results { margin-top: 13px; }
 
 .hum-guidance > p { min-height: 76px; }
-
-.hum-score-key {
-  display: flex;
-  gap: 10px;
-  padding: 13px 0;
-  border-top: 1px solid var(--line);
-}
-
-.hum-score-key span {
-  color: var(--dim);
-  font: 6px var(--mono);
-  text-transform: uppercase;
-}
-
-.hum-score-key i {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 4px;
-  border-radius: 50%;
-}
-
-.hum-score-key .pitch { background: var(--lime); }
-.hum-score-key .continuity { background: var(--blue); }
-.hum-score-key .signal { background: var(--violet); }
 
 @keyframes hum-drift {
   0% { opacity: 0; transform: translateX(-5px); }
@@ -332,7 +283,6 @@
   .hum-target-row { grid-template-columns: 1fr; text-align: center; }
   .hum-stage-copy { padding: 9px 0 4px; border-top: 1px solid var(--line); border-left: 0; }
   .hum-shapes button { height: 70px; }
-  .hum-score-key { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

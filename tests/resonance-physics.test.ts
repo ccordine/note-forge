@@ -1,19 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import { generateResonanceLevel } from "../apps/web/src/features/voice-arcade/resonance-level";
+import { sampleResonanceField } from "../apps/web/src/features/voice-arcade/resonance-field";
 import {
-  RESONANCE_MINIMUM_CONFIDENCE,
   advanceResonanceGame,
   computeResonanceForce,
-  createResonanceGame,
+} from "../apps/web/src/features/voice-arcade/resonance-physics";
+import {
   evaluateResonanceVoice,
   evaluateResonatorActivation,
   normalizeResonanceIntensity,
-  sampleResonanceField,
-  type ResonanceGameState,
-  type ResonanceLevelDefinition,
-  type ResonanceVoiceInput,
-} from "../apps/web/src/features/voice-arcade/resonance-physics";
+} from "../apps/web/src/features/voice-arcade/resonance-voice";
+import type {
+  ResonanceGameState,
+  ResonanceLevelDefinition,
+  ResonanceVoiceInput,
+} from "../apps/web/src/features/voice-arcade/resonance-types";
+import { createResonanceGame } from "../apps/web/src/features/voice-arcade/resonance-world";
 
 const TARGET_MIDI = 60;
 
@@ -100,7 +103,7 @@ describe("Resonance voice-to-force evidence", () => {
     }
   });
 
-  it("accepts either interpreted MIDI or F0, but not unreliable evidence", () => {
+  it("accepts either interpreted MIDI or F0 without adding a confidence gate", () => {
     const fromFrequency = evaluateResonanceVoice(voice(null, {
       voiced: true,
       frequencyHz: 261.625565,
@@ -108,14 +111,11 @@ describe("Resonance voice-to-force evidence", () => {
     expect(fromFrequency.active).toBe(true);
     expect(fromFrequency.midiFloat).toBeCloseTo(60, 5);
 
-    const threshold = evaluateResonanceVoice(voice(60, {
-      confidence: RESONANCE_MINIMUM_CONFIDENCE,
+    const lowConfidenceTelemetry = evaluateResonanceVoice(voice(60, {
+      confidence: 0.01,
     }));
-    expect(threshold.active).toBe(true);
-    expect(threshold.directEnergy).toBeGreaterThan(0);
-    expect(evaluateResonanceVoice(voice(60, {
-      confidence: RESONANCE_MINIMUM_CONFIDENCE - 0.001,
-    })).active).toBe(false);
+    expect(lowConfidenceTelemetry.active).toBe(true);
+    expect(lowConfidenceTelemetry.directEnergy).toBeGreaterThan(0);
     expect(evaluateResonanceVoice(voice(60, { voiced: false })).directEnergy).toBe(0);
     expect(evaluateResonanceVoice(voice(Number.NaN)).active).toBe(false);
   });

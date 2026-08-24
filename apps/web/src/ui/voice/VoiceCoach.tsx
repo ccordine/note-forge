@@ -1,5 +1,4 @@
 import type { CSSProperties } from "react";
-import type { InputTelemetry } from "@/audio/use-audio-input";
 import { noteLabel, signed } from "@/lib/music-display";
 import { pitchDiagnosticSessionId, PITCH_DIAGNOSTICS_ENABLED } from "@/diagnostics/pitch-diagnostics";
 import { createVoiceCoachView, type VoiceCoachViewInput } from "./view";
@@ -8,15 +7,25 @@ export { createVoiceCoachView } from "./view";
 export type { VoiceCoachHold, VoiceCoachPhase, VoiceCoachView } from "./view";
 
 export interface VoiceCoachProps extends VoiceCoachViewInput {
-  telemetry: InputTelemetry | null;
   title?: string;
   diagnosticsFlow?: string;
   feedbackLevel?: "full" | "reduced" | "gameplay";
   guidanceLive?: boolean;
+  /** Occupancy reports continuous target time without presenting it as a gate. */
+  holdMode?: "goal" | "occupancy";
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function detectorStatusLabel(inputState: VoiceCoachProps["inputState"]): string {
+  switch (inputState) {
+    case "disabled": return "MICROPHONE OFF";
+    case "opening": return "OPENING MICROPHONE";
+    case "error": return "MICROPHONE ERROR";
+    case "running": return "LIVE DETECTOR";
+  }
 }
 
 export function VoiceCoach(props: VoiceCoachProps) {
@@ -25,39 +34,43 @@ export function VoiceCoach(props: VoiceCoachProps) {
     toleranceCents,
     inputState,
     frame,
-    telemetry,
     hold,
     title = "Voice controller",
     diagnosticsFlow,
     feedbackLevel = "full",
     guidanceLive = true,
+    holdMode = "goal",
   } = props;
   const view = createVoiceCoachView(props);
   const inputRunning = inputState === "running";
   const evidenceFrame = inputRunning ? frame : undefined;
-  const evidenceTelemetry = inputRunning ? telemetry : null;
-  const detectorLabel = inputState === "disabled"
-    ? "MICROPHONE OFF"
-    : inputState === "opening"
-      ? "OPENING MICROPHONE"
-      : inputState === "error"
-        ? "MICROPHONE ERROR"
-        : "LIVE DETECTOR";
+  const detectorLabel = detectorStatusLabel(inputState);
   const clampedError = view.errorCents === null ? 0 : clamp(view.errorCents, -100, 100);
   const toleranceWidth = clamp(toleranceCents, 0, 100);
   const holdProgress = hold.requiredSeconds <= 0
     ? 0
     : clamp(hold.heldSeconds / hold.requiredSeconds, 0, 1);
-  const levelPercent = evidenceTelemetry === null
-    ? 0
-    : clamp((evidenceTelemetry.rmsDbfs + 96) / 96 * 100, 0, 100);
   const style = {
     "--nf-voice-position": `${50 + clampedError / 2}%`,
     "--nf-voice-tolerance-left": `${50 - toleranceWidth / 2}%`,
     "--nf-voice-tolerance-width": `${toleranceWidth}%`,
     "--nf-voice-hold": `${holdProgress * 100}%`,
-    "--nf-voice-level": `${levelPercent}%`,
   } as CSSProperties;
+  let readoutDetail = view.guidanceDetail;
+  if (inputRunning) {
+    readoutDetail = feedbackLevel === "full" ? view.frequencyLabel : "current PCM result";
+  }
+  let laneState = "waiting";
+  if (view.errorCents !== null) laneState = view.inBand ? "locked" : "searching";
+  let correctionDetail = "current window unvoiced";
+  if (view.errorCents !== null && view.inBand) correctionDetail = "inside target";
+  else if (view.errorCents !== null && view.errorCents < 0) correctionDetail = "move up ↑";
+  else if (view.errorCents !== null) correctionDetail = "move down ↓";
+  let gameplayState = "listening";
+  if (view.errorCents !== null) gameplayState = view.inBand ? "voice locked" : "keep steering";
+  const gameplayDetail = inputRunning
+    ? `${view.frequencyLabel} · ${gameplayState}. Exact correction remains an exercise-level choice.`
+    : view.guidanceDetail;
 
   return (
     <section
@@ -65,8 +78,10 @@ export function VoiceCoach(props: VoiceCoachProps) {
       style={style}
       aria-label={title}
       data-note-input
+      data-input-state={inputState}
       data-detected-note={evidenceFrame?.voiced && evidenceFrame.nearestMidi !== null ? noteLabel(evidenceFrame.nearestMidi) : ""}
       data-frame-time={evidenceFrame?.timeSeconds ?? ""}
+      data-held-seconds={hold.heldSeconds}
     >
       <div className="nf-voice-target">
         <span>CURRENT TARGET</span>
@@ -84,18 +99,28 @@ export function VoiceCoach(props: VoiceCoachProps) {
         <div className="nf-voice-readout">
           <span>{detectorLabel}</span>
           <strong>{view.measuredNote}</strong>
-          <small>{inputRunning ? feedbackLevel === "full" ? view.frequencyLabel : "current PCM result" : view.guidanceDetail}</small>
+          <small>{readoutDetail}</small>
         </div>
-        <div className={`nf-voice-lane ${view.errorCents === null ? "waiting" : view.inBand ? "locked" : "searching"}`} role={view.errorCents === null ? "status" : "meter"} aria-label={`Live pitch position relative to ${noteLabel(targetMidi)}`} aria-valuemin={view.errorCents === null ? undefined : -100} aria-valuemax={view.errorCents === null ? undefined : 100} aria-valuenow={view.errorCents === null ? undefined : Math.round(clampedError)} aria-valuetext={view.errorCents === null ? "No periodic pitch in current window" : `${signed(view.errorCents, 0)} cents from target`}>
+        <div
+          className={`nf-voice-lane ${laneState}`}
+          role={view.errorCents === null ? "status" : "meter"}
+          aria-label={`Live pitch position relative to ${noteLabel(targetMidi)}`}
+          aria-valuemin={view.errorCents === null ? undefined : -100}
+          aria-valuemax={view.errorCents === null ? undefined : 100}
+          aria-valuenow={view.errorCents === null ? undefined : Math.round(clampedError)}
+          aria-valuetext={view.errorCents === null ? "No periodic pitch in current window" : `${signed(view.errorCents, 0)} cents from target`}
+        >
           <span className="nf-voice-tolerance" />
           <i className="nf-voice-center" />
           {view.errorCents !== null && <b className="nf-voice-needle"><em /></b>}
-          <div className="nf-voice-ticks">{[-100, -50, 0, 50, 100].map((tick) => <i key={tick}><span>{tick > 0 ? `+${tick}` : tick}</span></i>)}</div>
+          <div className="nf-voice-ticks">
+            {[-100, -50, 0, 50, 100].map((tick) => <i key={tick}><span>{tick > 0 ? `+${tick}` : tick}</span></i>)}
+          </div>
         </div>
         <div className="nf-voice-error">
           <span>OFFSET</span>
           <strong>{view.errorCents === null ? "—" : `${signed(view.errorCents, 0)}¢`}</strong>
-          <small>{view.errorCents === null ? "current window unvoiced" : view.inBand ? "inside target" : view.errorCents < 0 ? "move up ↑" : "move down ↓"}</small>
+          <small>{correctionDetail}</small>
         </div>
         <div className="nf-voice-scale"><span>FLAT</span><b>±{toleranceCents}¢ TARGET</b><span>SHARP</span></div>
       </div>}
@@ -104,23 +129,17 @@ export function VoiceCoach(props: VoiceCoachProps) {
         <div className={`nf-voice-gameplay-feedback ${view.guidanceTone}`} role="status" aria-live="polite">
           <span>{inputRunning ? "LIVE NOTE · DIRECT PCM RESULT" : detectorLabel}</span>
           <strong>{view.measuredNote}</strong>
-          <small>{inputRunning ? `${view.frequencyLabel} · ${view.errorCents === null ? "listening" : view.inBand ? "voice locked" : "keep steering"}. Exact correction remains an exercise-level choice.` : view.guidanceDetail}</small>
+          <small>{gameplayDetail}</small>
         </div>
       )}
 
-      <div className={`nf-voice-hold ${hold.status}`}>
+      <div className={`nf-voice-hold ${hold.status} mode-${holdMode}`}>
         <div className="nf-voice-hold__heading">
-          <span>EXERCISE HOLD</span>
-          <strong>{hold.heldSeconds.toFixed(1)}<small> / {hold.requiredSeconds.toFixed(1)} sec</small></strong>
-          <b>{Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining</b>
+          <span>{holdMode === "occupancy" ? "TARGET OCCUPANCY" : "EXERCISE HOLD"}</span>
+          <strong>{hold.heldSeconds.toFixed(1)}<small>{holdMode === "occupancy" ? " sec in lane" : ` / ${hold.requiredSeconds.toFixed(1)} sec`}</small></strong>
+          <b>{holdMode === "occupancy" ? "CONTINUOUS SAMPLE TIME" : `${Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining`}</b>
         </div>
         <div className="nf-voice-hold__track" role="progressbar" aria-label="Exercise in-tune hold" aria-valuemin={0} aria-valuemax={hold.requiredSeconds} aria-valuenow={hold.heldSeconds}><span /></div>
-        <div className="nf-voice-input-level">
-          <span>MIC LEVEL · DIAGNOSTIC ONLY</span>
-          <div role="meter" aria-label="Microphone input level" aria-valuemin={-96} aria-valuemax={0} aria-valuenow={evidenceTelemetry ? Math.round(clamp(evidenceTelemetry.rmsDbfs, -96, 0)) : -96}><i /></div>
-          <b>{evidenceTelemetry ? `${evidenceTelemetry.rmsDbfs.toFixed(0)} dBFS` : inputState === "disabled" ? "off" : "waiting"}</b>
-          <small>{evidenceFrame ? `${Math.round(evidenceFrame.confidence * 100)}% CONFIDENCE · LEVEL NEVER GATES PITCH` : detectorLabel}</small>
-        </div>
       </div>
 
       <details className="nf-voice-diagnostics">

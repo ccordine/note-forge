@@ -1,21 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getSetting, saveAttempt, setSetting } from "@/storage/database";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import "../../styles-arcade.css";
+import "../../styles-arcade-previews.css";
+import "../../styles-arcade-game.css";
+import "../../styles-arcade-result.css";
+import "../../styles-arcade-responsive.css";
+import "../../styles-arcade-compact.css";
+import { saveAttempt } from "@/storage/database";
+import { SettingsPersistence } from "@/storage/settings-persistence";
 import { noteLabel } from "@/lib/music-display";
+import { useAppNavigation } from "@/routing/use-app-navigation";
 import {
   VOCAL_PROFILE_STORAGE_KEY,
-  cleanStableBounds,
   normalizeRangeProfile,
-  pitchStableBounds,
+  usableRangeBounds,
   type PersonalRangeProfile,
 } from "@/features/range-loop/profile";
-import { ActionButton, Eyebrow, Panel, Select } from "@/ui/Controls";
+import { Eyebrow, Panel, RouteLink, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
-import { PatternChallenge } from "./PatternChallenge";
-import { PitchMaze } from "./PitchMaze";
-import { PitchPong } from "./PitchPong";
-import { Resonance } from "./Resonance";
-import { SongRide } from "./SongRide";
-import { VoiceDraw } from "./VoiceDraw";
+import {
+  ARCADE_GAME_DEFINITIONS,
+  ARCADE_FEATURED_GAME,
+  ARCADE_MODE_ORDER,
+} from "./arcade-registry";
 import {
   ARCADE_PROGRESS_STORAGE_KEY,
   DEFAULT_ARCADE_PROGRESS,
@@ -25,16 +39,6 @@ import {
   recommendArcadeStage,
   type ArcadeProgress,
 } from "./arcade-progress";
-import {
-  DEFAULT_RESONANCE_TUTORIAL_PROGRESS,
-  RESONANCE_TUTORIAL_PROGRESS_STORAGE_KEY,
-  completedResonanceTutorialLessonCount,
-  normalizeResonanceTutorialProgress,
-  recordResonanceTutorialAttempt,
-  resonanceCombinedChambersUnlocked,
-  type ResonanceTutorialAttempt,
-  type ResonanceTutorialProgress,
-} from "./resonance-tutorial-progress";
 import {
   ARCADE_CURRICULUM_STAGES,
   ARCADE_CURRICULUM_STAGE_COPY,
@@ -58,82 +62,35 @@ const DIFFICULTY_COPY: Record<ArcadeDifficultyId, { label: string; detail: strin
 
 const ARCADE_STAGE_STORAGE_KEY = "voice.arcade.curriculum-stage";
 const ARCADE_DIFFICULTY_STORAGE_KEY = "voice.arcade.difficulty";
+type ArcadeStorageKey =
+  | typeof VOCAL_PROFILE_STORAGE_KEY
+  | typeof ARCADE_PROGRESS_STORAGE_KEY
+  | typeof ARCADE_STAGE_STORAGE_KEY
+  | typeof ARCADE_DIFFICULTY_STORAGE_KEY;
 
-const MODE_COPY: Record<ArcadeMode, {
-  number: string;
-  title: string;
-  kicker: string;
-  description: string;
-  skills: string[];
-  accent: string;
-  button: string;
-}> = {
-  pattern: {
-    number: "03",
-    title: "Echo Run",
-    kicker: "SIMON × NOTE HIGHWAY",
-    description: "Hear a pitch pattern, then drive through the same notes on time. Accuracy, clean transitions, memory, and sustain all feed the combo.",
-    skills: ["pitch matching", "interval motion", "rhythm", "memory"],
-    accent: "lime",
-    button: "Enter the note highway",
-  },
-  pong: {
-    number: "01",
-    title: "Pitch Pong",
-    kicker: "CONTINUOUS VOICE CONTROL",
-    description: "Your sung pitch is the paddle. Glide upward and downward, intercept the ball, and learn to place pitch continuously instead of guessing isolated notes.",
-    skills: ["glides", "range navigation", "reaction", "stability"],
-    accent: "blue",
-    button: "Take the paddle",
-  },
-  song: {
-    number: "04",
-    title: "Song Rail",
-    kicker: "LOCAL MP3 × TARGET LANES",
-    description: "Load a local track. NoteForge builds a playable target chart from local pitch and energy cues, fits it to your range, and scores your voice against moving note lanes.",
-    skills: ["phrasing", "song context", "timing", "range transfer"],
-    accent: "violet",
-    button: "Build a song challenge",
-  },
-  maze: {
-    number: "02",
-    title: "Pitch Maze",
-    kicker: "FOUR NOTES × CARDINAL CONTROL",
-    description: "Four notes become north, east, south, and west. Sustain the note for the direction you want, release to re-arm, and navigate generated mazes that grow with you.",
-    skills: ["note recall", "pitch fluency", "sustain", "navigation"],
-    accent: "orange",
-    button: "Enter the pitch maze",
-  },
-  resonance: {
-    number: "05",
-    title: "Resonance",
-    kicker: "VOICE FIELD × PHYSICS PUZZLES",
-    description: "Shape a local acoustic field with stable pitch and normalized voice energy. Guide a ball through resonators, walls, and goals without brute-force volume.",
-    skills: ["resonance", "steady force", "pitch discovery", "field control"],
-    accent: "amber",
-    button: "Enter Resonance Field School",
-  },
-  draw: {
-    number: "06",
-    title: "Vocal Canvas",
-    kicker: "EIGHT NOTES × SPATIAL CONTROL",
-    description: "Eight neighboring notes steer a live drawing cursor in eight directions. Sing to move, use silence to stop, and turn pitch transitions into lines, shapes, and pictures.",
-    skills: ["note fluency", "spatial control", "transitions", "motor planning"],
-    accent: "pink",
-    button: "Draw with your voice",
-  },
-};
+type ArcadeProgressAction =
+  | Readonly<{ type: "hydrate"; value: ArcadeProgress }>
+  | Readonly<{ type: "record"; outcome: ArcadeOutcome; completedAt: string }>;
 
-const ARCADE_MODE_ORDER = ["pong", "maze", "pattern", "song", "resonance", "draw"] as const satisfies readonly ArcadeMode[];
+function reduceArcadeProgress(
+  state: Readonly<ArcadeProgress>,
+  action: ArcadeProgressAction,
+): ArcadeProgress {
+  switch (action.type) {
+    case "hydrate":
+      return action.value;
+    case "record":
+      return applyArcadeOutcome(state, action.outcome, action.completedAt);
+  }
+}
 
 function rangeFromProfile(profile: Readonly<PersonalRangeProfile>): ArcadeVoiceRange {
-  const clean = cleanStableBounds(profile);
-  const measured = pitchStableBounds(profile);
+  const measured = usableRangeBounds(profile);
   // Until the range mapper has real evidence, keep the arcade inside the
   // provisional A2-E3 neighborhood around the default C3 home note. Games can
   // widen automatically once the singer's own map supplies measured bounds.
-  let lowMidi = clean.lowMidi ?? measured.lowMidi ?? Math.max(36, profile.baseline.midi - 3);
-  let highMidi = clean.highMidi ?? measured.highMidi ?? Math.min(83, profile.baseline.midi + 4);
+  let lowMidi = measured.lowMidi ?? Math.max(36, profile.baseline.midi - 3);
+  let highMidi = measured.highMidi ?? Math.min(83, profile.baseline.midi + 4);
   lowMidi = Math.min(lowMidi, profile.baseline.midi);
   highMidi = Math.max(highMidi, profile.baseline.midi);
   // The shared loadout guarantees Maze's four distinct notes. Eight-note
@@ -155,101 +112,76 @@ function normalizeDifficulty(value: unknown): ArcadeDifficultyId {
   return value === "easy" || value === "medium" || value === "hard" ? value : "medium";
 }
 
+function curriculumFeedbackLabel(level: "full" | "reduced" | "gameplay"): string {
+  if (level === "full") return "FULL TUNER + LABELS";
+  if (level === "reduced") return "DIRECTIONAL CORRECTION";
+  return "GAME-FIRST FEEDBACK";
+}
+
 export function VoiceArcade() {
-  const [mode, setMode] = useState<ArcadeMode | null>(null);
+  const { route, navigate } = useAppNavigation();
+  const mode: ArcadeMode | null = route.surface === "arcade" && route.activity !== "cabinet" ? route.activity : null;
   const [difficulty, setDifficulty] = useState<ArcadeDifficultyId>("medium");
   const [curriculumStage, setCurriculumStage] = useState<ArcadeCurriculumStage>("deliberate");
   const [voiceRange, setVoiceRange] = useState<ArcadeVoiceRange>({ lowMidi: 43, highMidi: 55, baselineMidi: 48 });
-  const [progress, setProgress] = useState<ArcadeProgress>(DEFAULT_ARCADE_PROGRESS);
-  const [resonanceTutorialProgress, setResonanceTutorialProgress] = useState<ResonanceTutorialProgress>(DEFAULT_RESONANCE_TUTORIAL_PROGRESS);
+  const [progress, dispatchProgress] = useReducer(reduceArcadeProgress, DEFAULT_ARCADE_PROGRESS);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState("Loading your local voice profile…");
   const [storageWarning, setStorageWarning] = useState("");
   const returnFocusModeRef = useRef<ArcadeMode | null>(null);
-  const progressRef = useRef<ArcadeProgress>(DEFAULT_ARCADE_PROGRESS);
-  const tutorialProgressRef = useRef<ResonanceTutorialProgress>(DEFAULT_RESONANCE_TUTORIAL_PROGRESS);
-  const progressWriteChainRef = useRef<Promise<void>>(Promise.resolve());
-  const tutorialWriteChainRef = useRef<Promise<void>>(Promise.resolve());
-  const storageAuthorityRef = useRef({
-    progress: false,
-    tutorial: false,
-    stage: false,
-    difficulty: false,
-  });
+  const persistenceRef = useRef<SettingsPersistence<ArcadeStorageKey> | null>(null);
+  if (persistenceRef.current === null) {
+    persistenceRef.current = new SettingsPersistence([
+      VOCAL_PROFILE_STORAGE_KEY,
+      ARCADE_PROGRESS_STORAGE_KEY,
+      ARCADE_STAGE_STORAGE_KEY,
+      ARCADE_DIFFICULTY_STORAGE_KEY,
+    ]);
+  }
+  const persistence = persistenceRef.current;
   const reportStorageFailure = useCallback((operation: string) => {
     setStorageWarning(`Local storage failed while ${operation}. Progress shown in this visit may not be saved.`);
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void Promise.allSettled([
-      getSetting<PersonalRangeProfile>(VOCAL_PROFILE_STORAGE_KEY),
-      getSetting<ArcadeProgress>(ARCADE_PROGRESS_STORAGE_KEY),
-      getSetting<ResonanceTutorialProgress>(RESONANCE_TUTORIAL_PROGRESS_STORAGE_KEY),
-      getSetting<ArcadeCurriculumStage>(ARCADE_STAGE_STORAGE_KEY),
-      getSetting<ArcadeDifficultyId>(ARCADE_DIFFICULTY_STORAGE_KEY),
-    ]).then(([profileResult, progressResult, resonanceTutorialResult, stageResult, difficultyResult]) => {
-      if (cancelled) return;
-      storageAuthorityRef.current = {
-        progress: progressResult.status === "fulfilled",
-        tutorial: resonanceTutorialResult.status === "fulfilled",
-        stage: stageResult.status === "fulfilled",
-        difficulty: difficultyResult.status === "fulfilled",
-      };
-      const rejectedReads = [profileResult, progressResult, resonanceTutorialResult, stageResult, difficultyResult]
-        .filter((result) => result.status === "rejected").length;
+    void persistence.load().then((stored) => {
+      if (!stored) return;
+      const rejectedReads = 4 - stored.readableKeys.size;
       if (rejectedReads > 0) {
         setStorageWarning(`${rejectedReads} local record${rejectedReads === 1 ? "" : "s"} could not be read. Unread progress will not be overwritten during this visit.`);
       }
-      const profile = normalizeRangeProfile(profileResult.status === "fulfilled" ? profileResult.value : undefined);
-      const storedProgress = progressResult.status === "fulfilled" ? progressResult.value : undefined;
-      const normalizedProgress = normalizeArcadeProgress(storedProgress);
-      const normalizedResonanceTutorial = normalizeResonanceTutorialProgress(
-        resonanceTutorialResult.status === "fulfilled" ? resonanceTutorialResult.value : undefined,
-      );
+      const profile = normalizeRangeProfile(stored.values[VOCAL_PROFILE_STORAGE_KEY]);
+      const normalizedProgress = normalizeArcadeProgress(stored.values[ARCADE_PROGRESS_STORAGE_KEY]);
       setVoiceRange(rangeFromProfile(profile));
-      progressRef.current = normalizedProgress;
-      tutorialProgressRef.current = normalizedResonanceTutorial;
-      setProgress(normalizedProgress);
-      setResonanceTutorialProgress(normalizedResonanceTutorial);
+      dispatchProgress({ type: "hydrate", value: normalizedProgress });
       try {
-        setCurriculumStage(getArcadeCurriculumStage(stageResult.status === "fulfilled" ? stageResult.value : undefined));
+        setCurriculumStage(getArcadeCurriculumStage(stored.values[ARCADE_STAGE_STORAGE_KEY]));
       } catch {
         setCurriculumStage("deliberate");
       }
-      setDifficulty(normalizeDifficulty(difficultyResult.status === "fulfilled" ? difficultyResult.value : undefined));
-      if (cancelled) return;
+      setDifficulty(normalizeDifficulty(stored.values[ARCADE_DIFFICULTY_STORAGE_KEY]));
       setNotice(profile.baseline.source === "default"
         ? "Using a conservative C3-centered starter range. Range Simulator will personalize future cabinets."
         : `Voice profile loaded around ${noteLabel(profile.baseline.midi)}. Every cabinet is fitted to your current map.`);
       setHydrated(true);
     });
-    return () => { cancelled = true; };
-  }, []);
+    return () => persistence.dispose();
+  }, [persistence]);
 
   useEffect(() => {
-    if (!hydrated || !storageAuthorityRef.current.stage) return;
-    void setSetting(ARCADE_STAGE_STORAGE_KEY, curriculumStage)
-      .catch(() => reportStorageFailure("saving the curriculum stage"));
-  }, [curriculumStage, hydrated, reportStorageFailure]);
-
-  useEffect(() => {
-    if (!hydrated || !storageAuthorityRef.current.difficulty) return;
-    void setSetting(ARCADE_DIFFICULTY_STORAGE_KEY, difficulty)
-      .catch(() => reportStorageFailure("saving arcade difficulty"));
-  }, [difficulty, hydrated, reportStorageFailure]);
+    if (!hydrated) return;
+    persistence.save([
+      { key: ARCADE_PROGRESS_STORAGE_KEY, value: progress },
+      { key: ARCADE_STAGE_STORAGE_KEY, value: curriculumStage },
+      { key: ARCADE_DIFFICULTY_STORAGE_KEY, value: difficulty },
+    ], (result) => {
+      if (result === "error") reportStorageFailure("saving arcade settings");
+    });
+  }, [curriculumStage, difficulty, hydrated, persistence, progress, reportStorageFailure]);
 
   const recordOutcome = useCallback((outcome: ArcadeOutcome) => {
     const completedAt = new Date().toISOString();
-    const nextProgress = applyArcadeOutcome(progressRef.current, outcome, completedAt);
-    progressRef.current = nextProgress;
-    setProgress(nextProgress);
-    if (storageAuthorityRef.current.progress) {
-      progressWriteChainRef.current = progressWriteChainRef.current
-        .catch(() => undefined)
-        .then(() => setSetting(ARCADE_PROGRESS_STORAGE_KEY, nextProgress))
-        .catch(() => reportStorageFailure("saving arcade progress"));
-    }
+    dispatchProgress({ type: "record", outcome, completedAt });
     void saveAttempt({
       id: crypto.randomUUID(),
       exerciseType: `voice-arcade:${outcome.mode}`,
@@ -257,6 +189,7 @@ export function VoiceArcade() {
         difficulty,
         curriculumStage: outcome.curriculumStage,
         variant: outcome.variant,
+        completedVariant: outcome.completedVariant,
         voiceRange,
         grade: outcome.grade,
       },
@@ -271,64 +204,63 @@ export function VoiceArcade() {
       startedAt: new Date(Date.now() - outcome.durationMs).toISOString(),
       completedAt,
     }).catch(() => reportStorageFailure("saving the completed attempt"));
-  }, [curriculumStage, difficulty, reportStorageFailure, voiceRange]);
-
-  const recordTutorialAttempt = useCallback((
-    attempt: ResonanceTutorialAttempt,
-    completedAt: string,
-  ) => {
-    const nextProgress = recordResonanceTutorialAttempt(
-      tutorialProgressRef.current,
-      attempt,
-      completedAt,
-    );
-    tutorialProgressRef.current = nextProgress;
-    setResonanceTutorialProgress(nextProgress);
-    if (storageAuthorityRef.current.tutorial) {
-      tutorialWriteChainRef.current = tutorialWriteChainRef.current
-        .catch(() => undefined)
-        .then(() => setSetting(RESONANCE_TUTORIAL_PROGRESS_STORAGE_KEY, nextProgress))
-        .catch(() => reportStorageFailure("saving Field School progress"));
-    }
-  }, [reportStorageFailure]);
+  }, [difficulty, reportStorageFailure, voiceRange]);
 
   const exitActiveMode = useCallback(() => {
     returnFocusModeRef.current = mode;
-    setMode(null);
-  }, [mode]);
+    navigate({ surface: "arcade", activity: "cabinet" });
+  }, [mode, navigate]);
 
   useEffect(() => {
     if (mode !== null || returnFocusModeRef.current === null) return undefined;
     const returnMode = returnFocusModeRef.current;
     returnFocusModeRef.current = null;
     const focusFrame = window.requestAnimationFrame(() => {
-      document.querySelector<HTMLButtonElement>(`button[data-arcade-mode="${returnMode}"]`)
+      document.querySelector<HTMLAnchorElement>(`a[data-arcade-mode="${returnMode}"]`)
         ?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(focusFrame);
   }, [mode]);
 
   const rangeOptions = useMemo(() => Array.from({ length: 48 }, (_, index) => 36 + index), []);
-  const activeCopy = mode ? MODE_COPY[mode] : null;
+  const activeCopy = mode ? ARCADE_GAME_DEFINITIONS[mode] : null;
   const activeCurriculum = mode ? resolveArcadeCurriculum(mode, curriculumStage) : null;
-  const resonanceFoundationsCompleted = completedResonanceTutorialLessonCount(resonanceTutorialProgress);
-  const resonanceChambersReady = resonanceCombinedChambersUnlocked(resonanceTutorialProgress);
+  const ActiveGame = activeCopy?.component ?? null;
 
-  if (mode && activeCopy && activeCurriculum) {
+  // IndexedDB is the authority for range, difficulty, and curriculum. A deep
+  // link must not construct a game from placeholder values and then mutate its
+  // surrounding props after the real settings arrive.
+  if (!hydrated) {
+    return (
+      <div className="page arcade-page" data-arcade-hydration="pending">
+        <Panel className="arcade-loadout" role="status" aria-live="polite">
+          <Eyebrow>Voice Arcade</Eyebrow>
+          <h1>Loading your cabinet settings…</h1>
+          <p>Your saved voice range, control stage, and difficulty are being restored before any game runtime starts.</p>
+        </Panel>
+      </div>
+    );
+  }
+
+  if (mode && activeCopy && activeCurriculum && ActiveGame) {
     return (
       <div className={`page arcade-page arcade-mode-page mode-${mode} curriculum-${curriculumStage}`}>
         <div className="arcade-game-topbar">
-          <ActionButton onClick={exitActiveMode}><Icon name="arrow" size={16} /> Back to cabinet</ActionButton>
+          <RouteLink className="action-button" route={{ surface: "arcade", activity: "cabinet" }} onClick={() => { returnFocusModeRef.current = mode; }}><Icon name="arrow" size={16} /> Back to cabinet</RouteLink>
           <div><span>{activeCurriculum.stageLabel.toUpperCase()} · {activeCopy.kicker}</span><strong>{activeCopy.title}</strong></div>
           <div className="arcade-live-profile"><span>VOICE MAP</span><b>{noteLabel(voiceRange.lowMidi)}–{noteLabel(voiceRange.highMidi)}</b><small>{activeCurriculum.stageLabel} · {DIFFICULTY_COPY[difficulty].label}</small></div>
         </div>
         {storageWarning && <div className="error-banner"><strong>Local progress storage needs attention.</strong><span>{storageWarning}</span></div>}
-        {mode === "pattern" && <PatternChallenge difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} onExit={exitActiveMode} onComplete={recordOutcome} />}
-        {mode === "pong" && <PitchPong difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} onExit={exitActiveMode} onComplete={recordOutcome} />}
-        {mode === "song" && <SongRide difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} onExit={exitActiveMode} onComplete={recordOutcome} />}
-        {mode === "maze" && <PitchMaze difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} onExit={exitActiveMode} onComplete={recordOutcome} />}
-        {mode === "resonance" && <Resonance difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} tutorialProgress={resonanceTutorialProgress} onTutorialAttempt={recordTutorialAttempt} onExit={exitActiveMode} onComplete={recordOutcome} />}
-        {mode === "draw" && <VoiceDraw difficulty={difficulty} curriculumStage={curriculumStage} voiceRange={voiceRange} onExit={exitActiveMode} onComplete={recordOutcome} />}
+        <Suspense fallback={<Panel><strong>Loading cabinet…</strong></Panel>}>
+          <ActiveGame
+            difficulty={difficulty}
+            curriculumStage={curriculumStage}
+            voiceRange={voiceRange}
+            completedVariants={progress.completedVariantsByMode[mode]}
+            onExit={exitActiveMode}
+            onComplete={recordOutcome}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -342,7 +274,7 @@ export function VoiceArcade() {
           <h1>Your voice moves the game.</h1>
           <p>Concrete pitch skill through reaction, memory, navigation, rhythm, spatial creation, continuous control, and acoustic physics. Every cabinet reads the same local microphone detector; no raw voice audio leaves the device.</p>
           <div className="arcade-hero-tags"><span>VOICE INPUT</span><i /> <span>REAL-TIME PITCH</span><i /> <span>SKILL XP</span></div>
-          <ActionButton className="arcade-hero-feature" disabled={!hydrated} onClick={() => setMode("draw")}><span>NEW CABINET</span><b>Vocal Canvas</b><small>Draw with eight sung directions</small><Icon name="arrow" size={16} /></ActionButton>
+          <RouteLink className="action-button arcade-hero-feature" route={{ surface: "arcade", activity: ARCADE_FEATURED_GAME.mode }}><span>FEATURED CABINET</span><b>{ARCADE_FEATURED_GAME.title}</b><small>{ARCADE_FEATURED_GAME.detail}</small><Icon name="arrow" size={16} /></RouteLink>
         </div>
         <div className="arcade-level-card" aria-label={`${progress.totalXp} total voice arcade experience points`}>
           <span>VOICE ARCADE · LOCAL PROFILE</span>
@@ -379,9 +311,10 @@ export function VoiceArcade() {
             {ARCADE_CURRICULUM_STAGES.map((stage, index) => {
               const stageCopy = ARCADE_CURRICULUM_STAGE_COPY[stage];
               const feedback = resolveArcadeCurriculum("pong", stage).feedback;
+              const feedbackLabel = curriculumFeedbackLabel(feedback.level);
               return (
                 <button type="button" role="radio" aria-checked={curriculumStage === stage} className={curriculumStage === stage ? "active" : ""} key={stage} onClick={() => setCurriculumStage(stage)}>
-                  <span>{String(index + 1).padStart(2, "0")}</span><b>{stageCopy.label}</b><small>{stageCopy.summary}</small><em>{feedback.level === "full" ? "FULL TUNER + LABELS" : feedback.level === "reduced" ? "DIRECTIONAL CORRECTION" : "GAME-FIRST FEEDBACK"}</em>
+                  <span>{String(index + 1).padStart(2, "0")}</span><b>{stageCopy.label}</b><small>{stageCopy.summary}</small><em>{feedbackLabel}</em>
                 </button>
               );
             })}
@@ -391,7 +324,8 @@ export function VoiceArcade() {
 
       <div className="arcade-cabinet-grid">
         {ARCADE_MODE_ORDER.map((id) => {
-          const copy = MODE_COPY[id];
+          const copy = ARCADE_GAME_DEFINITIONS[id];
+          const Preview = copy.preview;
           const requirement = getArcadeStageMasteryRequirement(id, curriculumStage);
           const evidence = progress.masteryByMode[id][curriculumStage];
           const mastered = hasArcadeStageMastery(progress, id, curriculumStage);
@@ -399,27 +333,16 @@ export function VoiceArcade() {
           return (
             <Panel className={`arcade-cabinet mode-${id} accent-${copy.accent}`} key={id}>
               <div className="arcade-cabinet-screen" aria-hidden="true">
-                {id === "pattern" && <div className="arcade-demo-highway">{[0, 1, 2, 3, 4].map((index) => <i key={index} style={{ "--demo-index": index } as React.CSSProperties} />)}<span /></div>}
-                {id === "pong" && <div className="arcade-demo-pong"><i /><i /><b /><span /></div>}
-                {id === "song" && <div className="arcade-demo-song">{[.7, .35, .55, .2, .65].map((position, index) => <i key={index} style={{ "--demo-note": position, "--demo-time": index } as React.CSSProperties} />)}<span /></div>}
-                {id === "maze" && <div className="arcade-demo-maze"><i /><i /><i /><i /><i /><i /><i /><i /><i /><b /><span /></div>}
-                {id === "resonance" && <div className="arcade-demo-resonance"><i /><i /><i /><b /><span /></div>}
-                {id === "draw" && <div className="arcade-demo-draw" aria-hidden="true"><svg viewBox="0 0 240 160"><path d="M28 128 L62 88 L98 112 L137 55 L181 73 L211 34" /><circle cx="211" cy="34" r="7" /><text x="136" y="28">G3 ↗</text></svg></div>}
+                <Preview />
               </div>
               <div className="arcade-cabinet-title"><span>{copy.number}</span><div><small>{copy.kicker}</small><h2>{copy.title}</h2></div><strong>{progress.bestByMode[id] ? `BEST ${progress.bestByMode[id]}` : "NEW"}</strong></div>
               <p>{copy.description}</p>
               <div className="arcade-skill-chips">{copy.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-              {id === "resonance" && (
-                <div className={`resonance-cabinet-foundations ${resonanceChambersReady ? "complete" : "active"}`}>
-                  <span><b>{resonanceFoundationsCompleted}/12 FIELD SCHOOL PROOFS</b><small>{resonanceChambersReady ? "Combined chambers unlocked" : "Discover → Control → Apply for each mechanic"}</small></span>
-                  <div role="progressbar" aria-label="Resonance Field School progress" aria-valuemin={0} aria-valuemax={12} aria-valuenow={resonanceFoundationsCompleted}><i style={{ width: `${resonanceFoundationsCompleted / 12 * 100}%` }} /></div>
-                </div>
-              )}
               <div className={`arcade-cabinet-mastery ${mastered ? "mastered" : ""}`}>
                 <span><b>{mastered ? "STAGE PROVEN" : `${evidence.qualifyingRuns}/${requirement.requiredRuns} PROOFS`}</b><small>{requirement.minimumScore}+ score · {ARCADE_CURRICULUM_STAGE_COPY[curriculumStage].label}</small></span>
                 <span><b>NEXT FIT</b><small>{ARCADE_CURRICULUM_STAGE_COPY[recommended].label}</small></span>
               </div>
-              <ActionButton data-arcade-mode={id} className="primary wide" disabled={!hydrated} onClick={() => setMode(id)}>{copy.button} <Icon name="arrow" size={16} /></ActionButton>
+              <RouteLink data-arcade-mode={id} className="action-button primary wide" route={{ surface: "arcade", activity: id }}>{copy.button} <Icon name="arrow" size={16} /></RouteLink>
             </Panel>
           );
         })}

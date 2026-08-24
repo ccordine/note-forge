@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { YinPitchFrame } from "@noteforge/pitch-engine";
-import type { PitchObservation } from "../apps/web/src/audio/note-input";
+import type { VocalObservation } from "../apps/web/src/audio/note-input";
 import type {
   AudioInputController,
   InputTelemetry,
@@ -11,14 +11,10 @@ import {
   AudioInputProvider,
   useAudioInputStatus,
 } from "../apps/web/src/audio/use-audio-input";
-import {
-  WorkflowProgress,
-  WorkflowStage,
-} from "../apps/web/src/ui/workflow";
 import { NoteInput } from "../apps/web/src/ui/voice/NoteInput";
 import { createVoiceCoachView } from "../apps/web/src/ui/voice/view";
 
-function frame(midiFloat: number, reason: YinPitchFrame["reason"] = "detected"): PitchObservation {
+function frame(midiFloat: number, reason: YinPitchFrame["reason"] = "detected"): VocalObservation {
   const voiced = reason === "detected";
   const nearestMidi = voiced ? Math.round(midiFloat) : null;
   return {
@@ -45,6 +41,8 @@ function frame(midiFloat: number, reason: YinPitchFrame["reason"] = "detected"):
     workletProcessCount: 32,
     discontinuity: false,
     periodicity: voiced ? 0.9 : 0,
+    brightness: voiced ? 0.24 : null,
+    brightnessConfidence: voiced ? 0.82 : 0,
   };
 }
 
@@ -57,11 +55,12 @@ const waitingHold = {
 function inputController(
   overrides: Partial<AudioInputController> = {},
 ): AudioInputController {
-  return {
+  let controller: AudioInputController;
+  const subscribe = () => () => undefined;
+  controller = {
     state: "disabled",
     error: "",
     microphoneInfo: null,
-    frames: [],
     liveFrame: undefined,
     liveNote: null,
     processedWindowCount: 0,
@@ -72,12 +71,40 @@ function inputController(
     graphGeneration: 0,
     transportRepairCount: 0,
     telemetry: null,
-    telemetryHistory: [],
     enable: async () => null,
     disable: () => undefined,
-    getStream: () => null,
+    createRecorder: () => { throw new Error("Recorder unavailable in render test."); },
+    subscribeTransport: subscribe,
+    subscribePitch: subscribe,
+    subscribeCounters: subscribe,
+    subscribeTelemetry: subscribe,
+    subscribeHistory: subscribe,
+    getTransportSnapshot: () => ({
+      state: controller.state,
+      error: controller.error,
+      microphoneInfo: controller.microphoneInfo,
+      transportRepairCount: controller.transportRepairCount,
+    }),
+    getPitchSnapshot: () => ({
+      liveFrame: controller.liveFrame,
+      liveNote: controller.liveNote,
+    }),
+    getCounterSnapshot: () => ({
+      processedWindowCount: controller.processedWindowCount,
+      processedSampleCount: controller.processedSampleCount,
+      workletProcessCount: controller.workletProcessCount,
+      captureEpoch: controller.captureEpoch,
+      continuityEpoch: controller.continuityEpoch,
+      graphGeneration: controller.graphGeneration,
+    }),
+    getTelemetrySnapshot: () => ({ telemetry: controller.telemetry }),
+    getHistorySnapshot: () => ({
+      frames: [],
+      telemetryHistory: [],
+    }),
     ...overrides,
   };
+  return controller;
 }
 
 function telemetry(capturedAt: number, rmsDbfs: number, peakDbfs: number): InputTelemetry {
@@ -110,44 +137,7 @@ describe("first-party coached-workflow component contracts", () => {
     ));
 
     expect(Object.isFrozen(observed.current)).toBe(true);
-    expect(Object.isFrozen(observed.current?.frames)).toBe(true);
-    expect(Object.isFrozen(observed.current?.telemetryHistory)).toBe(true);
-  });
-
-  it("renders exactly the supplied stage body with its accessible title and status", () => {
-    const markup = renderToStaticMarkup(createElement(
-      WorkflowStage,
-      {
-        eyebrow: "Listen",
-        title: "Current target",
-        status: "Ready",
-        actions: createElement("button", { type: "button" }, "Continue"),
-      },
-      createElement("p", null, "Only mounted stage body"),
-    ));
-
-    expect(markup.match(/Only mounted stage body/g)).toHaveLength(1);
-    expect(markup).toContain("data-workflow-stage-title");
-    expect(markup).toMatch(/<section[^>]+aria-labelledby=/);
-    expect(markup).toMatch(/<h2[^>]+aria-describedby=/);
-    expect(markup).toContain('role="status"');
-    expect(markup).toContain(">Continue</button>");
-  });
-
-  it("renders one current progress step without labeling later steps complete", () => {
-    const markup = renderToStaticMarkup(createElement(WorkflowProgress, {
-      activeStep: 1,
-      steps: [
-        { id: "connect", label: "Connect" },
-        { id: "listen", label: "Listen" },
-        { id: "review", label: "Review" },
-      ],
-    }));
-
-    expect(markup.match(/aria-current="step"/g)).toHaveLength(1);
-    expect(markup.match(/class="complete"/g)).toHaveLength(1);
-    expect(markup.match(/class="current"/g)).toHaveLength(1);
-    expect(markup.match(/class="pending"/g)).toHaveLength(1);
+    expect(observed.current?.getHistorySnapshot().frames).toEqual([]);
   });
 
   it("derives meter direction and lock from the exact frame supplied to scoring", () => {
@@ -202,7 +192,7 @@ describe("first-party coached-workflow component contracts", () => {
 
     expect(off).toMatchObject({
       measuredNote: "—",
-      guidanceTitle: "Microphone off",
+      guidanceTitle: "Voice input is off",
       holdLabel: "MICROPHONE OFF",
       errorCents: null,
       inBand: false,
@@ -242,11 +232,9 @@ describe("first-party coached-workflow component contracts", () => {
           meterWindowSize: 1_024,
           captureEpoch: 1,
         },
-        frames: [liveFrame],
         liveFrame,
         processedWindowCount: 1,
         telemetry: levelHistory[1]!,
-        telemetryHistory: levelHistory,
       }),
     }));
 
@@ -254,17 +242,12 @@ describe("first-party coached-workflow component contracts", () => {
     expect(disabledMarkup).toContain('data-input-state="disabled"');
     expect(disabledMarkup).toContain("MICROPHONE OFF");
     expect(disabledMarkup).toContain("Input is off");
+    expect(disabledMarkup).not.toContain("Enable input");
     expect(disabledMarkup).not.toContain('data-detected-note="C3"');
 
     for (const className of [
-      "scope-grid",
-      "scope-module input-module",
-      "scope-module pitch-module locked",
-      "scope-history-fill",
-      "scope-history-line",
-      "scope-peak-line",
+      "scope-module pitch-module scope-primary-result locked",
       "scope-pitch-lane",
-      "scope-stats",
     ]) {
       expect(runningMarkup).toContain(`class="${className}`);
     }
@@ -276,10 +259,12 @@ describe("first-party coached-workflow component contracts", () => {
     expect(runningMarkup).toContain('data-continuity-epoch="0"');
     expect(runningMarkup).toContain('data-graph-generation="0"');
     expect(runningMarkup).toContain("LIVE PCM → NOTE · CONTINUOUS");
-    expect(runningMarkup).toContain("48,000 Hz");
-    expect(runningMarkup).toContain("4,096 samples · 85.3 ms");
-    expect(runningMarkup).toContain("960 samples · 20.0 ms");
-    expect(runningMarkup).toContain("ECHO CANCELLATION</span><b>off");
+    expect(runningMarkup).toContain('<details class="scope-advanced">');
+    expect(runningMarkup).toContain("Advanced PCM diagnostics");
+    expect(runningMarkup).not.toContain("Stop input");
+    expect(runningMarkup).not.toContain("scope-history-line");
+    expect(runningMarkup).not.toContain("INPUT RMS");
+    expect(runningMarkup).not.toContain("48,000 Hz");
   });
 
   it("does not leak a stale target-coach frame while microphone input is off or failed", () => {
@@ -297,24 +282,18 @@ describe("first-party coached-workflow component contracts", () => {
     );
     const disabledMarkup = renderTarget(inputController({
       liveFrame: staleFrame,
-      frames: [staleFrame],
       telemetry: staleTelemetry,
-      telemetryHistory: [staleTelemetry],
     }));
     const errorMarkup = renderTarget(inputController({
       state: "error",
       error: "Permission denied",
       liveFrame: staleFrame,
-      frames: [staleFrame],
       telemetry: staleTelemetry,
-      telemetryHistory: [staleTelemetry],
     }));
     const runningMarkup = renderTarget(inputController({
       state: "running",
       liveFrame: staleFrame,
-      frames: [staleFrame],
       telemetry: staleTelemetry,
-      telemetryHistory: [staleTelemetry],
     }));
 
     for (const markup of [disabledMarkup, errorMarkup]) {
@@ -329,21 +308,19 @@ describe("first-party coached-workflow component contracts", () => {
     expect(errorMarkup).toContain("Permission denied");
     expect(runningMarkup).toContain('data-detected-note="C3"');
     expect(runningMarkup).toContain("130.81 Hz");
-    expect(runningMarkup).toContain("90% CONFIDENCE");
-    expect(runningMarkup).toContain("-54 dBFS");
+    expect(runningMarkup).not.toContain("90% CONFIDENCE");
+    expect(runningMarkup).not.toContain("-54 dBFS");
+    expect(runningMarkup).not.toContain("MIC LEVEL");
     expect(runningMarkup).toContain("DIRECT FRAME <b>48.000</b>");
   });
 
   it("renders the latest unvoiced observation instead of an older voiced frame", () => {
-    const voicedFrame = frame(48);
     const currentFrame = frame(48, "below-rms-threshold");
     const currentTelemetry = telemetry(2, -96, -96);
     const input = inputController({
       state: "running",
       liveFrame: currentFrame,
-      frames: [voicedFrame, currentFrame],
       telemetry: currentTelemetry,
-      telemetryHistory: [telemetry(1, -54, -42), currentTelemetry],
     });
     const scopeMarkup = renderToStaticMarkup(createElement(NoteInput, {
       variant: "scope",
@@ -362,8 +339,9 @@ describe("first-party coached-workflow component contracts", () => {
       expect(markup).not.toContain('data-detected-note="C3"');
       expect(markup).not.toContain("130.81 Hz");
       expect(markup).not.toContain("DIRECT FRAME <b>48.000</b>");
-      expect(markup).toContain("below-rms-threshold");
     }
+    expect(scopeMarkup).not.toContain("below-rms-threshold");
+    expect(targetMarkup).toContain("below-rms-threshold");
   });
 
 });

@@ -41,9 +41,9 @@ describe("Range Simulator to Range Loop handoff", () => {
     expect(consumeRangeLoopHandoff()).toBeNull();
   });
 
-  it("rejects notes outside the shared C2–B5 map", () => {
-    expect(() => queueRangeLoopHandoff(35)).toThrow(RangeError);
-    expect(() => queueRangeLoopHandoff(84)).toThrow(RangeError);
+  it("rejects notes outside the shared F-sharp-1 through D6 detector map", () => {
+    expect(() => queueRangeLoopHandoff(29)).toThrow(RangeError);
+    expect(() => queueRangeLoopHandoff(87)).toThrow(RangeError);
     expect(() => queueRangeLoopHandoff(48.5)).toThrow(RangeError);
   });
 });

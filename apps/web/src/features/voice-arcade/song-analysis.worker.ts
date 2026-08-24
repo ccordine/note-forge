@@ -1,10 +1,7 @@
 /// <reference lib="webworker" />
 
-import {
-  analyzeSongLanes,
-  type SongLaneAnalysis,
-  type SongLaneAnalysisOptions,
-} from "./song-lanes";
+import type { SongLaneAnalysis, SongLaneAnalysisOptions } from "./song-lane-types";
+import { analyzeSongLanes } from "./song-lanes";
 
 interface SongAnalysisRequest {
   samples: Float32Array;

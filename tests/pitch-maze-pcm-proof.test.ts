@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { midiToFrequency } from "@noteforge/pitch-engine";
 import {
-  midiToFrequency,
-  type YinPitchFrame,
-} from "@noteforge/pitch-engine";
-import { NoteInputEngine } from "../apps/web/src/audio/note-input";
+  NoteInputEngine,
+  type PitchObservation,
+} from "../apps/web/src/audio/note-input";
 import {
   createPitchMazeController,
   updatePitchMazeController,
@@ -24,6 +24,8 @@ import {
 const SAMPLE_RATE = 48_000;
 const WINDOW_SIZE = 4_096;
 const WINDOW_SECONDS = WINDOW_SIZE / SAMPLE_RATE;
+const HOP_SIZE = 960;
+const HOP_SECONDS = HOP_SIZE / SAMPLE_RATE;
 const MINIMUM_CONFIDENCE = 0.58;
 
 const LEVEL_OPTIONS = Object.freeze({
@@ -46,7 +48,7 @@ interface WindowRecipe {
 }
 
 interface ProcessedWindow {
-  readonly frame: YinPitchFrame;
+  readonly frame: PitchObservation;
   readonly event: PitchMazeControllerEvent | null;
   readonly move: PitchMazeMoveResult | null;
 }
@@ -87,7 +89,7 @@ function makeWindow(recipe: Readonly<WindowRecipe>, observationIndex: number): F
   const midi = recipe.midi ?? null;
   const voiceRmsDbfs = recipe.voiceRmsDbfs ?? -24;
   const noiseProfile = recipe.noiseProfile ?? (recipe.snrDb === undefined ? "none" : "room");
-  const absoluteStart = observationIndex * WINDOW_SIZE;
+  const absoluteStart = observationIndex * HOP_SIZE;
   const voice = new Float64Array(WINDOW_SIZE);
   const noise = new Float64Array(WINDOW_SIZE);
 
@@ -130,7 +132,7 @@ function makeWindow(recipe: Readonly<WindowRecipe>, observationIndex: number): F
   return Float32Array.from(voice, (sample, index) => sample + noise[index]!);
 }
 
-function directPitchFrame(samples: Float32Array, timeSeconds: number): YinPitchFrame {
+function directPitchFrame(samples: Float32Array, timeSeconds: number): PitchObservation {
   const startSample = Math.max(0, Math.round(timeSeconds * SAMPLE_RATE - samples.length / 2));
   const endSample = startSample + samples.length;
   return new NoteInputEngine().process({
@@ -153,8 +155,8 @@ function samePosition(left: Readonly<PitchMazePosition>, right: Readonly<PitchMa
 }
 
 /**
- * Deterministic PCM integration version of the live callback: PCM -> direct detector frame ->
- * four-note controller -> sustain completion -> maze movement.
+ * Deterministic PCM integration version of the live callback: overlapping PCM
+ * -> direct detector observation -> four-note dwell controller -> maze movement.
  */
 class PitchMazePcmHarness {
   controller: PitchMazeControllerState;
@@ -172,7 +174,6 @@ class PitchMazePcmHarness {
       minimumConfidence: MINIMUM_CONFIDENCE,
       acquisitionCorridorCents: 48,
       directionSwitchHysteresisCents: 10,
-      releaseDurationSeconds: 0.275,
     });
   }
 
@@ -198,7 +199,7 @@ class PitchMazePcmHarness {
 
   push(recipe: Readonly<WindowRecipe>, timeSeconds?: number): ProcessedWindow {
     const timestamp = timeSeconds ?? (
-      this.lastTimeSeconds === null ? WINDOW_SECONDS / 2 : this.lastTimeSeconds + WINDOW_SECONDS
+      this.lastTimeSeconds === null ? WINDOW_SECONDS / 2 : this.lastTimeSeconds + HOP_SECONDS
     );
     if (this.lastTimeSeconds !== null && timestamp <= this.lastTimeSeconds) {
       throw new RangeError("Synthetic observations must have strictly increasing timestamps.");
@@ -244,7 +245,7 @@ describe("Pitch Maze PCM-to-controller integration (not browser proof)", () => {
     (direction) => {
       const harness = new PitchMazePcmHarness();
       const targetMidi = harness.level.directionNotes[direction];
-      harness.pushMany(committedTone(targetMidi), 18);
+      harness.pushMany(committedTone(targetMidi), 26);
 
       expect(harness.commands).toHaveLength(1);
       expect(harness.commands[0]).toMatchObject({
@@ -253,34 +254,30 @@ describe("Pitch Maze PCM-to-controller integration (not browser proof)", () => {
       expect(harness.commands[0]!.command.inBandRatio).toBeGreaterThan(0.9);
       expect(harness.moves).toHaveLength(1);
       expect(harness.controller).toMatchObject({
-        phase: "awaiting-release",
+        phase: "armed",
+        committedDirection: direction,
         completedCommandCount: 1,
       });
     },
   );
 
-  it("emits one command for a held note, rearms on a 275 ms PCM silence, then accepts the adjacent note", () => {
+  it("emits one command for a held note, observes silence, then accepts the adjacent note", () => {
     const harness = new PitchMazePcmHarness();
     const northMidi = harness.level.directionNotes.north;
     const eastMidi = harness.level.directionNotes.east;
 
-    harness.pushMany(committedTone(northMidi), 10);
+    harness.pushMany(committedTone(northMidi), 26);
     expect(harness.commands.map((event) => event.command.direction)).toEqual(["north"]);
 
     // Continuing the same physical gesture can never turn into auto-repeat.
     harness.pushMany(committedTone(northMidi), 12);
     expect(harness.commands.map((event) => event.command.direction)).toEqual(["north"]);
-    expect(harness.controller.phase).toBe("awaiting-release");
+    expect(harness.controller).toMatchObject({ phase: "armed", committedDirection: "north" });
 
-    // Use virtual observation times so this proves duration semantics without
-    // relying on wall-clock timers or a particular audio-device callback size.
-    const releaseBeganAt = harness.timeSeconds + 0.001;
-    harness.push({ midi: null }, releaseBeganAt);
-    harness.push({ midi: null }, releaseBeganAt + 0.275);
-    expect(harness.events.filter((event) => event.type === "rearmed")).toHaveLength(1);
-    expect(harness.controller.phase).toBe("armed");
+    harness.pushMany({ midi: null }, 1);
+    expect(harness.controller).toMatchObject({ phase: "armed", committedDirection: null });
 
-    harness.pushMany(committedTone(eastMidi, 0xc4_18_60), 12);
+    harness.pushMany(committedTone(eastMidi, 0xc4_18_60), 26);
     expect(harness.commands.map((event) => event.command.direction)).toEqual(["north", "east"]);
     expect(harness.commands[1]!.command.targetMidi).toBe(northMidi + 1);
     expect(harness.controller.completedCommandCount).toBe(2);
@@ -324,7 +321,7 @@ describe("Pitch Maze PCM-to-controller integration (not browser proof)", () => {
     expect(blockedDirection).toBeDefined();
     const startingPosition = level.player;
     const harness = new PitchMazePcmHarness(level);
-    harness.pushMany(committedTone(level.directionNotes[blockedDirection!]), 18);
+    harness.pushMany(committedTone(level.directionNotes[blockedDirection!]), 26);
 
     expect(harness.commands).toHaveLength(1);
     expect(harness.commands[0]!.command.direction).toBe(blockedDirection);

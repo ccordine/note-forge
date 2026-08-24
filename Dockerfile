@@ -14,6 +14,7 @@ RUN mkdir -p /tmp/noteforge-test-tmp /tmp/noteforge-npm-cache \
 
 COPY . .
 RUN mkdir -p /tmp/noteforge-test-tmp /tmp/noteforge-npm-cache \
+    && npm run audit:architecture \
     && npm test -- --maxWorkers=1 --no-file-parallelism --no-cache \
     && npm run build \
     && rm -rf /tmp/noteforge-test-tmp /tmp/noteforge-npm-cache
@@ -27,6 +28,8 @@ COPY cmd/noteforge-server/ ./cmd/noteforge-server/
 COPY packages/diagnostic-schema/ ./packages/diagnostic-schema/
 
 RUN mkdir -p /tmp/noteforge-go-cache /tmp/noteforge-go-tmp \
+    && GOCACHE=/tmp/noteforge-go-cache GOTMPDIR=/tmp/noteforge-go-tmp \
+        go vet ./... \
     && GOCACHE=/tmp/noteforge-go-cache GOTMPDIR=/tmp/noteforge-go-tmp \
         go test -p=1 -parallel=1 -count=1 ./... \
     && GOCACHE=/tmp/noteforge-go-cache GOTMPDIR=/tmp/noteforge-go-tmp CGO_ENABLED=0 \

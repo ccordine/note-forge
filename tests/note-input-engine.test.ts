@@ -9,6 +9,7 @@ import {
   NoteInputEngine,
   type NoteInputWindow,
 } from "../apps/web/src/audio/note-input";
+import { reduceLiveNote } from "../apps/web/src/audio/live-note";
 import { analysisWindowSizes } from "../apps/web/src/audio/microphone";
 import { generateSyntheticSignal } from "../packages/pitch-engine/test/synthetic-signals";
 
@@ -153,6 +154,115 @@ describe("direct NoteInputEngine detection", () => {
     });
     expect(results.every(({ frame }) => frame.reason === "detected")).toBe(true);
   });
+
+  it("never drops an eight-second voice-like sustain across overlapping production windows", () => {
+    const hopSamples = Math.round(REFERENCE_SAMPLE_RATE * 0.02);
+    const durationSeconds = 8.25;
+    const cases = [
+      {
+        midi: LOWEST_SUPPORTED_MIDI,
+        rmsScaleDbfs: -42,
+        fundamentalAmplitude: 0.18,
+        harmonics: [
+          { multiple: 2, amplitude: 1, phaseRadians: 0.37 },
+          { multiple: 3, amplitude: 0.28, phaseRadians: 1.13 },
+          { multiple: 4, amplitude: 0.13, phaseRadians: 0.71 },
+        ],
+      },
+      {
+        midi: 48,
+        rmsScaleDbfs: -60,
+        fundamentalAmplitude: 1,
+        harmonics: [
+          { multiple: 2, amplitude: 0.47, phaseRadians: 0.37 },
+          { multiple: 3, amplitude: 0.23, phaseRadians: 1.13 },
+          { multiple: 4, amplitude: 0.11, phaseRadians: 0.71 },
+        ],
+      },
+      {
+        midi: 60,
+        rmsScaleDbfs: -24,
+        fundamentalAmplitude: 1,
+        harmonics: [
+          { multiple: 2, amplitude: 0.35, phaseRadians: 0.37 },
+          { multiple: 3, amplitude: 0.16, phaseRadians: 1.13 },
+        ],
+      },
+      {
+        midi: HIGHEST_SUPPORTED_MIDI,
+        rmsScaleDbfs: -24,
+        fundamentalAmplitude: 1,
+        harmonics: [
+          { multiple: 2, amplitude: 0.2, phaseRadians: 0.37 },
+          { multiple: 3, amplitude: 0.08, phaseRadians: 1.13 },
+        ],
+      },
+    ] as const;
+
+    const results = cases.map((fixture, fixtureIndex) => {
+      const centerFrequency = midiToFrequency(fixture.midi);
+      const signal = generateSyntheticSignal({
+        sampleRate: REFERENCE_SAMPLE_RATE,
+        durationSeconds,
+        frequencyHz: centerFrequency,
+        amplitude: amplitudeFromDbfs(fixture.rmsScaleDbfs),
+        fundamentalAmplitude: fixture.fundamentalAmplitude,
+        harmonics: fixture.harmonics,
+        noiseAmplitude: amplitudeFromDbfs(fixture.rmsScaleDbfs - 34),
+        noiseSeed: 0x53_55_53_54 ^ Math.imul(fixtureIndex + 1, 0x9e_37_79_b1),
+        amplitudeEnvelope: (timeSeconds) =>
+          0.72 + 0.2 * Math.sin(2 * Math.PI * 1.7 * timeSeconds)
+            + 0.08 * Math.sin(2 * Math.PI * 3.1 * timeSeconds + 0.4),
+        frequencyAtTime: (timeSeconds) => centerFrequency * 2 ** ((
+          14 * Math.sin(2 * Math.PI * 5.1 * timeSeconds)
+            + 3 * Math.sin(2 * Math.PI * 0.37 * timeSeconds)
+        ) / 1_200),
+      });
+      const engine = new NoteInputEngine();
+      let liveNote = null;
+      const frames = [];
+      for (
+        let startSample = 0, index = 0;
+        startSample + REFERENCE_WINDOW_SIZE <= signal.length;
+        startSample += hopSamples, index += 1
+      ) {
+        const endSample = startSample + REFERENCE_WINDOW_SIZE;
+        const frame = engine.process({
+          samples: signal.slice(startSample, endSample),
+          sampleRate: REFERENCE_SAMPLE_RATE,
+          startSample,
+          endSample,
+          capturedAt: (startSample + endSample) / (2 * REFERENCE_SAMPLE_RATE),
+          captureEpoch: 1,
+          continuityEpoch: 0,
+          graphGeneration: 0,
+          processCount: index + 1,
+          processedSampleCount: endSample,
+          discontinuity: index === 0,
+        }).observation;
+        frames.push(frame);
+        liveNote = reduceLiveNote(liveNote, frame);
+      }
+      return { fixture, frames, liveNote };
+    });
+
+    const failures = results.flatMap(({ fixture, frames }) => frames.flatMap((frame, index) => {
+      const failure = frameFailure(frame, fixture.midi, 25);
+      return failure === null ? [] : [`MIDI ${fixture.midi} frame ${index}: ${failure}`];
+    }));
+    expect(failures).toEqual([]);
+    expect(results.every(({ frames }) => frames.length >= 400)).toBe(true);
+    expect(results.map(({ fixture, liveNote }) => ({
+      midi: fixture.midi,
+      heldSamples: liveNote?.heldSamples,
+      heldSeconds: liveNote?.heldSeconds,
+    }))).toEqual(results.map(({ fixture, frames }) => ({
+      midi: fixture.midi,
+      heldSamples: (frames.length - 1) * hopSamples,
+      heldSeconds: (frames.length - 1) * hopSamples / REFERENCE_SAMPLE_RATE,
+    })));
+    expect(results.every(({ liveNote }) => (liveNote?.heldSeconds ?? 0) > 8)).toBe(true);
+  }, 90_000);
 
   it("detects the literal 45 Hz and 1,200 Hz configured boundaries at every production rate", () => {
     const frequencies = [

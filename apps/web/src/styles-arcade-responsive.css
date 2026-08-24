@@ -1,0 +1,365 @@
+/* Responsive arcade layout ---------------------------------------------- */
+@media (max-width: 1180px) {
+  .arcade-loadout {
+    grid-template-columns: 1fr 1.5fr;
+  }
+
+  .arcade-range-fields {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .arcade-cabinet-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .arcade-cabinet {
+    grid-column: auto;
+  }
+
+  .arcade-game-loadout {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .arcade-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-level-card {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .arcade-loadout {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-curriculum-selector {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-range-fields {
+    grid-column: auto;
+  }
+
+  .arcade-game-hud {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .arcade-game-hud > .action-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .arcade-game-loadout {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-start-row {
+    grid-column: auto;
+  }
+
+  .arcade-result-stage {
+    grid-template-columns: minmax(170px, .5fr) minmax(0, 1.5fr);
+    gap: 28px;
+  }
+
+  .song-ride-upload {
+    grid-template-columns: 1fr;
+  }
+
+  .pong-live-footer {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .arcade-page {
+    padding-bottom: calc(48px + env(safe-area-inset-bottom));
+  }
+
+  .arcade-hero {
+    min-height: 0;
+    padding: 27px 20px;
+    border-radius: 15px;
+  }
+
+  .arcade-hero-copy h1 {
+    margin-top: 12px;
+    font-size: clamp(42px, 14vw, 62px);
+  }
+
+  .arcade-hero-copy p {
+    font-size: 10px;
+  }
+
+  .arcade-level-card {
+    padding: 18px;
+  }
+
+  .arcade-loadout {
+    gap: 15px;
+    padding: 17px;
+  }
+
+  .arcade-difficulty {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-curriculum-stages {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-curriculum-stages button > small {
+    min-height: 0;
+  }
+
+  .arcade-difficulty button {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    column-gap: 8px;
+  }
+
+  .arcade-difficulty button > span,
+  .arcade-difficulty button > small {
+    grid-column: 1;
+  }
+
+  .arcade-difficulty button > small {
+    min-height: 0;
+  }
+
+  .arcade-difficulty button > b {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    margin: 0;
+  }
+
+  .arcade-cabinet-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-cabinet.mode-resonance {
+    grid-column: auto;
+    width: 100%;
+  }
+
+  .arcade-cabinet-screen {
+    height: 230px;
+  }
+
+  .arcade-cabinet > p,
+  .arcade-skill-chips {
+    min-height: 0;
+  }
+
+  .arcade-mode-page {
+    padding-top: 12px;
+  }
+
+  .arcade-game-topbar {
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+
+  .arcade-game-topbar > div:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+
+  .arcade-live-profile {
+    min-width: 0;
+  }
+
+  .arcade-game-hud {
+    top: 74px;
+    grid-template-columns: 1fr 1fr;
+    padding: 6px;
+  }
+
+  .arcade-game-hud > div {
+    min-height: 45px;
+    padding: 6px 9px;
+  }
+
+  .arcade-game-hud > div > strong {
+    font-size: 15px;
+  }
+
+  .arcade-game-hud > .arcade-game-hud-actions {
+    grid-column: 1 / -1;
+    min-height: 44px;
+  }
+
+  .arcade-game-hud-actions .action-button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .arcade-game-loadout {
+    min-height: 0;
+    gap: 17px;
+    padding: 24px 18px;
+  }
+
+  .arcade-game-loadout h1 {
+    font-size: 39px;
+  }
+
+  .arcade-mode-toggle {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-mode-toggle button {
+    min-height: 82px;
+  }
+
+  .arcade-contract-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .arcade-contract-grid > span {
+    min-height: 68px;
+  }
+
+  .pong-instruction-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .pong-instruction-strip > span {
+    min-height: 61px;
+  }
+
+  .arcade-start-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-start-row .action-button {
+    width: 100%;
+  }
+
+  .arcade-countdown-stage {
+    min-height: 430px;
+    padding: 35px 16px;
+  }
+
+  .arcade-preview-notes {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding: 5px 2px;
+  }
+
+  .arcade-preview-notes span {
+    flex: 0 0 61px;
+  }
+
+  .echo-target-readout {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .echo-target-readout > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .echo-target-readout > div {
+    min-height: 70px;
+    padding: 10px 12px;
+  }
+
+  .echo-target-readout strong {
+    font-size: 22px;
+  }
+
+  .echo-highway,
+  .pong-court,
+  .song-rail {
+    height: clamp(350px, 52vh, 500px);
+    border-radius: 11px;
+  }
+
+  .pong-voice-readout {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pong-range-readout {
+    min-width: 0;
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .pong-silence-cue {
+    min-width: 0;
+  }
+
+  .pong-range-label {
+    left: 8px;
+    padding: 4px 5px;
+    font-size: 6px;
+  }
+
+  .song-analysis-contract,
+  .song-ride-readout {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .song-ride-readout > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .song-transport {
+    grid-template-columns: auto minmax(80px, 1fr);
+  }
+
+  .song-transport > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .song-ride-status {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .echo-note-tile {
+    height: 38px;
+  }
+
+  .arcade-live-status {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .arcade-result-stage {
+    grid-template-columns: 1fr;
+    gap: 27px;
+    padding: 30px 18px;
+  }
+
+  .arcade-result-grade {
+    width: 180px;
+  }
+
+  .arcade-result-copy {
+    text-align: center;
+  }
+
+  .arcade-result-copy .eyebrow,
+  .arcade-result-actions {
+    justify-content: center;
+  }
+
+  .arcade-result-metrics {
+    grid-template-columns: 1fr 1fr;
+    text-align: left;
+  }
+}
+

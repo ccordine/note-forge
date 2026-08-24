@@ -14,8 +14,7 @@ export type VoiceAxisStatus =
   | "idle"
   | "steering"
   | "unvoiced"
-  | "uncertain"
-  | "stale";
+  | "uncertain";
 
 export type VoiceAxisFrame = Pick<
   YinPitchFrame,
@@ -30,8 +29,6 @@ export interface VoiceAxisControllerOptions {
   readonly invert?: boolean;
   /** Exponential convergence rate in inverse seconds. */
   readonly responsePerSecond: number;
-  /** Maximum wall-clock age of the newest accepted pitch observation. */
-  readonly freshnessSeconds: number;
   readonly initialPosition?: number;
 }
 
@@ -42,7 +39,6 @@ export interface ResolvedVoiceAxisControllerOptions {
   readonly deadZoneCents: number;
   readonly invert: boolean;
   readonly responsePerSecond: number;
-  readonly freshnessSeconds: number;
   readonly initialPosition: number;
 }
 
@@ -55,7 +51,6 @@ export interface VoiceAxisControllerState {
   readonly clampedMidi: number | null;
   readonly inDeadZone: boolean;
   readonly lastFrameTimeSeconds: number | null;
-  readonly lastReliableReceivedAtSeconds: number | null;
   readonly observedFrameCount: number;
   readonly acceptedFrameCount: number;
 }
@@ -67,7 +62,6 @@ export interface VoiceAxisFrameUpdate {
 }
 
 export interface AdvanceVoiceAxisOptions {
-  readonly nowSeconds: number;
   readonly deltaSeconds: number;
 }
 
@@ -108,7 +102,6 @@ function resolveOptions(
   requireFinite(deadZoneCents, "Voice axis dead zone");
   requireFinite(initialPosition, "Voice axis initial position");
   requirePositive(options.responsePerSecond, "Voice axis response");
-  requirePositive(options.freshnessSeconds, "Voice axis freshness duration");
   if (deadZoneCents < 0) throw new RangeError("Voice axis dead zone cannot be negative.");
   if (initialPosition < 0 || initialPosition > 1) {
     throw new RangeError("Voice axis initial position must be from zero through one.");
@@ -131,7 +124,6 @@ function resolveOptions(
     deadZoneCents,
     invert: options.invert === true,
     responsePerSecond: options.responsePerSecond,
-    freshnessSeconds: options.freshnessSeconds,
     initialPosition,
   });
 }
@@ -149,7 +141,6 @@ export function createVoiceAxisController(
     clampedMidi: null,
     inDeadZone: false,
     lastFrameTimeSeconds: null,
-    lastReliableReceivedAtSeconds: null,
     observedFrameCount: 0,
     acceptedFrameCount: 0,
   };
@@ -175,17 +166,12 @@ function frozenStatusFor(frame: Readonly<VoiceAxisFrame>): VoiceAxisStatus {
 /**
  * Consume one interpreted pitch frame. Silence and uncertain evidence freeze
  * immediately; neither can pull the axis toward center or its previous target.
- * `receivedAtSeconds` must share a clock with `advanceVoiceAxisController`.
+ * The detector's monotonic sample time is the only observation clock.
  */
 export function updateVoiceAxisFromFrame(
   state: Readonly<VoiceAxisControllerState>,
   frame: Readonly<VoiceAxisFrame>,
-  receivedAtSeconds: number,
 ): VoiceAxisFrameUpdate {
-  requireFinite(receivedAtSeconds, "Voice axis evidence receipt timestamp");
-  if (receivedAtSeconds < 0) {
-    throw new RangeError("Voice axis evidence receipt timestamp cannot be negative.");
-  }
   if (!Number.isFinite(frame.timeSeconds) || frame.timeSeconds < 0) {
     return { state: state as VoiceAxisControllerState, accepted: false, mapping: null };
   }
@@ -230,7 +216,6 @@ export function updateVoiceAxisFromFrame(
       clampedMidi: mapping.clampedMidi,
       inDeadZone: mapping.inDeadZone,
       lastFrameTimeSeconds: frame.timeSeconds,
-      lastReliableReceivedAtSeconds: receivedAtSeconds,
       observedFrameCount,
       acceptedFrameCount: state.acceptedFrameCount + 1,
     },
@@ -255,32 +240,18 @@ export function freezeVoiceAxisController(
 }
 
 /**
- * Advance the bounded control coordinate on the game's clock. If fresh pitch
- * evidence stops arriving, steering expires before any further movement occurs.
+ * Advance the bounded coordinate on the game's clock. PCM observations—not a
+ * wall-clock watchdog—freeze steering when the source becomes unvoiced or
+ * uncertain. A transport failure remains the audio subsystem's responsibility.
  */
 export function advanceVoiceAxisController(
   state: Readonly<VoiceAxisControllerState>,
   options: Readonly<AdvanceVoiceAxisOptions>,
 ): VoiceAxisControllerState {
-  requireFinite(options.nowSeconds, "Voice axis current timestamp");
   requireFinite(options.deltaSeconds, "Voice axis frame delta");
-  if (options.nowSeconds < 0) throw new RangeError("Voice axis current timestamp cannot be negative.");
   if (options.deltaSeconds < 0) throw new RangeError("Voice axis frame delta cannot be negative.");
 
-  if (state.status !== "steering" || state.lastReliableReceivedAtSeconds === null) {
-    return state as VoiceAxisControllerState;
-  }
-  if (options.nowSeconds - state.lastReliableReceivedAtSeconds
-    > state.options.freshnessSeconds + EPSILON) {
-    return {
-      ...state,
-      status: "stale",
-      targetPosition: state.position,
-      pitchMidi: null,
-      clampedMidi: null,
-      inDeadZone: false,
-    };
-  }
+  if (state.status !== "steering") return state as VoiceAxisControllerState;
 
   const response = 1 - Math.exp(-options.deltaSeconds * state.options.responsePerSecond);
   return {

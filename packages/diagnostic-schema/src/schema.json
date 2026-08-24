@@ -1,11 +1,12 @@
 {
-  "version": 2,
+  "version": 3,
   "flows": {
     "audio-input": true,
     "range-simulator": true,
     "range-loop": true,
     "voice-arcade": true,
     "pitch-mirror": true,
+    "pitch-tunnel": true,
     "hum-lab": true,
     "pitch-control": true
   },

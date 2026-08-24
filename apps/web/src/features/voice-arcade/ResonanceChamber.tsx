@@ -2,15 +2,13 @@ import { useId, useMemo } from "react";
 import { noteLabel } from "@/lib/music-display";
 import {
   computeResonanceForce,
-  sampleResonanceField,
-  type ResonanceGameState,
-  type ResonanceVector,
 } from "./resonance-physics";
-import type { ResonanceLevelMetadata } from "./resonance-level";
 import type {
-  ResonanceTutorialLesson,
-  ResonanceTutorialObjectiveState,
-} from "./resonance-tutorial";
+  ResonanceGameState,
+  ResonanceVector,
+} from "./resonance-types";
+import { sampleResonanceField } from "./resonance-field";
+import type { ResonanceLevelMetadata } from "./resonance-level";
 
 interface ResonanceChamberProps {
   readonly state: Readonly<ResonanceGameState>;
@@ -19,11 +17,6 @@ interface ResonanceChamberProps {
   readonly showLabels: boolean;
   readonly showRoute: boolean;
   readonly showForceVector: boolean;
-  readonly reducedMotion: boolean;
-  readonly tutorial?: Readonly<{
-    lesson: ResonanceTutorialLesson;
-    objective: ResonanceTutorialObjectiveState;
-  }>;
 }
 
 const FIELD_COLUMNS = 12;
@@ -49,8 +42,6 @@ export function ResonanceChamber({
   showLabels,
   showRoute,
   showForceVector,
-  reducedMotion,
-  tutorial,
 }: ResonanceChamberProps) {
   const id = useId().replaceAll(":", "");
   const room = state.level.room;
@@ -58,9 +49,7 @@ export function ResonanceChamber({
   const scaleY = 800 / room.height;
   const radiusScale = Math.min(scaleX, scaleY);
   const force = computeResonanceForce(state);
-  const fieldCells = useMemo(() => reducedMotion
-    ? []
-    : Array.from(
+  const fieldCells = useMemo(() => Array.from(
       { length: FIELD_COLUMNS * FIELD_ROWS },
       (_, index) => {
         const column = index % FIELD_COLUMNS;
@@ -76,8 +65,8 @@ export function ResonanceChamber({
           sample: sampleResonanceField(state, position),
         };
       },
-    ), [reducedMotion, room.height, room.width, state]);
-  const visiblePulses = reducedMotion ? [] : state.wavePulses.slice(-36);
+    ), [room.height, room.width, state]);
+  const visiblePulses = state.wavePulses.slice(-36);
   const route = metadata.routeWaypoints
     .map((point) => `${point.x * scaleX},${point.y * scaleY}`)
     .join(" ");
@@ -117,89 +106,6 @@ export function ResonanceChamber({
 
         <rect width="1200" height="800" rx="22" className="resonance-room-base" />
         <rect width="1200" height="800" rx="22" fill={`url(#${id}-grid)`} />
-
-        {tutorial && (
-          <g className={`resonance-tutorial-overlay objective-${tutorial.lesson.objective.kind}`} aria-hidden="true">
-            {tutorial.lesson.objective.kind === "ball-displacement" && (
-              <g className="resonance-tutorial-checkpoint">
-                <line
-                  x1={(state.level.ball.position.x + tutorial.lesson.objective.minimumDistance) * scaleX}
-                  x2={(state.level.ball.position.x + tutorial.lesson.objective.minimumDistance) * scaleX}
-                  y1="70"
-                  y2="730"
-                />
-                <text
-                  x={(state.level.ball.position.x + tutorial.lesson.objective.minimumDistance) * scaleX + 13}
-                  y="94"
-                >CROSS THIS LINE</text>
-              </g>
-            )}
-            {tutorial.lesson.objective.kind === "stopped-zones" && tutorial.lesson.objective.zones.map((zone, index) => (
-              <g
-                key={`${zone.minimumX}-${zone.maximumX}`}
-                className={index < tutorial.objective.milestoneIndex ? "complete" : index === tutorial.objective.milestoneIndex ? "current" : "pending"}
-              >
-                <rect
-                  className="resonance-tutorial-stop-zone"
-                  x={zone.minimumX * scaleX}
-                  y="74"
-                  width={(zone.maximumX - zone.minimumX) * scaleX}
-                  height="652"
-                  rx="13"
-                />
-                <text x={(zone.minimumX + zone.maximumX) / 2 * scaleX} y="105">MARK {index + 1}</text>
-              </g>
-            ))}
-            {tutorial.lesson.objective.kind === "sustain-sequence" && (
-              <g className="resonance-tutorial-capacitors">
-                {tutorial.lesson.objective.holdSeconds.map((seconds, index) => {
-                  const active = index === tutorial.objective.milestoneIndex;
-                  const complete = index < tutorial.objective.milestoneIndex;
-                  const fill = complete
-                    ? 1
-                    : active ? clamp(tutorial.objective.currentHoldSeconds / seconds, 0, 1) : 0;
-                  const x = 420 + index * 145;
-                  return (
-                    <g key={seconds} className={complete ? "complete" : active ? "current" : "pending"} transform={`translate(${x} 70)`}>
-                      <rect className="capacitor-shell" width="106" height="28" rx="6" />
-                      <rect className="capacitor-fill" x="4" y="4" width={98 * fill} height="20" rx="4" />
-                      <text x="53" y="49">{seconds.toFixed(1)}s</text>
-                    </g>
-                  );
-                })}
-              </g>
-            )}
-            {tutorial.lesson.objective.kind === "charged-capture" && (
-              <g className={tutorial.objective.chargeSeconds >= (tutorial.lesson.isolation.chargeGate ?? 0) ? "resonance-tutorial-bridge powered" : "resonance-tutorial-bridge charging"}>
-                <rect
-                  x={(state.level.ball.position.x + .25) * scaleX}
-                  y={(state.level.ball.position.y - .62) * scaleY}
-                  width={(state.level.goal.position.x - state.level.ball.position.x - .5) * scaleX}
-                  height={1.24 * scaleY}
-                  rx="18"
-                />
-                <text x={(state.level.ball.position.x + state.level.goal.position.x) / 2 * scaleX} y={(state.level.ball.position.y - .82) * scaleY}>
-                  {tutorial.objective.chargeSeconds >= (tutorial.lesson.isolation.chargeGate ?? 0) ? "BRIDGE POWERED" : "CHARGE BRIDGE"}
-                </text>
-              </g>
-            )}
-            {tutorial.lesson.objective.kind === "coherence-sequence" && (
-              <g className="resonance-tutorial-focus-gates">
-                {tutorial.lesson.objective.minimumCoherence.map((threshold, index) => {
-                  const x = (4.2 + index * 1.7) * scaleX;
-                  const complete = index < tutorial.objective.milestoneIndex;
-                  const current = index === tutorial.objective.milestoneIndex;
-                  return (
-                    <g key={threshold} className={complete ? "complete" : current ? "current" : "pending"}>
-                      <line x1={x} x2={x} y1="205" y2="595" />
-                      <text x={x} y="186">{Math.round(threshold * 100)}% FOCUS</text>
-                    </g>
-                  );
-                })}
-              </g>
-            )}
-          </g>
-        )}
 
         <g className="resonance-field-cells" aria-hidden="true">
           {fieldCells.map(({ index, column, row, sample }) => {

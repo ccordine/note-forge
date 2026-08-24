@@ -4,7 +4,7 @@ import { generateResonanceLevel } from "../apps/web/src/features/voice-arcade/re
 import {
   evaluateResonanceVoice,
   evaluateResonatorActivation,
-} from "../apps/web/src/features/voice-arcade/resonance-physics";
+} from "../apps/web/src/features/voice-arcade/resonance-voice";
 import type { VoiceArcadeDifficulty } from "../apps/web/src/features/voice-arcade/model";
 
 const PROGRESSION = {

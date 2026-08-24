@@ -1,12 +1,6 @@
-export const ARCADE_MODES = Object.freeze([
-  "pattern",
-  "pong",
-  "song",
-  "maze",
-  "resonance",
-  "draw",
-] as const);
-export type ArcadeMode = (typeof ARCADE_MODES)[number];
+import type { ArcadeMode } from "./arcade-registry";
+
+export { ARCADE_MODES, type ArcadeMode } from "./arcade-registry";
 export type ArcadeDifficultyId = "easy" | "medium" | "hard";
 export type ArcadeCurriculumStage = "deliberate" | "reflex" | "background";
 export type ArcadeFeedbackLevel = "full" | "reduced" | "gameplay";
@@ -52,6 +46,8 @@ export interface ArcadeOutcome {
   curriculumStage: ArcadeCurriculumStage;
   /** A mode-specific branch such as `ddr`, `trace-square`, `random`, or a chamber policy. */
   variant?: string;
+  /** Explicitly completed progression unit; attempted `variant` never implies completion. */
+  completedVariant?: string;
   score: number;
   grade: string;
   xp: number;
@@ -65,6 +61,8 @@ export interface ArcadeGameProps {
   difficulty: ArcadeDifficultyId;
   curriculumStage: ArcadeCurriculumStage;
   voiceRange: ArcadeVoiceRange;
+  /** Immutable shell-owned completion evidence for this active cabinet only. */
+  completedVariants: readonly string[];
   onExit: () => void;
   onComplete: (outcome: ArcadeOutcome) => void;
 }

@@ -1,27 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_CHALLENGE_MINIMUM_CONFIDENCE,
-  DEFAULT_PONG_CONFIG,
   DIFFICULTY_PRESETS,
-  MAX_TRACKABLE_FRAME_GAP_SECONDS,
   createChallengeSession,
   createChallengeSteps,
-  createPongState,
   createSeededRandom,
-  finishChallengeSession,
   generatePitchPattern,
   getDifficultyPreset,
   gradeChallengeScore,
   mapPitchToNormalizedVertical,
-  scoreChallengeFrame,
-  summarizeChallenge,
-  updatePongState,
-  type ChallengePitchFrame,
-  type ChallengeSessionState,
   type ChallengeStep,
-  type PongState,
 } from "../apps/web/src/features/voice-arcade/model";
+import {
+  DEFAULT_PONG_CONFIG,
+  createPongState,
+  updatePongState,
+  type PongState,
+} from "../apps/web/src/features/voice-arcade/pong-physics";
 
 function step(overrides: Partial<ChallengeStep> = {}): ChallengeStep {
   return {
@@ -37,26 +32,6 @@ function step(overrides: Partial<ChallengeStep> = {}): ChallengeStep {
     maximumPoints: 1_000,
     ...overrides,
   };
-}
-
-function frame(
-  timeSeconds: number,
-  midiFloat: number | null = 60,
-  overrides: Partial<Pick<ChallengePitchFrame, "confidence" | "voiced">> = {},
-): ChallengePitchFrame {
-  return {
-    timeSeconds,
-    midiFloat,
-    confidence: overrides.confidence ?? 0.9,
-    voiced: overrides.voiced ?? true,
-  };
-}
-
-function feed(
-  state: ChallengeSessionState,
-  frames: readonly ChallengePitchFrame[],
-): ChallengeSessionState {
-  return frames.reduce(scoreChallengeFrame, state);
 }
 
 describe("Voice Arcade difficulties and seeded patterns", () => {
@@ -194,104 +169,17 @@ describe("Simon and DDR challenge timelines", () => {
   });
 });
 
-describe("per-frame challenge scoring", () => {
-  it("accepts exact tolerance and confidence boundaries and awards a hit", () => {
-    let state = createChallengeSession([step()], { minimumConfidence: 0.7 });
-    expect(state).toMatchObject({
+describe("challenge session construction", () => {
+  it("creates a ready session with one source of scoring state", () => {
+    expect(createChallengeSession([step()], { minimumConfidence: 0.7 })).toMatchObject({
       status: "ready",
       minimumConfidence: 0.7,
       combo: 0,
       accuracyPercent: 0,
     });
-    state = feed(state, [
-      frame(0, 60.2, { confidence: 0.7 }),
-      frame(0.2, 60.2, { confidence: 0.7 }),
-      frame(0.4, 60, { confidence: 0.7 }),
-    ]);
-
-    expect(state).toMatchObject({
-      status: "complete",
-      activeStepIndex: 1,
-      hitSteps: 1,
-      missedSteps: 0,
-      combo: 1,
-      maxCombo: 1,
-    });
-    expect(state.steps[0]).toMatchObject({ status: "hit", heldSeconds: 0.4, progress: 1 });
-    expect(state.accuracyPercent).toBeCloseTo(100 / 3, 8);
   });
 
-  it("requires one uninterrupted sustain and resets on a confidently wrong pitch", () => {
-    let state = createChallengeSession([step({ requiredSustainSeconds: 0.5 })]);
-    state = feed(state, [frame(0), frame(0.2), frame(0.3, 60.21), frame(0.5), frame(0.7)]);
-
-    expect(state.status).toBe("running");
-    expect(state.steps[0]!.status).toBe("active");
-    expect(state.steps[0]!.heldSeconds).toBeCloseTo(0.2, 10);
-    expect(state.steps[0]!.progress).toBeCloseTo(0.4, 10);
-    state = scoreChallengeFrame(state, frame(1.01));
-    expect(state).toMatchObject({ status: "complete", hitSteps: 0, missedSteps: 1, combo: 0 });
-  });
-
-  it("does not invent sustain time across a long detector gap", () => {
-    const state = feed(createChallengeSession([step({ requiredSustainSeconds: 0.5 })]), [
-      frame(0),
-      frame(MAX_TRACKABLE_FRAME_GAP_SECONDS),
-      frame(MAX_TRACKABLE_FRAME_GAP_SECONDS + 0.251),
-    ]);
-    expect(state.steps[0]!.heldSeconds).toBe(0);
-    expect(state.steps[0]!.firstMatchedAtSeconds).toBeCloseTo(0.501);
-  });
-
-  it("builds combo across hits and resets it when a later cue expires", () => {
-    const steps = [
-      step(),
-      step({
-        id: "ddr-2",
-        index: 1,
-        targetMidi: 62,
-        cueAtSeconds: 1.2,
-        windowStartSeconds: 1.1,
-        windowEndSeconds: 2.1,
-      }),
-      step({
-        id: "ddr-3",
-        index: 2,
-        targetMidi: 64,
-        cueAtSeconds: 2.3,
-        windowStartSeconds: 2.2,
-        windowEndSeconds: 3.2,
-      }),
-    ];
-    let state = createChallengeSession(steps);
-    state = feed(state, [frame(0), frame(0.2), frame(0.4)]);
-    expect(state).toMatchObject({ combo: 1, maxCombo: 1, hitSteps: 1 });
-    state = feed(state, [frame(1.1, 62), frame(1.3, 62), frame(1.5, 62)]);
-    expect(state).toMatchObject({ combo: 2, maxCombo: 2, hitSteps: 2 });
-    state = scoreChallengeFrame(state, frame(3.21, 64));
-    expect(state).toMatchObject({ status: "complete", combo: 0, maxCombo: 2, hitSteps: 2, missedSteps: 1 });
-    expect(state.score).toBeGreaterThan(0);
-  });
-
-  it("ignores duplicate and out-of-order frames without mutating state", () => {
-    const state = scoreChallengeFrame(createChallengeSession([step()]), frame(0.2));
-    expect(scoreChallengeFrame(state, frame(0.2))).toBe(state);
-    expect(scoreChallengeFrame(state, frame(0.1))).toBe(state);
-  });
-
-  it("marks every unresolved step missed when the player exits early", () => {
-    const state = createChallengeSession([
-      step(),
-      step({ id: "ddr-2", index: 1, windowStartSeconds: 1.1, windowEndSeconds: 2.1 }),
-    ]);
-    const finished = finishChallengeSession(scoreChallengeFrame(state, frame(0)));
-    expect(finished).toMatchObject({ status: "complete", activeStepIndex: 2, missedSteps: 2, combo: 0 });
-    expect(finished.steps.map(({ status }) => status)).toEqual(["miss", "miss"]);
-    expect(finishChallengeSession(finished)).toBe(finished);
-  });
-
-  it("validates sessions and incoming detector frames", () => {
-    expect(DEFAULT_CHALLENGE_MINIMUM_CONFIDENCE).toBe(0.5);
+  it("rejects invalid sessions", () => {
     expect(() => createChallengeSession([])).toThrow(RangeError);
     expect(() => createChallengeSession([step()], { minimumConfidence: 1.01 })).toThrow(RangeError);
     expect(() => createChallengeSession([step(), step()])).toThrow(RangeError);
@@ -301,10 +189,6 @@ describe("per-frame challenge scoring", () => {
     ])).toThrow(RangeError);
     expect(() => createChallengeSession([step({ toleranceCents: 0 })])).toThrow(RangeError);
 
-    const state = createChallengeSession([step()]);
-    expect(() => scoreChallengeFrame(state, frame(-1))).toThrow(RangeError);
-    expect(() => scoreChallengeFrame(state, frame(0, Number.NaN))).toThrow(RangeError);
-    expect(() => scoreChallengeFrame(state, frame(0, 60, { confidence: 1.1 }))).toThrow(RangeError);
   });
 });
 
@@ -322,24 +206,6 @@ describe("challenge grades and summary", () => {
     [100, "A+"],
   ] as const)("maps %s percent to grade %s", (score, grade) => {
     expect(gradeChallengeScore(score).grade).toBe(grade);
-  });
-
-  it("summarizes a perfect run as a full-score A+", () => {
-    const state = feed(createChallengeSession([step({ cueAtSeconds: 0 })]), [
-      frame(0), frame(0.2), frame(0.4),
-    ]);
-    expect(summarizeChallenge(state)).toMatchObject({
-      grade: "A+",
-      score: 1_000,
-      maximumScore: 1_000,
-      scorePercent: 100,
-      accuracyPercent: 100,
-      completionPercent: 100,
-      hitSteps: 1,
-      missedSteps: 0,
-      maxCombo: 1,
-      totalSteps: 1,
-    });
   });
 
   it("rejects non-finite and out-of-range grade percentages", () => {

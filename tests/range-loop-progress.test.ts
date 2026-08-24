@@ -307,18 +307,20 @@ describe("baseline-first progress restoration", () => {
 
 describe("baseline-routed family progression", () => {
   it.each([
-    [36, ["deep", "low", "middle", "high"]],
-    [48, ["low", "deep", "middle", "high"]],
-    [60, ["middle", "low", "deep", "high"]],
-    [72, ["high", "middle", "low", "deep"]],
+    [30, ["foundation", "deep", "low", "middle", "high", "upper"]],
+    [36, ["deep", "foundation", "low", "middle", "high", "upper"]],
+    [48, ["low", "deep", "foundation", "middle", "high", "upper"]],
+    [60, ["middle", "low", "deep", "foundation", "high", "upper"]],
+    [72, ["high", "middle", "low", "deep", "foundation", "upper"]],
+    [84, ["upper", "high", "middle", "low", "deep", "foundation"]],
   ] as const)("routes outward from baseline MIDI %i", (baselineMidi, expectedOrder) => {
     expect(profileFamilyOrder(baselineMidi)).toEqual(expectedOrder);
   });
 
-  it("cycles C3 through Low, Deep, Middle, High, then wraps to Low", () => {
+  it("cycles C3 through every detector-backed family, then wraps to Low", () => {
     const progress = normalizeProgress(null);
     let familyId: RangeFamilyId = "low";
-    const transitions = Array.from({ length: 4 }, () => {
+    const transitions = Array.from({ length: 6 }, () => {
       const next = nextProfileFamily(familyId, progress, "natural", "ascending", 48)!;
       familyId = next.familyId;
       return [next.familyId, next.wrapped] as const;
@@ -326,8 +328,10 @@ describe("baseline-routed family progression", () => {
 
     expect(transitions).toEqual([
       ["deep", false],
+      ["foundation", false],
       ["middle", false],
       ["high", false],
+      ["upper", false],
       ["low", true],
     ]);
   });
@@ -339,6 +343,11 @@ describe("baseline-routed family progression", () => {
         ...empty.natural,
         deep: {
           passedMidis: targetsForFamily("deep", "natural"),
+          parkedMidis: [],
+          cyclesCompleted: 0,
+        },
+        foundation: {
+          passedMidis: targetsForFamily("foundation", "natural"),
           parkedMidis: [],
           cyclesCompleted: 0,
         },

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   NOTE_FAMILIES,
   NOTE_LETTERS,
-  advanceHighestUnlockedFamily,
   createEmptyFamilyEvidence,
   createNoteFamilyTrial,
   createReferenceTrial,
@@ -16,7 +15,6 @@ import {
   parseNoteLetterKey,
   pitchClassFromLetterKey,
   recordNoteAttempt,
-  unlockedFamilyIdsThrough,
   type FamilyEvidence,
   type NoteFamilyId,
 } from "../apps/web/src/features/ear-training/trials";
@@ -130,7 +128,7 @@ describe("A–G answer keys", () => {
   });
 });
 
-describe("per-note mastery and family unlocks", () => {
+describe("per-note mastery evidence", () => {
   it("requires three consecutive correct answers, regardless of lifetime totals", () => {
     expect(isNoteMastered({ attempts: 2, correct: 2, correctStreak: 2 })).toBe(false);
     expect(isNoteMastered({ attempts: 3, correct: 3, correctStreak: 3 })).toBe(true);
@@ -193,17 +191,6 @@ describe("per-note mastery and family unlocks", () => {
     expect(isFamilyComplete(incomplete)).toBe(false);
     expect(masteredNoteCount(complete)).toBe(7);
     expect(isFamilyComplete(complete)).toBe(true);
-  });
-
-  it("keeps an earned family unlocked when an earlier note later loses stability", () => {
-    expect(advanceHighestUnlockedFamily("low", "low", true)).toBe("middle");
-    expect(unlockedFamilyIdsThrough("middle")).toEqual(["low", "middle"]);
-
-    expect(advanceHighestUnlockedFamily("middle", "low", false)).toBe("middle");
-    expect(unlockedFamilyIdsThrough("middle")).toEqual(["low", "middle"]);
-
-    expect(advanceHighestUnlockedFamily("middle", "middle", true)).toBe("high");
-    expect(advanceHighestUnlockedFamily("high", "low", false)).toBe("high");
   });
 
   it("draws only from notes that still need mastery", () => {

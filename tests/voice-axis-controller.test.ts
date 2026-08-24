@@ -21,7 +21,6 @@ const OPTIONS = Object.freeze({
   centerMidi: 54,
   deadZoneCents: 20,
   responsePerSecond: 10,
-  freshnessSeconds: 0.35,
 }) satisfies VoiceAxisControllerOptions;
 
 function detected(
@@ -56,7 +55,7 @@ function unvoiced(
 describe("shared continuous voice axis", () => {
   it("maps low, center, and high pitch through the canonical vertical mapper", () => {
     let state = createVoiceAxisController(OPTIONS);
-    let update = updateVoiceAxisFromFrame(state, detected(0, 48), 10);
+    let update = updateVoiceAxisFromFrame(state, detected(0, 48));
     expect(update).toMatchObject({
       accepted: true,
       mapping: { normalizedY: 1, clampedMidi: 48, inDeadZone: false },
@@ -64,11 +63,11 @@ describe("shared continuous voice axis", () => {
     });
 
     state = update.state;
-    update = updateVoiceAxisFromFrame(state, detected(0.1, 54.1), 10.1);
+    update = updateVoiceAxisFromFrame(state, detected(0.1, 54.1));
     expect(update.mapping).toMatchObject({ normalizedY: 0.5, inDeadZone: true });
 
     state = update.state;
-    update = updateVoiceAxisFromFrame(state, detected(0.2, 60), 10.2);
+    update = updateVoiceAxisFromFrame(state, detected(0.2, 60));
     expect(update.mapping).toMatchObject({ normalizedY: 0, clampedMidi: 60 });
     expect(update.state).toMatchObject({ observedFrameCount: 3, acceptedFrameCount: 3 });
   });
@@ -86,61 +85,46 @@ describe("shared continuous voice axis", () => {
 
   it("freezes exactly where it is when silence arrives", () => {
     let state = createVoiceAxisController(OPTIONS);
-    state = updateVoiceAxisFromFrame(state, detected(0, 60), 1).state;
-    state = advanceVoiceAxisController(state, { nowSeconds: 1.05, deltaSeconds: 0.05 });
+    state = updateVoiceAxisFromFrame(state, detected(0, 60)).state;
+    state = advanceVoiceAxisController(state, { deltaSeconds: 0.05 });
     const partiallyRaisedPosition = state.position;
     expect(partiallyRaisedPosition).toBeGreaterThan(0);
     expect(partiallyRaisedPosition).toBeLessThan(0.5);
 
-    state = updateVoiceAxisFromFrame(state, unvoiced(0.1), 1.1).state;
+    state = updateVoiceAxisFromFrame(state, unvoiced(0.1)).state;
     expect(state).toMatchObject({
       status: "unvoiced",
       targetPosition: partiallyRaisedPosition,
       pitchMidi: null,
     });
-    const afterBreath = advanceVoiceAxisController(state, {
-      nowSeconds: 3,
-      deltaSeconds: 1.9,
-    });
+    const afterBreath = advanceVoiceAxisController(state, { deltaSeconds: 1.9 });
     expect(afterBreath.position).toBe(partiallyRaisedPosition);
   });
 
-  it("expires stale evidence before it can move the axis again", () => {
+  it("uses PCM evidence rather than a wall-clock freshness watchdog", () => {
     let state = createVoiceAxisController(OPTIONS);
-    state = updateVoiceAxisFromFrame(state, detected(0, 48), 5).state;
-    state = advanceVoiceAxisController(state, { nowSeconds: 5.35, deltaSeconds: 0.1 });
+    state = updateVoiceAxisFromFrame(state, detected(0, 48)).state;
+    state = advanceVoiceAxisController(state, { deltaSeconds: 0.1 });
     expect(state.status).toBe("steering");
-    const freshPosition = state.position;
-
-    state = advanceVoiceAxisController(state, { nowSeconds: 5.351, deltaSeconds: 0.1 });
-    expect(state).toMatchObject({
-      status: "stale",
-      position: freshPosition,
-      targetPosition: freshPosition,
-      pitchMidi: null,
-    });
-    expect(advanceVoiceAxisController(state, {
-      nowSeconds: 6,
-      deltaSeconds: 0.649,
-    }).position).toBe(freshPosition);
+    const firstPosition = state.position;
+    state = advanceVoiceAxisController(state, { deltaSeconds: 10 });
+    expect(state.status).toBe("steering");
+    expect(state.position).toBeGreaterThan(firstPosition);
+    expect(state.position).toBeCloseTo(1, 10);
   });
 
   it("applies response by elapsed time rather than render-frame count", () => {
     const observed = updateVoiceAxisFromFrame(
       createVoiceAxisController(OPTIONS),
       detected(0, 60),
-      0,
     ).state;
     const oneStep = advanceVoiceAxisController(observed, {
-      nowSeconds: 0.1,
       deltaSeconds: 0.1,
     });
     const firstHalf = advanceVoiceAxisController(observed, {
-      nowSeconds: 0.05,
       deltaSeconds: 0.05,
     });
     const twoHalves = advanceVoiceAxisController(firstHalf, {
-      nowSeconds: 0.1,
       deltaSeconds: 0.05,
     });
     expect(twoHalves.position).toBeCloseTo(oneStep.position, 12);
@@ -150,11 +134,10 @@ describe("shared continuous voice axis", () => {
     const accepted = updateVoiceAxisFromFrame(
       createVoiceAxisController(OPTIONS),
       detected(1, 48),
-      2,
     ).state;
-    expect(updateVoiceAxisFromFrame(accepted, detected(1, 60), 2.1).state).toBe(accepted);
-    expect(updateVoiceAxisFromFrame(accepted, detected(0.9, 60), 2.1).state).toBe(accepted);
-    expect(updateVoiceAxisFromFrame(accepted, detected(Number.NaN, 60), 2.1).state).toBe(accepted);
+    expect(updateVoiceAxisFromFrame(accepted, detected(1, 60)).state).toBe(accepted);
+    expect(updateVoiceAxisFromFrame(accepted, detected(0.9, 60)).state).toBe(accepted);
+    expect(updateVoiceAxisFromFrame(accepted, detected(Number.NaN, 60)).state).toBe(accepted);
   });
 
   it("distinguishes uncertainty from explicit unvoiced evidence", () => {
@@ -162,17 +145,16 @@ describe("shared continuous voice axis", () => {
     state = updateVoiceAxisFromFrame(
       state,
       unvoiced(0, "below-confidence-threshold"),
-      1,
     ).state;
     expect(state.status).toBe("uncertain");
-    state = updateVoiceAxisFromFrame(state, unvoiced(0.1, "no-periodic-candidate"), 1.1).state;
+    state = updateVoiceAxisFromFrame(state, unvoiced(0.1, "no-periodic-candidate")).state;
     expect(state.status).toBe("unvoiced");
   });
 
   it("supports an explicit game pause without resetting the coordinate", () => {
     let state = createVoiceAxisController(OPTIONS);
-    state = updateVoiceAxisFromFrame(state, detected(0, 48), 1).state;
-    state = advanceVoiceAxisController(state, { nowSeconds: 1.1, deltaSeconds: 0.1 });
+    state = updateVoiceAxisFromFrame(state, detected(0, 48)).state;
+    state = advanceVoiceAxisController(state, { deltaSeconds: 0.1 });
     const frozen = freezeVoiceAxisController(state);
     expect(frozen).toMatchObject({
       status: "idle",
@@ -182,18 +164,15 @@ describe("shared continuous voice axis", () => {
     });
   });
 
-  it("validates controller geometry, response, freshness, and clocks", () => {
+  it("validates controller geometry, response, and game-frame deltas", () => {
     expect(() => createVoiceAxisController({ ...OPTIONS, lowMidi: 60 })).toThrow(RangeError);
     expect(() => createVoiceAxisController({ ...OPTIONS, centerMidi: 60 })).toThrow(RangeError);
     expect(() => createVoiceAxisController({ ...OPTIONS, deadZoneCents: -1 })).toThrow(RangeError);
     expect(() => createVoiceAxisController({ ...OPTIONS, responsePerSecond: 0 })).toThrow(RangeError);
-    expect(() => createVoiceAxisController({ ...OPTIONS, freshnessSeconds: 0 })).toThrow(RangeError);
     expect(() => createVoiceAxisController({ ...OPTIONS, initialPosition: 1.01 })).toThrow(RangeError);
 
     const state = createVoiceAxisController(OPTIONS);
-    expect(() => updateVoiceAxisFromFrame(state, detected(0, 54), -1)).toThrow(RangeError);
-    expect(() => advanceVoiceAxisController(state, { nowSeconds: -1, deltaSeconds: 0 })).toThrow(RangeError);
-    expect(() => advanceVoiceAxisController(state, { nowSeconds: 1, deltaSeconds: -0.1 })).toThrow(RangeError);
+    expect(() => advanceVoiceAxisController(state, { deltaSeconds: -0.1 })).toThrow(RangeError);
   });
 });
 
@@ -233,7 +212,7 @@ describe("continuous voice-axis PCM integration (not browser proof)", () => {
     const windowSeconds = 4_096 / 48_000;
     let state = createVoiceAxisController(OPTIONS);
     const frame = detectProductionFrame(harmonicWindow(60, 0), 0.5 * windowSeconds);
-    const update = updateVoiceAxisFromFrame(state, frame, 10);
+    const update = updateVoiceAxisFromFrame(state, frame);
     state = update.state;
 
     expect(frame).toMatchObject({ voiced: true, nearestMidi: 60, reason: "detected" });
@@ -248,12 +227,9 @@ describe("continuous voice-axis PCM integration (not browser proof)", () => {
       new Float32Array(4_096),
       1.5 * windowSeconds,
     );
-    state = updateVoiceAxisFromFrame(state, silence, 10 + windowSeconds).state;
+    state = updateVoiceAxisFromFrame(state, silence).state;
     expect(state.status).not.toBe("steering");
     const position = state.position;
-    expect(advanceVoiceAxisController(state, {
-      nowSeconds: 11,
-      deltaSeconds: 0.5,
-    }).position).toBe(position);
+    expect(advanceVoiceAxisController(state, { deltaSeconds: 0.5 }).position).toBe(position);
   });
 });

@@ -1,35 +1,29 @@
-import type { YinPitchFrame } from "@noteforge/pitch-engine";
+import type { PitchObservation } from "../../audio/note-input";
 import {
-  createSustainTracker,
-  updateSustainTracker,
-  type SustainTrackerState,
-} from "../range-loop/model";
+  createRangeDwell,
+  updateRangeDwell,
+  type RangeDwellState,
+} from "../range-loop/range-dwell";
 import {
   CARDINAL_DIRECTIONS,
   type CardinalDirection,
   type PitchMazeDirectionNotes,
 } from "./pitch-maze-model";
 
-export type PitchMazeControllerPhase = "armed" | "tracking" | "awaiting-release";
+export type PitchMazeControllerPhase = "armed" | "tracking";
 
-/** The controller intentionally consumes the interpreted frame, not raw detector evidence. */
-export type PitchMazeVoiceFrame = Pick<
-  YinPitchFrame,
-  "timeSeconds" | "midiFloat" | "confidence" | "voiced" | "detector" | "reason"
->;
+/** The controller consumes the canonical observation with capture-sample authority intact. */
+export type PitchMazeVoiceFrame = PitchObservation;
 
 export interface PitchMazeControllerOptions {
   readonly directionNotes: PitchMazeDirectionNotes;
   readonly requiredHoldSeconds: number;
   readonly toleranceCents: number;
-  readonly listeningStartedAtSeconds?: number;
   readonly minimumConfidence?: number;
   /** A pitch farther than this from every mapped note cannot become an intent. */
   readonly acquisitionCorridorCents?: number;
   /** A new direction must be this much closer before it can replace the current lock. */
   readonly directionSwitchHysteresisCents?: number;
-  /** Continuous silence required after a command before another command is accepted. */
-  readonly releaseDurationSeconds?: number;
   /** Tighter lane used to measure settling quality; it does not gate movement. */
   readonly settleToleranceCents?: number;
   /** Ignore tiny sign changes inside this lane when counting overshoots. */
@@ -40,11 +34,9 @@ export interface ResolvedPitchMazeControllerOptions {
   readonly directionNotes: PitchMazeDirectionNotes;
   readonly requiredHoldSeconds: number;
   readonly toleranceCents: number;
-  readonly listeningStartedAtSeconds: number;
   readonly minimumConfidence: number;
   readonly acquisitionCorridorCents: number;
   readonly directionSwitchHysteresisCents: number;
-  readonly releaseDurationSeconds: number;
   readonly settleToleranceCents: number;
   readonly overshootDeadbandCents: number;
 }
@@ -96,18 +88,28 @@ export interface PitchMazeControllerState {
   readonly phase: PitchMazeControllerPhase;
   readonly activeDirection: CardinalDirection | null;
   readonly activeTargetMidi: number | null;
-  readonly sustain: SustainTrackerState | null;
+  readonly dwell: RangeDwellState | null;
   readonly capture: PitchMazeCommandCapture | null;
-  readonly releaseStartedAtSeconds: number | null;
-  readonly releaseProgress: number;
-  readonly lastProcessedTimeSeconds: number | null;
+  /** Prevent one continuous note occupation from becoming auto-repeat. */
+  readonly committedDirection: CardinalDirection | null;
+  readonly lastAuthority: PitchMazeFrameAuthority | null;
   readonly completedCommandCount: number;
   readonly lastCommand: PitchMazeCommandQuality | null;
 }
 
-export type PitchMazeControllerEvent =
-  | { readonly type: "command-complete"; readonly command: PitchMazeCommandQuality }
-  | { readonly type: "rearmed" };
+export interface PitchMazeFrameAuthority {
+  readonly sampleRate: number;
+  readonly endSample: number;
+  readonly captureEpoch: number;
+  readonly continuityEpoch: number;
+  readonly graphGeneration: number;
+  readonly workletProcessCount: number;
+}
+
+export type PitchMazeControllerEvent = {
+  readonly type: "command-complete";
+  readonly command: PitchMazeCommandQuality;
+};
 
 export interface PitchMazeControllerUpdate {
   readonly state: PitchMazeControllerState;
@@ -117,15 +119,8 @@ export interface PitchMazeControllerUpdate {
 export const DEFAULT_PITCH_MAZE_MINIMUM_CONFIDENCE = 0.58;
 export const DEFAULT_PITCH_MAZE_ACQUISITION_CORRIDOR_CENTS = 48;
 export const DEFAULT_PITCH_MAZE_DIRECTION_HYSTERESIS_CENTS = 8;
-export const DEFAULT_PITCH_MAZE_RELEASE_SECONDS = 0.275;
 
 const EPSILON = 1e-9;
-const RELEASE_REASONS = new Set<YinPitchFrame["reason"]>([
-  "below-rms-threshold",
-  "insufficient-samples",
-  "invalid-samples",
-  "no-periodic-candidate",
-]);
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -154,27 +149,22 @@ function resolvedOptions(
 
   requirePositive(options.requiredHoldSeconds, "Required hold duration");
   requirePositive(options.toleranceCents, "Pitch tolerance");
-  const listeningStartedAtSeconds = options.listeningStartedAtSeconds ?? 0;
   const minimumConfidence = options.minimumConfidence ?? DEFAULT_PITCH_MAZE_MINIMUM_CONFIDENCE;
   const acquisitionCorridorCents = options.acquisitionCorridorCents
     ?? DEFAULT_PITCH_MAZE_ACQUISITION_CORRIDOR_CENTS;
   const directionSwitchHysteresisCents = options.directionSwitchHysteresisCents
     ?? DEFAULT_PITCH_MAZE_DIRECTION_HYSTERESIS_CENTS;
-  const releaseDurationSeconds = options.releaseDurationSeconds
-    ?? DEFAULT_PITCH_MAZE_RELEASE_SECONDS;
   const settleToleranceCents = options.settleToleranceCents
     ?? Math.min(options.toleranceCents, 18);
   const overshootDeadbandCents = options.overshootDeadbandCents
     ?? Math.min(6, options.toleranceCents / 3);
 
-  requireNonNegative(listeningStartedAtSeconds, "Listening start timestamp");
   requireFinite(minimumConfidence, "Minimum confidence");
   if (minimumConfidence < 0 || minimumConfidence > 1) {
     throw new RangeError("Minimum confidence must be from zero through one.");
   }
   requirePositive(acquisitionCorridorCents, "Acquisition corridor");
   requireNonNegative(directionSwitchHysteresisCents, "Direction-switch hysteresis");
-  requirePositive(releaseDurationSeconds, "Release duration");
   requirePositive(settleToleranceCents, "Settle tolerance");
   requireNonNegative(overshootDeadbandCents, "Overshoot deadband");
 
@@ -195,11 +185,9 @@ function resolvedOptions(
     directionNotes: Object.freeze(directionNotes),
     requiredHoldSeconds: options.requiredHoldSeconds,
     toleranceCents: options.toleranceCents,
-    listeningStartedAtSeconds,
     minimumConfidence,
     acquisitionCorridorCents,
     directionSwitchHysteresisCents,
-    releaseDurationSeconds,
     settleToleranceCents,
     overshootDeadbandCents,
   });
@@ -213,11 +201,10 @@ export function createPitchMazeController(
     phase: "armed",
     activeDirection: null,
     activeTargetMidi: null,
-    sustain: null,
+    dwell: null,
     capture: null,
-    releaseStartedAtSeconds: null,
-    releaseProgress: 0,
-    lastProcessedTimeSeconds: null,
+    committedDirection: null,
+    lastAuthority: null,
     completedCommandCount: 0,
     lastCommand: null,
   };
@@ -381,14 +368,13 @@ function beginTracking(
   selection: Readonly<PitchMazeDirectionSelection>,
   frame: Readonly<PitchMazeVoiceFrame>,
 ): PitchMazeControllerUpdate {
-  const initialSustain = createSustainTracker({
+  const initialDwell = createRangeDwell({
     targetMidi: selection.targetMidi,
     requiredHoldSeconds: state.options.requiredHoldSeconds,
     toleranceCents: state.options.toleranceCents,
-    listeningStartedAtSeconds: frame.timeSeconds,
     minimumConfidence: state.options.minimumConfidence,
   });
-  const sustain = updateSustainTracker(initialSustain, frame);
+  const dwell = updateRangeDwell(initialDwell, frame);
   return {
     event: null,
     state: {
@@ -396,118 +382,125 @@ function beginTracking(
       phase: "tracking",
       activeDirection: selection.direction,
       activeTargetMidi: selection.targetMidi,
-      sustain,
+      dwell,
       capture: createCapture(selection, frame.timeSeconds, state.options),
-      releaseStartedAtSeconds: null,
-      releaseProgress: 0,
-      lastProcessedTimeSeconds: frame.timeSeconds,
+      committedDirection: null,
+      lastAuthority: authorityFromFrame(frame),
     },
   };
 }
 
 function clearAttempt(
   state: Readonly<PitchMazeControllerState>,
-  timeSeconds: number,
+  frame: Readonly<PitchMazeVoiceFrame>,
+  committedDirection: CardinalDirection | null = state.committedDirection,
 ): PitchMazeControllerState {
   return {
     ...state,
     phase: "armed",
     activeDirection: null,
     activeTargetMidi: null,
-    sustain: null,
+    dwell: null,
     capture: null,
-    releaseStartedAtSeconds: null,
-    releaseProgress: 0,
-    lastProcessedTimeSeconds: timeSeconds,
+    committedDirection,
+    lastAuthority: authorityFromFrame(frame),
   };
 }
 
-function updateAwaitingRelease(
-  state: Readonly<PitchMazeControllerState>,
+function authorityFromFrame(
   frame: Readonly<PitchMazeVoiceFrame>,
-): PitchMazeControllerUpdate {
-  // Interpreter uncertainty is not proof the singer released. Only detector
-  // reasons that represent absent/aperiodic input can advance this gate.
-  const releaseEvidence = frame.detector === "yin"
-    && !frame.voiced
-    && RELEASE_REASONS.has(frame.reason);
-  if (!releaseEvidence) {
-    return {
-      event: null,
-      state: {
-        ...state,
-        releaseStartedAtSeconds: null,
-        releaseProgress: 0,
-        lastProcessedTimeSeconds: frame.timeSeconds,
-      },
-    };
-  }
+): PitchMazeFrameAuthority {
+  return Object.freeze({
+    sampleRate: frame.sampleRate,
+    endSample: frame.endSample,
+    captureEpoch: frame.captureEpoch,
+    continuityEpoch: frame.continuityEpoch,
+    graphGeneration: frame.graphGeneration,
+    workletProcessCount: frame.workletProcessCount,
+  });
+}
 
-  const releaseStartedAtSeconds = state.releaseStartedAtSeconds ?? frame.timeSeconds;
-  const releasedSeconds = Math.max(0, frame.timeSeconds - releaseStartedAtSeconds);
-  const releaseProgress = clamp(releasedSeconds / state.options.releaseDurationSeconds, 0, 1);
-  if (releaseProgress + EPSILON < 1) {
-    return {
-      event: null,
-      state: {
-        ...state,
-        releaseStartedAtSeconds,
-        releaseProgress,
-        lastProcessedTimeSeconds: frame.timeSeconds,
-      },
-    };
+function hasValidNewAuthority(
+  previous: Readonly<PitchMazeFrameAuthority> | null,
+  frame: Readonly<PitchMazeVoiceFrame>,
+): boolean {
+  if (!Number.isFinite(frame.timeSeconds)
+    || !Number.isFinite(frame.sampleRate)
+    || frame.sampleRate <= 0
+    || !Number.isSafeInteger(frame.startSample)
+    || frame.startSample < 0
+    || !Number.isSafeInteger(frame.endSample)
+    || frame.endSample <= frame.startSample
+    || frame.processedSampleCount !== frame.endSample
+    || !Number.isSafeInteger(frame.captureEpoch)
+    || frame.captureEpoch < 0
+    || !Number.isSafeInteger(frame.continuityEpoch)
+    || frame.continuityEpoch < 0
+    || !Number.isSafeInteger(frame.graphGeneration)
+    || frame.graphGeneration < 0
+    || !Number.isSafeInteger(frame.workletProcessCount)
+    || frame.workletProcessCount < 0) {
+    return false;
   }
-
-  return {
-    event: { type: "rearmed" },
-    state: {
-      ...state,
-      phase: "armed",
-      activeDirection: null,
-      activeTargetMidi: null,
-      sustain: null,
-      capture: null,
-      releaseStartedAtSeconds: null,
-      releaseProgress: 1,
-      lastProcessedTimeSeconds: frame.timeSeconds,
-    },
-  };
+  if (previous === null) return true;
+  const sameAuthority = previous.sampleRate === frame.sampleRate
+    && previous.captureEpoch === frame.captureEpoch
+    && previous.continuityEpoch === frame.continuityEpoch
+    && previous.graphGeneration === frame.graphGeneration;
+  if (sameAuthority) {
+    return frame.endSample > previous.endSample
+      && frame.workletProcessCount > previous.workletProcessCount;
+  }
+  return frame.captureEpoch > previous.captureEpoch
+    || (frame.captureEpoch === previous.captureEpoch
+      && frame.continuityEpoch > previous.continuityEpoch)
+    || (frame.captureEpoch === previous.captureEpoch
+      && frame.continuityEpoch === previous.continuityEpoch
+      && frame.graphGeneration > previous.graphGeneration);
 }
 
 /**
- * Consume exactly one interpreted frame. A completed command cannot repeat
- * until a separate, continuous release gesture re-arms the controller.
+ * Consume exactly one canonical observation. Completion is an edge on note
+ * occupation: a held note cannot auto-repeat, while silence or another mapped
+ * note establishes the next command immediately without a timed intermediary.
  */
 export function updatePitchMazeController(
   state: Readonly<PitchMazeControllerState>,
   frame: Readonly<PitchMazeVoiceFrame>,
 ): PitchMazeControllerUpdate {
-  if (!Number.isFinite(frame.timeSeconds)
-    || frame.timeSeconds < state.options.listeningStartedAtSeconds
-    || (state.lastProcessedTimeSeconds !== null
-      && frame.timeSeconds <= state.lastProcessedTimeSeconds)) {
+  if (!hasValidNewAuthority(state.lastAuthority, frame)) {
     return { state: state as PitchMazeControllerState, event: null };
   }
 
-  if (state.phase === "awaiting-release") {
-    return updateAwaitingRelease(state, frame);
+  if (frame.discontinuity) {
+    return { state: clearAttempt(state, frame, null), event: null };
   }
 
   const reliable = isReliablePitchMazeFrame(frame, state.options.minimumConfidence);
   if (!reliable) {
-    if (state.phase === "tracking" && state.sustain !== null) {
-      const sustain = updateSustainTracker(state.sustain, frame);
-      if (sustain.status === "waiting") {
-        return { state: clearAttempt(state, frame.timeSeconds), event: null };
+    if (state.phase === "tracking") {
+      if (state.dwell === null || state.capture === null) {
+        return { event: null, state: clearAttempt(state, frame, null) };
       }
       return {
         event: null,
-        state: { ...state, sustain, lastProcessedTimeSeconds: frame.timeSeconds },
+        state: {
+          ...state,
+          // The shared dwell reducer advances sample authority while freezing
+          // earned occupancy through silence and uncertain evidence. The first
+          // credible frame after the gap re-establishes qualification and earns
+          // no catch-up interval.
+          dwell: updateRangeDwell(state.dwell, frame),
+          lastAuthority: authorityFromFrame(frame),
+        },
       };
     }
+    const committedDirection = frame.observationKind === "unvoiced"
+      ? null
+      : state.committedDirection;
     return {
       event: null,
-      state: { ...state, lastProcessedTimeSeconds: frame.timeSeconds },
+      state: { ...state, committedDirection, lastAuthority: authorityFromFrame(frame) },
     };
   }
 
@@ -517,16 +510,26 @@ export function updatePitchMazeController(
     state.options.acquisitionCorridorCents,
   );
   if (state.phase === "armed") {
-    return selection === null
-      ? { state: { ...state, lastProcessedTimeSeconds: frame.timeSeconds }, event: null }
-      : beginTracking(state, selection, frame);
+    if (selection === null) {
+      return {
+        state: { ...state, committedDirection: null, lastAuthority: authorityFromFrame(frame) },
+        event: null,
+      };
+    }
+    if (selection.direction === state.committedDirection) {
+      return {
+        state: { ...state, lastAuthority: authorityFromFrame(frame) },
+        event: null,
+      };
+    }
+    return beginTracking(state, selection, frame);
   }
 
   if (state.activeDirection === null
     || state.activeTargetMidi === null
-    || state.sustain === null
+    || state.dwell === null
     || state.capture === null) {
-    return { state: clearAttempt(state, frame.timeSeconds), event: null };
+    return { state: clearAttempt(state, frame, null), event: null };
   }
 
   const activeErrorCents = (frame.midiFloat! - state.activeTargetMidi) * 100;
@@ -541,20 +544,20 @@ export function updatePitchMazeController(
     + state.options.directionSwitchHysteresisCents;
   if (activeAbsoluteErrorCents > lockedRetentionCorridor + EPSILON) {
     return selection === null
-      ? { state: clearAttempt(state, frame.timeSeconds), event: null }
+      ? { state: clearAttempt(state, frame, null), event: null }
       : beginTracking(state, selection, frame);
   }
 
-  const sustain = updateSustainTracker(state.sustain, frame);
+  const dwell = updateRangeDwell(state.dwell, frame);
   const capture = appendCapture(state.capture, activeErrorCents, frame.timeSeconds, state.options);
-  if (sustain.status !== "complete") {
+  if (dwell.status !== "complete") {
     return {
       event: null,
       state: {
         ...state,
-        sustain,
+        dwell,
         capture,
-        lastProcessedTimeSeconds: frame.timeSeconds,
+        lastAuthority: authorityFromFrame(frame),
       },
     };
   }
@@ -564,12 +567,13 @@ export function updatePitchMazeController(
     event: { type: "command-complete", command },
     state: {
       ...state,
-      phase: "awaiting-release",
-      sustain,
-      capture,
-      releaseStartedAtSeconds: null,
-      releaseProgress: 0,
-      lastProcessedTimeSeconds: frame.timeSeconds,
+      phase: "armed",
+      activeDirection: null,
+      activeTargetMidi: null,
+      dwell: null,
+      capture: null,
+      committedDirection: command.direction,
+      lastAuthority: authorityFromFrame(frame),
       completedCommandCount: state.completedCommandCount + 1,
       lastCommand: command,
     },

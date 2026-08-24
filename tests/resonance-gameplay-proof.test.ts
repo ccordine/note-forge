@@ -3,10 +3,12 @@ import { midiToFrequency } from "@noteforge/pitch-engine";
 import { generateResonanceLevel } from "../apps/web/src/features/voice-arcade/resonance-level";
 import {
   advanceResonanceGame,
-  createResonanceGame,
-  type ResonanceGameState,
-  type ResonanceVoiceInput,
 } from "../apps/web/src/features/voice-arcade/resonance-physics";
+import type {
+  ResonanceGameState,
+  ResonanceVoiceInput,
+} from "../apps/web/src/features/voice-arcade/resonance-types";
+import { createResonanceGame } from "../apps/web/src/features/voice-arcade/resonance-world";
 
 function nextTargetMidi(state: Readonly<ResonanceGameState>): number {
   return state.level.resonators.find((resonator) => (

@@ -1,0 +1,447 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  amplitudeToDbfs,
+  browserProofSnapshot,
+  canonicalFrameKey,
+  collectRenderedNotes,
+  orderedPitchEvents,
+  waitForDiagnosticCount,
+} from "./proof-support/note-input-analysis.mjs";
+import {
+  assert,
+  availablePort,
+  captureProcessOutput,
+  delay,
+  DevToolsSession,
+  evaluate,
+  stopProcessGroup,
+  waitForBrowser,
+  waitForHttp,
+  waitForPageTarget,
+} from "./proof-support/devtools-runtime.mjs";
+import {
+  CAPTURE_HOP_BUDGET_MS,
+  CAPTURE_HOP_SAMPLES,
+  generatedSustainedMicrophoneWav,
+  noteLabel,
+  OLD_GATE_RMS_AMPLITUDE,
+  SAMPLE_RATE,
+  SUSTAINED_FIXTURE_SECONDS,
+  SUSTAINED_NOTE_MIDIS,
+  SUSTAINED_NOTE_SECONDS,
+} from "./proof-support/note-input-fixture.mjs";
+import { BROWSER_INSTRUMENTATION_SOURCE } from "./proof-support/note-input-instrumentation.mjs";
+
+const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
+const CHROMIUM = process.env.NOTEFORGE_CHROMIUM || "/usr/bin/chromium";
+const MINIMUM_CONTINUOUS_SECONDS = 8;
+const MINIMUM_RENDERED_SECONDS = 7.5;
+
+function longestFrameRun(events, midi) {
+  let current = [];
+  let longest = [];
+  for (const event of events) {
+    const frame = event.pitch?.frame;
+    const previous = current.at(-1)?.pitch?.frame;
+    const continuous = frame?.voiced
+      && frame.nearestMidi === midi
+      && (!previous
+        || (frame.captureEpoch === previous.captureEpoch
+          && frame.continuityEpoch === previous.continuityEpoch
+          && frame.endSample - previous.endSample === CAPTURE_HOP_SAMPLES));
+    if (continuous) current.push(event);
+    else current = frame?.voiced && frame.nearestMidi === midi ? [event] : [];
+    if (current.length > longest.length) longest = [...current];
+  }
+  const first = longest[0]?.pitch?.frame;
+  const last = longest.at(-1)?.pitch?.frame;
+  return {
+    events: longest,
+    seconds: first && last ? (last.endSample - first.endSample) / first.sampleRate : 0,
+    first,
+    last,
+  };
+}
+
+function longestRenderedRun(samples, label) {
+  let current = [];
+  let longest = [];
+  for (const sample of samples) {
+    if (sample.note === label && sample.inputState === "running") current.push(sample);
+    else current = [];
+    if (current.length > longest.length) longest = [...current];
+  }
+  return {
+    samples: longest,
+    seconds: longest.length > 1
+      ? (longest.at(-1).at - longest[0].at) / 1_000
+      : 0,
+    maximumHeldSeconds: Math.max(0, ...longest.map((sample) => sample.heldSeconds ?? 0)),
+  };
+}
+
+function longestSilenceRun(events) {
+  let current = 0;
+  let longest = 0;
+  for (const event of events) {
+    const frame = event.pitch?.frame;
+    if (frame && !frame.voiced && frame.rms === 0) current += 1;
+    else current = 0;
+    longest = Math.max(longest, current);
+  }
+  return longest;
+}
+
+async function main() {
+  let temporaryDirectory;
+  let vite;
+  let chromium;
+  let session;
+  let viteOutput = [];
+  let chromiumOutput = [];
+
+  try {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "noteforge-sustain-proof-"));
+    const wavPath = join(temporaryDirectory, "sustained-notes.wav");
+    const chromiumProfile = join(temporaryDirectory, "chromium-profile");
+    const vitePort = await availablePort();
+    const debugPort = await availablePort();
+    const pageUrl = `http://127.0.0.1:${vitePort}/#/practice/pitch-match/glide`;
+    await writeFile(wavPath, generatedSustainedMicrophoneWav());
+
+    vite = spawn(process.execPath, [
+      join(REPOSITORY_ROOT, "node_modules/vite/bin/vite.js"),
+      "preview",
+      "--config", join(REPOSITORY_ROOT, "vite.config.ts"),
+      "--host", "127.0.0.1",
+      "--port", String(vitePort),
+      "--strictPort",
+    ], {
+      cwd: REPOSITORY_ROOT,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    viteOutput = captureProcessOutput(vite, "vite-preview");
+    await waitForHttp(`http://127.0.0.1:${vitePort}/`, vite, 12_000, viteOutput);
+
+    chromium = spawn(CHROMIUM, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--autoplay-policy=no-user-gesture-required",
+      "--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream",
+      `--use-file-for-fake-audio-capture=${wavPath}`,
+      `--user-data-dir=${chromiumProfile}`,
+      `--remote-debugging-port=${debugPort}`,
+      "about:blank",
+    ], {
+      cwd: REPOSITORY_ROOT,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    chromiumOutput = captureProcessOutput(chromium, "chromium");
+    const target = await waitForPageTarget(debugPort, chromium, chromiumOutput);
+    session = new DevToolsSession(target.webSocketDebuggerUrl);
+    await session.connect();
+
+    const diagnosticBatches = [];
+    const consoleErrors = [];
+    session.on("Network.requestWillBeSent", ({ request }) => {
+      if (!request?.url?.includes("/api/diagnostics/pitch") || !request.postData) return;
+      try { diagnosticBatches.push(JSON.parse(request.postData)); } catch { /* count assertions fail */ }
+    });
+    session.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
+      consoleErrors.push(exceptionDetails?.exception?.description || exceptionDetails?.text || "browser exception");
+    });
+    session.on("Runtime.consoleAPICalled", ({ type, args }) => {
+      if (type !== "error") return;
+      consoleErrors.push(args?.map((argument) => argument.value ?? argument.description).join(" ") || "console error");
+    });
+
+    await session.send("Page.enable");
+    await session.send("Runtime.enable");
+    await session.send("Network.enable");
+    await session.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: BROWSER_INSTRUMENTATION_SOURCE,
+    });
+    await session.send("Page.navigate", { url: pageUrl });
+    await waitForBrowser(
+      session,
+      "document.readyState === 'complete' && Boolean(document.querySelector('[data-global-mic-enable]'))",
+      "the production global voice control",
+    );
+    const clicked = await evaluate(session, `(() => {
+      const button = document.querySelector('[data-global-mic-enable]');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(clicked, "The global Enable voice control was not clickable.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('.input-scope.running') && Number(document.querySelector('[data-note-input]')?.getAttribute('data-frame-count')) > 0",
+      "continuous production pitch analysis",
+      12_000,
+    );
+
+    const renderedSamples = await collectRenderedNotes(
+      session,
+      (SUSTAINED_FIXTURE_SECONDS + 0.5) * 1_000,
+    );
+    const sustainEndProof = await browserProofSnapshot(session);
+    assert(sustainEndProof.trackStopCalls.length === 0,
+      `The microphone stopped during sustained input: ${JSON.stringify(sustainEndProof.trackStopCalls)}.`);
+    assert(sustainEndProof.trackEnabledWrites.every((write) => write.value !== false),
+      `The microphone was disabled during sustained input: ${JSON.stringify(sustainEndProof.trackEnabledWrites)}.`);
+
+    // Use the same still-running stream to reproduce the exact workflow that
+    // previously showed a moving meter while its exercise hold remained zero.
+    await evaluate(session, "location.hash = '#/practice/range-loop'; true");
+    await waitForBrowser(
+      session,
+      "location.hash === '#/practice/range-loop' && Boolean(document.querySelector('.range-loop-page')) && Boolean(document.querySelector('[data-note-input][data-input-state=running]'))",
+      "Range Loop on the retained microphone",
+      8_000,
+    );
+    const rangeLoopMounted = await evaluate(session, `(() => {
+      const tuners = [...document.querySelectorAll('[data-note-input]')];
+      window.__noteforgeRangeLoopTuner = tuners[0] || null;
+      return {
+        count: tuners.length,
+        target: document.querySelector('.nf-voice-target strong')?.textContent?.trim() || null,
+      };
+    })()`);
+    assert(rangeLoopMounted.count === 1 && rangeLoopMounted.target === "C3",
+      `Range Loop did not mount exactly one C3 tuner: ${JSON.stringify(rangeLoopMounted)}.`);
+
+    await waitForBrowser(
+      session,
+      `(() => {
+        const detected = document.querySelector('[data-note-input]')?.getAttribute('data-detected-note');
+        const hold = Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow'));
+        return detected === 'C3' && hold >= 0.6 && hold < 2.2;
+      })()`,
+      "quiet C3 establishing sample-timed dwell before reference playback",
+      25_000,
+    );
+    const referenceBefore = await evaluate(session, `(() => ({
+      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+    }))()`);
+    const audioBeforeReference = await browserProofSnapshot(session);
+    const referenceClicked = await evaluate(session, `(() => {
+      const button = document.querySelector('.range-loop-reference-action button');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(referenceClicked, "Range Loop's real short-reference control was unavailable.");
+    await delay(900);
+    const referenceAfter = await evaluate(session, `(() => ({
+      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+      inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
+    }))()`);
+    const audioAfterReference = await browserProofSnapshot(session);
+    const newStarts = audioAfterReference.oscillatorStarts.slice(audioBeforeReference.oscillatorStarts.length);
+    const newStops = audioAfterReference.oscillatorStops.slice(audioBeforeReference.oscillatorStops.length);
+    assert(referenceBefore.sameTuner === true
+      && referenceAfter.sameTuner === true
+      && referenceAfter.inputState === "running"
+      && referenceAfter.holdSeconds > referenceBefore.holdSeconds,
+    `Reference playback replaced the tuner or interrupted earned dwell: ${JSON.stringify({ referenceBefore, referenceAfter })}.`);
+    assert(audioAfterReference.oscillators === audioBeforeReference.oscillators + 1
+      && newStarts.length === 1
+      && newStops.length === 1
+      && newStops[0].id === newStarts[0].id
+      && newStops[0].when - newStarts[0].when >= 0.55
+      && newStops[0].when - newStarts[0].when <= 0.7,
+    `Reference playback was not one bounded oscillator: ${JSON.stringify({ newStarts, newStops })}.`);
+    await delay(800);
+    const afterReferenceTail = await browserProofSnapshot(session);
+    assert(afterReferenceTail.oscillators === audioAfterReference.oscillators
+      && afterReferenceTail.oscillatorStarts.length === audioAfterReference.oscillatorStarts.length,
+    "A persistent quieter oscillator appeared after the short reference ended.");
+
+    await waitForBrowser(
+      session,
+      `(() => {
+        const target = document.querySelector('.nf-voice-target strong')?.textContent?.trim();
+        const hold = Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow'));
+        const result = document.querySelector('.range-result-next b')?.textContent || '';
+        return target === 'C3' && hold === 3 && result.includes('C3 held for 3.00 seconds');
+      })()`,
+      "Range Loop crediting three seconds of quiet C3 sample time",
+      8_000,
+    );
+    const rangeLoopResult = await evaluate(session, `(() => ({
+      target: document.querySelector('.nf-voice-target strong')?.textContent?.trim() || null,
+      detected: document.querySelector('[data-note-input]')?.getAttribute('data-detected-note') || null,
+      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      result: document.querySelector('.range-result-next b')?.textContent?.trim() || null,
+      inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
+      noteInputCount: document.querySelectorAll('[data-note-input]').length,
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+    }))()`);
+    const rangeLoopProof = await browserProofSnapshot(session);
+    assert(rangeLoopResult.target === "C3"
+      && rangeLoopResult.detected === "C3"
+      && rangeLoopResult.holdSeconds === 3
+      && rangeLoopResult.inputState === "running"
+      && rangeLoopResult.noteInputCount === 1
+      && rangeLoopResult.sameTuner === true,
+    `Range Loop did not render the completed quiet C3 hold on the live stream: ${JSON.stringify(rangeLoopResult)}.`);
+    assert(rangeLoopProof.getUserMediaCalls === sustainEndProof.getUserMediaCalls
+      && rangeLoopProof.streams === sustainEndProof.streams
+      && rangeLoopProof.tracks === sustainEndProof.tracks
+      && rangeLoopProof.audioContexts === sustainEndProof.audioContexts
+      && rangeLoopProof.workletNodes === sustainEndProof.workletNodes
+      && rangeLoopProof.workletSampleMessages > sustainEndProof.workletSampleMessages
+      && rangeLoopProof.trackStopCalls.length === 0,
+    `Range Loop replaced or stopped continuous capture: ${JSON.stringify({ sustainEndProof, rangeLoopProof })}.`);
+
+    const stopArmed = await evaluate(session, `(() => {
+      const control = window.__noteforgeNoteInputProof;
+      const button = document.querySelector('[data-global-mic-disable]');
+      if (!control || !button || button.disabled) return false;
+      return control.armStopOnNextSample();
+    })()`);
+    assert(stopArmed, "The global Disable voice control was unavailable after the sustain run.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-note-input]')?.getAttribute('data-input-state') === 'disabled'",
+      "the explicit global Disable action",
+      5_000,
+    );
+    await delay(800);
+    const stopped = await browserProofSnapshot(session);
+    await delay(250);
+    const settled = await browserProofSnapshot(session);
+    assert(settled.workletSampleMessages === stopped.workletSampleMessages,
+      `PCM continued after explicit Disable (${stopped.workletSampleMessages}->${settled.workletSampleMessages}).`);
+    const flushedCount = await waitForDiagnosticCount(
+      diagnosticBatches,
+      settled.workletSampleMessages,
+    );
+    const events = orderedPitchEvents(diagnosticBatches);
+    const frames = events.map((event) => event.pitch?.frame).filter(Boolean);
+
+    assert(settled.instrumentationErrors.length === 0,
+      `Browser instrumentation failed: ${JSON.stringify(settled.instrumentationErrors)}.`);
+    assert(consoleErrors.length === 0,
+      `The production page emitted browser errors: ${JSON.stringify(consoleErrors)}.`);
+    assert(settled.getUserMediaCalls === 1 && settled.streams === 1 && settled.tracks === 1,
+      `Expected one retained microphone authority; saw getUserMedia/streams/tracks=${settled.getUserMediaCalls}/${settled.streams}/${settled.tracks}.`);
+    assert(settled.audioContexts === 1 && settled.workletNodes === 1,
+      `Expected one AudioContext/worklet; saw ${settled.audioContexts}/${settled.workletNodes}.`);
+    assert(settled.stopButtonClicks === 1 && settled.trackStopCalls.length === 1,
+      `Only explicit Disable may stop capture: clicks/stops=${settled.stopButtonClicks}/${settled.trackStopCalls.length}.`);
+    assert(settled.explicitStopSampleMessageCount === settled.workletSampleMessages,
+      "A PCM window escaped after the explicit Disable boundary.");
+    assert(flushedCount === settled.workletSampleMessages && events.length === settled.workletSampleMessages,
+      `Worklet/detector accounting differs: ${settled.workletSampleMessages}/${events.length}.`);
+
+    const workletKeys = new Set(settled.workletSampleEvents.map(canonicalFrameKey));
+    const detectorKeys = new Set(frames.map(canonicalFrameKey));
+    assert(workletKeys.size === settled.workletSampleMessages
+      && detectorKeys.size === events.length
+      && [...workletKeys].every((key) => detectorKeys.has(key)),
+    "Worklet windows and detector frames are not an exact sample-coordinate bijection.");
+    for (let index = 1; index < settled.workletSampleEvents.length; index += 1) {
+      const previous = settled.workletSampleEvents[index - 1];
+      const current = settled.workletSampleEvents[index];
+      assert(current.captureEpoch === previous.captureEpoch
+        && current.continuityEpoch === previous.continuityEpoch
+        && current.graphGeneration === previous.graphGeneration
+        && current.endSample - previous.endSample === CAPTURE_HOP_SAMPLES,
+      `PCM authority broke at window ${index}: ${JSON.stringify({ previous, current })}.`);
+    }
+
+    const processingMs = events.map((event) => event.pitch?.processingMs);
+    assert(processingMs.every((value) => Number.isFinite(value) && value < CAPTURE_HOP_BUDGET_MS),
+      `Detector exceeded its ${CAPTURE_HOP_BUDGET_MS} ms hop budget: ${Math.max(...processingMs)} ms.`);
+    const silenceFrames = longestSilenceRun(events);
+    assert(silenceFrames >= 20,
+      `Silence did not remain a continuously analyzed unvoiced stream: ${silenceFrames} frames.`);
+
+    const detectorProof = SUSTAINED_NOTE_MIDIS.map((midi) => {
+      const run = longestFrameRun(events, midi);
+      const cents = run.events.map((event) => Math.abs(event.pitch.frame.centsFromNearest));
+      const rmsDbfs = run.events.map((event) => amplitudeToDbfs(event.pitch.frame.rms));
+      assert(run.seconds >= MINIMUM_CONTINUOUS_SECONDS,
+        `${noteLabel(midi)} stayed continuously correct for only ${run.seconds.toFixed(3)} s.`);
+      assert(cents.every((value) => Number.isFinite(value) && value <= 25),
+        `${noteLabel(midi)} left its note region during the voice-like vibrato: ${Math.max(...cents).toFixed(3)} cents.`);
+      return {
+        midi,
+        label: noteLabel(midi),
+        frames: run.events.length,
+        seconds: run.seconds,
+        maximumCents: Math.max(...cents),
+        medianRmsDbfs: [...rmsDbfs].sort((left, right) => left - right)[Math.floor(rmsDbfs.length / 2)],
+      };
+    });
+    const quietLowProof = detectorProof.find(({ midi }) => midi === 48);
+    assert(quietLowProof && quietLowProof.medianRmsDbfs < 20 * Math.log10(OLD_GATE_RMS_AMPLITUDE),
+      `The quiet C3 proof did not remain below the historical gate: ${JSON.stringify(quietLowProof)}.`);
+
+    const renderedProof = SUSTAINED_NOTE_MIDIS.map((midi) => {
+      const label = noteLabel(midi);
+      const run = longestRenderedRun(renderedSamples, label);
+      assert(run.seconds >= MINIMUM_RENDERED_SECONDS,
+        `The production UI continuously showed ${label} for only ${run.seconds.toFixed(3)} s.`);
+      assert(run.maximumHeldSeconds >= MINIMUM_CONTINUOUS_SECONDS,
+        `The production UI reported only ${run.maximumHeldSeconds.toFixed(3)} s held for ${label}.`);
+      return {
+        label,
+        samples: run.samples.length,
+        seconds: run.seconds,
+        maximumHeldSeconds: run.maximumHeldSeconds,
+      };
+    });
+
+    const firstSamples = detectorProof.map(({ label, midi }) => ({
+      label,
+      endSample: longestFrameRun(events, midi).first.endSample,
+    }));
+    assert(firstSamples.every((entry, index) => index === 0
+      || entry.endSample > firstSamples[index - 1].endSample),
+    `Sustained notes were not observed in fixture order: ${JSON.stringify(firstSamples)}.`);
+
+    console.log("SUSTAINED NOTE BROWSER PROOF PASSED");
+    console.log(`  authority: one MediaStream/track/AudioContext/worklet; ${settled.workletSampleMessages} PCM windows exactly paired with ${events.length} detector frames`);
+    console.log(`  lifecycle: capture never disabled or stopped during ${SUSTAINED_FIXTURE_SECONDS}s; explicit Disable produced the only track.stop()`);
+    console.log(`  silence: ${silenceFrames} consecutive unvoiced detector frames while PCM continued`);
+    for (const proof of detectorProof) {
+      const rendered = renderedProof.find(({ label }) => label === proof.label);
+      console.log(`  ${proof.label}: detector ${proof.seconds.toFixed(3)}s/${proof.frames} uninterrupted frames, max error ${proof.maximumCents.toFixed(2)}c, median ${proof.medianRmsDbfs.toFixed(1)} dBFS; UI ${rendered.seconds.toFixed(3)}s, hold ${rendered.maximumHeldSeconds.toFixed(3)}s`);
+    }
+    console.log(`  detector budget: max ${Math.max(...processingMs).toFixed(3)}ms < ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms hop`);
+    console.log(`  Range Loop: one stable tuner retained identity across wrong-note/silence/reference/success, one 0.5s reference oscillator produced no persistent replacement, and quiet C3 reached exactly ${rangeLoopResult.holdSeconds.toFixed(1)}s without a stream/worklet reset`);
+    console.log(`  requested sustain: ${SUSTAINED_NOTE_SECONDS.toFixed(1)}s per note; accepted uninterrupted minimum ${MINIMUM_CONTINUOUS_SECONDS.toFixed(1)}s`);
+  } catch (error) {
+    const context = [
+      viteOutput.length ? `Vite output:\n${viteOutput.join("\n")}` : "",
+      chromiumOutput.length ? `Chromium output:\n${chromiumOutput.join("\n")}` : "",
+    ].filter(Boolean).join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${context ? `\n${context}` : ""}`);
+  } finally {
+    session?.close();
+    await stopProcessGroup(chromium);
+    await stopProcessGroup(vite);
+    if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.stack : error);
+  process.exitCode = 1;
+});

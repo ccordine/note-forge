@@ -1,0 +1,101 @@
+/* Song laboratory */
+.file-button {
+min-height: 42px;
+display: inline-flex;
+align-items: center;
+gap: 9px;
+padding: 0 15px;
+border: 1px solid var(--line-strong);
+border-radius: 9px;
+background: var(--panel);
+font-size: 9px;
+font-weight: 700;
+cursor: pointer;
+}
+.file-button.primary { background: var(--lime); color: var(--ink); border-color: var(--lime); }
+.file-button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.file-button input { display: none; }
+.song-empty {
+min-height: 510px;
+display: flex;
+flex-direction: column;
+align-items: center;
+justify-content: center;
+text-align: center;
+background: radial-gradient(circle,rgba(216,255,62,.045),transparent 35%),var(--panel);
+}
+.drop-record { width: 105px; height: 105px; position: relative; display: grid; place-items: center; border: 1px solid rgba(216,255,62,.2); border-radius: 50%; color: var(--lime); }
+.record-grooves { position: absolute; inset: 11px; border: 1px solid var(--line); border-radius: 50%; box-shadow: inset 0 0 0 10px transparent,inset 0 0 0 11px var(--line),inset 0 0 0 20px transparent,inset 0 0 0 21px var(--line); }
+.song-empty h2 { margin: 28px 0 8px; font-size: 25px; }
+.song-empty > p { max-width: 450px; margin: 0 0 22px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.song-starter-steps { display: flex; gap: 25px; margin-top: 45px; padding-top: 20px; border-top: 1px solid var(--line); }
+.song-starter-steps span { color: var(--dim); font: 7px var(--mono); }
+.song-starter-steps b { margin-right: 5px; color: var(--lime); }
+
+.transport-panel { padding: 18px 20px; }
+.track-meta { display: flex; align-items: center; gap: 12px; }
+.album-placeholder { width: 43px; height: 43px; display: grid; place-items: center; border-radius: 9px; background: var(--lime); color: var(--ink); }
+.track-meta small { display: block; color: var(--dim); font: 6px var(--mono); }
+.track-meta b { max-width: 500px; display: block; overflow: hidden; margin: 3px 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.track-meta > div > span { display: block; color: var(--muted); font: 7px var(--mono); }
+.waveform { height: 112px; position: relative; display: flex; align-items: center; gap: 1px; overflow: hidden; margin: 15px 0 11px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: #10120f; cursor: crosshair; }
+.waveform > i { z-index: 1; min-width: 1px; flex: 1; border-radius: 2px; background: #4b4f46; }
+.waveform > i.in-loop { opacity: .72; background: var(--lime); }
+.loop-region { position: absolute; inset-block: 0; border-inline: 1px solid var(--lime); background: rgba(216,255,62,.055); }
+.song-playhead { z-index: 3; position: absolute; inset-block: 0; width: 2px; background: var(--coral); box-shadow: 0 0 7px var(--coral); }
+.song-marker { z-index: 4; position: absolute; top: 3px; width: 13px; height: 13px; display: grid; place-items: center; border-radius: 50%; background: var(--blue); color: var(--ink); font: 6px var(--mono); }
+.song-marker.breath { background: var(--violet); }
+.transport-controls { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.transport-controls > button { min-width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; background: #11130f; font: 7px var(--mono); cursor: pointer; }
+.transport-controls .main-transport { width: 46px; height: 46px; border-radius: 50%; background: var(--lime); color: var(--ink); }
+.transport-controls .loop-active { border-color: rgba(216,255,62,.25); color: var(--lime); }
+.timecode { display: flex; align-items: baseline; gap: 5px; margin-right: auto; }
+.timecode.right { align-items: flex-end; flex-direction: column; gap: 1px; margin: 0 0 0 auto; }
+.timecode b { font: 13px var(--mono); }
+.timecode span { color: var(--dim); font: 7px var(--mono); }
+.loop-handles { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+.loop-handles label { display: grid; grid-template-columns: 45px 1fr 50px; align-items: center; gap: 10px; }
+.loop-handles label span { color: var(--dim); font: 6px var(--mono); }
+.loop-handles input { accent-color: var(--lime); }
+.loop-handles b { text-align: right; font: 8px var(--mono); }
+
+.song-workflow-navigation { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; margin: 13px 0; padding: 1px; overflow: hidden; border-radius: 11px; background: var(--line); }
+.song-workflow-navigation button { min-height: 58px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; padding: 0 17px; border: 0; background: #11130f; color: var(--muted); text-align: left; cursor: pointer; }
+.song-workflow-navigation button.active { background: rgba(216,255,62,.08); color: var(--lime); }
+.song-workflow-navigation button:disabled { opacity: .45; cursor: not-allowed; }
+.song-workflow-navigation b { font-size: 9px; }
+.song-workflow-navigation span { margin-top: 4px; color: var(--dim); font: 6px var(--mono); }
+.song-recording-invariant { grid-column: 1 / -1; margin: 0; padding: 9px 17px; background: rgba(255,107,69,.08); color: var(--coral); font: 7px/1.4 var(--mono); }
+.song-current-stage { min-width: 0; }
+.song-stage-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 92px; padding: 18px 22px; border: 1px solid var(--line); border-radius: 12px; background: rgba(15,17,14,.72); }
+.song-stage-heading h2 { margin: 5px 0 3px; font-size: 20px; }
+.song-stage-heading p { margin: 0; color: var(--muted); font-size: 8px; }
+.song-settings-grid { display: grid; grid-template-columns: .8fr 1fr 1.2fr; gap: 13px; margin-top: 13px; }
+.transport-settings,.manual-context,.phrase-markers { padding: 20px; }
+.transport-settings > div,.manual-context > div,.phrase-markers > div { display: flex; gap: 7px; margin-top: 14px; }
+.transport-settings > div .field,.manual-context > div .field { flex: 1; }
+.transport-settings > small,.manual-context > small { display: block; margin-top: 10px; color: var(--dim); font-size: 7px; line-height: 1.4; }
+.manual-context .field:last-child { flex: 2; }
+.phrase-markers .field { margin-top: 10px; }
+.three-passes { margin-top: 13px; padding: 24px; }
+.three-passes > .panel-heading { align-items: center; }
+.pass-mission { display: flex; align-items: center; gap: 18px; margin: 20px 0; padding: 20px; border: 1px solid var(--line); border-radius: 11px; background: #11130f; }
+.pass-symbol { width: 64px; height: 64px; display: grid; place-items: center; border: 1px solid rgba(216,255,62,.15); border-radius: 50%; background: rgba(216,255,62,.07); color: var(--lime); }
+.pass-symbol.understand { background: rgba(99,215,255,.07); color: var(--blue); }
+.pass-symbol.mutate { background: rgba(255,107,69,.07); color: var(--coral); }
+.pass-mission small { color: var(--dim); font: 6px var(--mono); }
+.pass-mission h3 { margin: 5px 0; font-size: 16px; }
+.pass-mission p { margin: 0; color: var(--muted); font-size: 8px; }
+.record-strip { display: flex; align-items: center; justify-content: space-between; }
+.song-page .headphone-note { display: flex; align-items: center; gap: 9px; color: var(--blue); }
+.song-page .headphone-note b { color: var(--text); font-size: 9px; }
+.song-page .headphone-note small { display: block; margin-top: 3px; color: var(--muted); font-size: 7px; }
+.takes-panel { min-height: 235px; margin-top: 13px; padding: 23px; }
+.takes-list { margin-top: 18px; }
+.takes-list > div { display: grid; grid-template-columns: 65px 1fr 60px; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.takes-list span { color: var(--lime); font: 7px var(--mono); }
+.takes-list audio { width: 100%; height: 33px; }
+.takes-list small { color: var(--dim); text-align: right; font: 7px var(--mono); }
+.song-review-empty { min-height: 155px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--dim); text-align: center; }
+.song-review-empty h3 { margin: 9px 0 3px; color: var(--text); }
+.song-review-empty p { max-width: 430px; margin: 0; color: var(--muted); font-size: 8px; }

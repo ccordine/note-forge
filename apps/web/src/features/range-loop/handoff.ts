@@ -1,6 +1,6 @@
 const RANGE_LOOP_HANDOFF_KEY = "hum.range-loop.handoff";
-const MINIMUM_HANDOFF_MIDI = 36;
-const MAXIMUM_HANDOFF_MIDI = 83;
+const MINIMUM_HANDOFF_MIDI = 30;
+const MAXIMUM_HANDOFF_MIDI = 86;
 let cachedHandoffMidi: number | null | undefined;
 
 function isHandoffMidi(value: unknown): value is number {
@@ -11,7 +11,7 @@ function isHandoffMidi(value: unknown): value is number {
 
 /** Queue a one-use, same-tab request for Range Loop to start at this baseline. */
 export function queueRangeLoopHandoff(midi: number): boolean {
-  if (!isHandoffMidi(midi)) throw new RangeError("Range Loop handoff MIDI must be an integer from 36 through 83.");
+  if (!isHandoffMidi(midi)) throw new RangeError("Range Loop handoff MIDI must be an integer from 30 through 86.");
   cachedHandoffMidi = midi;
   try {
     window.sessionStorage.setItem(RANGE_LOOP_HANDOFF_KEY, String(midi));

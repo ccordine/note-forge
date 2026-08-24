@@ -1,4 +1,7 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren, SelectHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren } from "react";
+import type { SelectHTMLAttributes } from "react";
+import { Link, type LinkProps } from "react-router";
+import { appRoutePath, type AppRoute } from "@/navigation";
 import { Icon } from "./Icon";
 
 export function Panel({ children, className = "", ...props }: PropsWithChildren<HTMLAttributes<HTMLDivElement>>) {
@@ -11,6 +14,20 @@ export function Eyebrow({ children }: PropsWithChildren) {
 
 export function ActionButton({ children, className = "", ...props }: PropsWithChildren<ButtonHTMLAttributes<HTMLButtonElement>>) {
   return <button className={`action-button ${className}`} {...props}>{children}</button>;
+}
+
+export function RouteLink({ route, children, onClick, ...props }: PropsWithChildren<
+  Omit<LinkProps, "to"> & { route: AppRoute }
+>) {
+  return (
+    <Link
+      {...props}
+      to={appRoutePath(route)}
+      onClick={onClick}
+    >
+      {children}
+    </Link>
+  );
 }
 
 export function PlayButton({ label = "Play", ...props }: { label?: string } & ButtonHTMLAttributes<HTMLButtonElement>) {

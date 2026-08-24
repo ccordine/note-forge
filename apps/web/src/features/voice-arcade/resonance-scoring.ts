@@ -1,4 +1,4 @@
-import type { ResonanceGameState } from "./resonance-physics";
+import type { ResonanceGameState } from "./resonance-types";
 
 export interface ResonanceRunStats {
   pathDistance: number;
@@ -8,14 +8,12 @@ export interface ResonanceRunStats {
   coherentSeconds: number;
   currentCoherentHoldSeconds: number;
   bestCoherentHoldSeconds: number;
-  /** Integrated comfortable-level field request before evidence weighting. */
-  effectiveIntensityIntegral: number;
+  /** Integrated field request before periodicity/stability weighting. */
+  fieldEnergyIntegral: number;
   /** Integrated canonical force-producing drive. */
   coherentDriveIntegral: number;
   /** Integrated canonical drive coupled into the currently relevant resonator. */
   tunedEnergyIntegral: number;
-  peakNormalizedLevel: number;
-  peakRelativeDb: number | null;
   observedFrames: number;
   reliableFrames: number;
   /** Distinct contacts, rather than 120 Hz collision-solver resolutions. */
@@ -35,8 +33,6 @@ export interface ResonanceResult {
   collisionCount: number;
   reliableFrames: number;
   bestCoherentHoldSeconds: number;
-  peakNormalizedLevel: number;
-  peakRelativeDb: number | null;
   resonators: number;
 }
 
@@ -89,11 +85,9 @@ export function createResonanceRunStats(
     coherentSeconds: 0,
     currentCoherentHoldSeconds: 0,
     bestCoherentHoldSeconds: 0,
-    effectiveIntensityIntegral: 0,
+    fieldEnergyIntegral: 0,
     coherentDriveIntegral: 0,
     tunedEnergyIntegral: 0,
-    peakNormalizedLevel: 0,
-    peakRelativeDb: null,
     observedFrames: 0,
     reliableFrames: 0,
     collisionEpisodes: 0,
@@ -128,6 +122,56 @@ export function recordResonanceCollisionAdvance(
     : Math.max(0, stats.collisionCooldownSeconds - Math.max(0, deltaSeconds));
 }
 
+export interface ResonanceRunAdvance {
+  readonly previousGame: Readonly<ResonanceGameState>;
+  readonly nextGame: Readonly<ResonanceGameState>;
+  readonly deltaSeconds: number;
+  readonly coherence: number;
+  readonly reliable: boolean;
+  readonly targetResonatorId: string | null;
+}
+
+/**
+ * Derive a new scoring snapshot from one sample-authoritative physics advance.
+ * The reducer owns this value; React refs and animation clocks never do.
+ */
+export function advanceResonanceRunStats(
+  current: Readonly<ResonanceRunStats>,
+  advance: Readonly<ResonanceRunAdvance>,
+): ResonanceRunStats {
+  const stats = { ...current };
+  const { previousGame, nextGame, deltaSeconds } = advance;
+  stats.pathDistance += distance(previousGame.ball.position, nextGame.ball.position);
+  stats.lastBallX = nextGame.ball.position.x;
+  stats.lastBallY = nextGame.ball.position.y;
+  stats.fieldEnergyIntegral += nextGame.voice.effectiveIntensity * deltaSeconds;
+  stats.coherentDriveIntegral += nextGame.voice.directEnergy * deltaSeconds;
+  stats.tunedEnergyIntegral += resonanceTunedEnergyForTarget(
+    nextGame,
+    advance.targetResonatorId,
+  ) * deltaSeconds;
+  stats.observedFrames += 1;
+  if (advance.reliable) stats.reliableFrames += 1;
+  if (nextGame.voice.directEnergy > 0) stats.activeSeconds += deltaSeconds;
+  if (nextGame.voice.directEnergy > .025 && advance.coherence >= .68) {
+    stats.coherentSeconds += deltaSeconds;
+    stats.currentCoherentHoldSeconds += deltaSeconds;
+    stats.bestCoherentHoldSeconds = Math.max(
+      stats.bestCoherentHoldSeconds,
+      stats.currentCoherentHoldSeconds,
+    );
+  } else {
+    stats.currentCoherentHoldSeconds = 0;
+  }
+  recordResonanceCollisionAdvance(
+    stats,
+    previousGame.collisionCount,
+    nextGame.collisionCount,
+    deltaSeconds,
+  );
+  return stats;
+}
+
 /** Grade only like-for-like physical quantities, each bounded by its denominator. */
 export function summarizeResonanceRun(
   game: Readonly<ResonanceGameState>,
@@ -139,9 +183,9 @@ export function summarizeResonanceRun(
     0,
     100,
   );
-  const coherentEfficiencyPercent = stats.effectiveIntensityIntegral <= 0
+  const coherentEfficiencyPercent = stats.fieldEnergyIntegral <= 0
     ? 0
-    : clamp(stats.coherentDriveIntegral / stats.effectiveIntensityIntegral * 100, 0, 100);
+    : clamp(stats.coherentDriveIntegral / stats.fieldEnergyIntegral * 100, 0, 100);
   const tunedEfficiencyPercent = stats.coherentDriveIntegral <= 0
     ? 0
     : clamp(stats.tunedEnergyIntegral / stats.coherentDriveIntegral * 100, 0, 100);
@@ -177,8 +221,6 @@ export function summarizeResonanceRun(
     collisionCount: stats.collisionEpisodes,
     reliableFrames: stats.reliableFrames,
     bestCoherentHoldSeconds: stats.bestCoherentHoldSeconds,
-    peakNormalizedLevel: stats.peakNormalizedLevel,
-    peakRelativeDb: stats.peakRelativeDb,
     resonators: game.level.resonators.length,
   };
 }

@@ -39,6 +39,8 @@ export interface FrameDiagnosticSource {
   readonly centsFromNearest: number | null;
   readonly rms: number;
   readonly confidence: number;
+  readonly brightness: number | null;
+  readonly brightnessConfidence: number;
   readonly yinValue: number | null;
   readonly periodSamples: number | null;
   readonly reason: YinPitchFrame["reason"];
@@ -64,6 +66,8 @@ export interface FrameDiagnostic {
   centsFromNearest: number | null;
   rms: number;
   confidence: number;
+  brightness: number | null;
+  brightnessConfidence: number;
   yinValue: number | null;
   periodSamples: number | null;
   reason: YinPitchFrame["reason"];
@@ -307,6 +311,14 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
   } else if (frame.voiced || hasAnyPitchCoordinate || frame.reason === "detected") {
     throw new RangeError("An unvoiced or uncertain observation cannot admit pitch coordinates.");
   }
+  if (frame.observationKind !== "voiced" && (
+    frame.brightness !== null || frame.brightnessConfidence !== 0
+  )) {
+    throw new RangeError("An unvoiced or uncertain observation cannot admit brightness evidence.");
+  }
+  if (frame.brightness === null && frame.brightnessConfidence !== 0) {
+    throw new RangeError("Missing brightness must carry zero brightness confidence.");
+  }
 
   return {
     observationKind: frame.observationKind,
@@ -345,6 +357,20 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
     ),
     rms: diagnosticNumber(frame.rms, "Frame rms", 0, 4, 6),
     confidence: diagnosticNumber(frame.confidence, "Frame confidence", 0, 1, 4),
+    brightness: optionalDiagnosticNumber(
+      frame.brightness,
+      "Frame brightness",
+      0,
+      1,
+      5,
+    ),
+    brightnessConfidence: diagnosticNumber(
+      frame.brightnessConfidence,
+      "Frame brightnessConfidence",
+      0,
+      1,
+      4,
+    ),
     yinValue: optionalDiagnosticNumber(frame.yinValue, "Frame yinValue", 0, 10, 5),
     periodSamples: optionalDiagnosticNumber(
       frame.periodSamples,

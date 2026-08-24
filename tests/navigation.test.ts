@@ -1,25 +1,88 @@
 import { describe, expect, it } from "vitest";
 
-import { NAVIGATION, VIEW_TITLES } from "../apps/web/src/navigation";
+import {
+  ALL_APP_ROUTES,
+  APP_SCREEN_IDS,
+  DEFAULT_ROUTES,
+  NAVIGATION,
+  PAGE_TITLES,
+  PRACTICE_ACTIVITIES,
+  PRODUCT_SURFACES,
+  appRoutePath,
+  appRouteScreen,
+} from "../apps/web/src/navigation";
+import { matchAppRoute } from "../apps/web/src/routing/use-app-navigation";
 
-describe("primary navigation", () => {
-  it("publishes both range workflows in the Train group", () => {
-    const train = NAVIGATION.find((group) => group.label === "Train");
-
-    expect(train?.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "range-map", label: "Range Simulator" }),
-      expect.objectContaining({ id: "loop", label: "Range Loop" }),
-      expect.objectContaining({ id: "arcade", label: "Voice Arcade" }),
-    ]));
-    expect(VIEW_TITLES["range-map"].title).toBe("Guided Range Simulator");
-    expect(VIEW_TITLES.loop.title).toBe("Range-Building Loop");
-    expect(VIEW_TITLES.arcade.title).toBe("Voice Arcade");
+describe("typed product routes", () => {
+  it("publishes 52 exact, unique, router-matched activity paths", () => {
+    const paths = ALL_APP_ROUTES.map(appRoutePath);
+    expect(paths).toHaveLength(52);
+    expect(new Set(paths).size).toBe(paths.length);
+    for (const route of ALL_APP_ROUTES) {
+      expect(matchAppRoute(appRoutePath(route))).toEqual(route);
+    }
   });
 
-  it("contains every view exactly once", () => {
-    const ids = NAVIGATION.flatMap((group) => group.items.map((item) => item.id));
+  it("uses the five product surfaces as URL authority", () => {
+    expect(appRoutePath(DEFAULT_ROUTES.home)).toBe("/");
+    expect(appRoutePath(DEFAULT_ROUTES.pitchMatch)).toBe("/practice/pitch-match/glide");
+    expect(appRoutePath(DEFAULT_ROUTES.arcade)).toBe("/arcade");
+    expect(appRoutePath(DEFAULT_ROUTES.sound)).toBe("/explore/sound/dyad");
+    expect(appRoutePath(DEFAULT_ROUTES.songs)).toBe("/songs/lab");
+    expect(appRoutePath(DEFAULT_ROUTES.rangeMap)).toBe("/progress/range-map");
+  });
 
-    expect(new Set(ids).size).toBe(ids.length);
-    expect([...ids].sort()).toEqual([...Object.keys(VIEW_TITLES)].sort());
+  it.each([
+    "/home",
+    "/mirror/cold",
+    "/hum/anchor",
+    "/loop",
+    "/range-map",
+    "/sound/dyad",
+    "/song",
+    "/skills",
+    "/practice",
+    "/arcade/cabinet",
+    "/practice/pitch-match/unknown",
+    "/practice/intervals/production/extra",
+    "/PRACTICE/pitch-match/cold",
+  ])("rejects retired or non-canonical path %s", (path) => {
+    expect(matchAppRoute(path)).toBeNull();
+  });
+
+  it("derives internal render targets without making them top-level products", () => {
+    expect(appRouteScreen({ surface: "practice", activity: "pitch-match", mode: "cold" })).toBe("mirror");
+    expect(appRouteScreen({ surface: "progress", activity: "range-map" })).toBe("range-map");
+    expect(appRouteScreen({ surface: "songs", activity: "lab" })).toBe("song");
+    expect([...Object.keys(PAGE_TITLES)].sort()).toEqual([...APP_SCREEN_IDS].sort());
+  });
+});
+
+describe("product information architecture", () => {
+  it("publishes exactly five permanent user-job destinations", () => {
+    expect(NAVIGATION).toHaveLength(5);
+    expect(NAVIGATION.map((item) => item.surface)).toEqual(PRODUCT_SURFACES);
+    expect(NAVIGATION.map((item) => item.label)).toEqual([
+      "Practice",
+      "Arcade",
+      "Explore",
+      "Songs",
+      "Progress",
+    ]);
+  });
+
+  it("keeps training capabilities inside the Practice surface", () => {
+    expect(PRACTICE_ACTIVITIES.map((activity) => activity.id)).toEqual([
+      "pitch-match",
+      "pitch-tunnel",
+      "hum",
+      "range-loop",
+      "pitch-control",
+      "note-recognition",
+      "intervals",
+      "harmony",
+      "melody",
+    ]);
+    expect(PRACTICE_ACTIVITIES.every((activity) => activity.route.surface === "practice")).toBe(true);
   });
 });

@@ -19,10 +19,12 @@ export type LoopProgress = Record<FamilyNoteSet, FamilyCycleProgress>;
 
 function emptyFamilyProgress(): FamilyCycleProgress {
   return {
+    foundation: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
     deep: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
     low: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
     middle: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
     high: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
+    upper: { passedMidis: [], parkedMidis: [], cyclesCompleted: 0 },
   };
 }
 

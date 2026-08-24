@@ -1,11 +1,11 @@
 import {
-  ARCADE_MODES,
   type ArcadeCurriculumModeCopy,
   type ArcadeCurriculumStage,
   type ArcadeFeedbackPolicy,
   type ArcadeMode,
   type ResolvedArcadeCurriculum,
 } from "./types";
+import { ARCADE_GAME_DEFINITIONS, ARCADE_MODES } from "./arcade-registry";
 
 export const ARCADE_CURRICULUM_STAGES = Object.freeze([
   "deliberate",
@@ -25,38 +25,9 @@ export interface ArcadeStageMasteryRequirement {
 }
 
 /** These contracts recommend practice; they never lock a cabinet or stage. */
-export const ARCADE_STAGE_MASTERY_REQUIREMENTS = Object.freeze({
-  pattern: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 2, minimumScore: 72 }),
-    reflex: Object.freeze({ requiredRuns: 3, minimumScore: 80 }),
-    background: Object.freeze({ requiredRuns: 3, minimumScore: 86 }),
-  }),
-  pong: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 2, minimumScore: 68 }),
-    reflex: Object.freeze({ requiredRuns: 3, minimumScore: 76 }),
-    background: Object.freeze({ requiredRuns: 3, minimumScore: 82 }),
-  }),
-  song: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 1, minimumScore: 70 }),
-    reflex: Object.freeze({ requiredRuns: 2, minimumScore: 78 }),
-    background: Object.freeze({ requiredRuns: 2, minimumScore: 84 }),
-  }),
-  maze: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 1, minimumScore: 72 }),
-    reflex: Object.freeze({ requiredRuns: 2, minimumScore: 80 }),
-    background: Object.freeze({ requiredRuns: 2, minimumScore: 86 }),
-  }),
-  resonance: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 1, minimumScore: 70 }),
-    reflex: Object.freeze({ requiredRuns: 2, minimumScore: 78 }),
-    background: Object.freeze({ requiredRuns: 2, minimumScore: 84 }),
-  }),
-  draw: Object.freeze({
-    deliberate: Object.freeze({ requiredRuns: 1, minimumScore: 70 }),
-    reflex: Object.freeze({ requiredRuns: 2, minimumScore: 78 }),
-    background: Object.freeze({ requiredRuns: 2, minimumScore: 84 }),
-  }),
-} satisfies Readonly<Record<
+export const ARCADE_STAGE_MASTERY_REQUIREMENTS = Object.freeze(Object.fromEntries(
+  ARCADE_MODES.map((mode) => [mode, ARCADE_GAME_DEFINITIONS[mode].mastery]),
+) as Readonly<Record<
   ArcadeMode,
   Readonly<Record<ArcadeCurriculumStage, ArcadeStageMasteryRequirement>>
 >>);
@@ -111,32 +82,9 @@ export const ARCADE_STAGE_FEEDBACK = Object.freeze({
   }),
 } satisfies Readonly<Record<ArcadeCurriculumStage, ArcadeFeedbackPolicy>>);
 
-export const ARCADE_MODE_CURRICULUM_COPY = Object.freeze({
-  pattern: Object.freeze({
-    focus: "Discrete pitch selection, cold pitch-lock, transitions, and rhythmic placement.",
-    cognitiveLoad: "Read the note highway and prepare the next vocal coordinate while the beat keeps moving.",
-  }),
-  pong: Object.freeze({
-    focus: "Continuous pitch-to-position mapping and controlled fine movement across the vocal range.",
-    cognitiveLoad: "Track ball trajectory and interception timing while pitch steering becomes automatic.",
-  }),
-  song: Object.freeze({
-    focus: "Transfer pitch control into phrases, breathing windows, and changing musical context.",
-    cognitiveLoad: "Follow the track, anticipate its lane, and preserve vocal control through real phrasing.",
-  }),
-  maze: Object.freeze({
-    focus: "Distinct nearby-note selection, stable sustain, clean release, and deliberate transitions.",
-    cognitiveLoad: "Plan a route and remember rotating direction mappings while every move still needs a precise hold.",
-  }),
-  resonance: Object.freeze({
-    focus: "Frequency-to-force coupling, steady pitch, controlled intensity, and resonance discovery.",
-    cognitiveLoad: "Plan around walls and inertia while maintaining an efficient acoustic field with the voice.",
-  }),
-  draw: Object.freeze({
-    focus: "Eight-direction pitch-to-motion mapping, clean directional changes, stable holds, and deliberate line placement.",
-    cognitiveLoad: "Plan recognizable lines and shapes while the eight-note direction bank recedes into background controller fluency.",
-  }),
-} satisfies Readonly<Record<ArcadeMode, ArcadeCurriculumModeCopy>>);
+export const ARCADE_MODE_CURRICULUM_COPY = Object.freeze(Object.fromEntries(
+  ARCADE_MODES.map((mode) => [mode, ARCADE_GAME_DEFINITIONS[mode].curriculum]),
+) as Readonly<Record<ArcadeMode, ArcadeCurriculumModeCopy>>);
 
 function isArcadeMode(value: unknown): value is ArcadeMode {
   return typeof value === "string" && (ARCADE_MODES as readonly string[]).includes(value);

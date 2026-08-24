@@ -8,7 +8,7 @@ import type {
   ResonanceLevelDefinition,
   ResonanceObstacle,
   ResonanceVector,
-} from "./resonance-physics";
+} from "./resonance-types";
 
 export interface GenerateResonanceLevelOptions {
   readonly seed: SeedValue;

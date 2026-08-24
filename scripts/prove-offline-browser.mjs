@@ -10,21 +10,28 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const REPOSITORY_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHROMIUM = process.env.CHROMIUM_PATH || "/usr/bin/chromium";
+const EXPECTED_PRODUCT_NAVIGATION = [
+  { hash: "#/practice/pitch-match/glide", label: "Practice" },
+  { hash: "#/arcade", label: "Arcade" },
+  { hash: "#/explore/sound/dyad", label: "Explore" },
+  { hash: "#/songs/lab", label: "Songs" },
+  { hash: "#/progress/range-map", label: "Progress" },
+];
 const EXPECTED_OFFLINE_ROUTES = [
-  { hash: "#home", heading: "The Forge" },
-  { hash: "#sound", heading: "Sound Laboratory" },
-  { hash: "#mirror", heading: "Pitch Mirror" },
-  { hash: "#hum", heading: "Hum Laboratory" },
-  { hash: "#range-map", heading: "Guided Range Simulator" },
-  { hash: "#loop", heading: "Range-Building Loop" },
-  { hash: "#arcade", heading: "Voice Arcade" },
-  { hash: "#control", heading: "Pitch & Dynamic Control" },
-  { hash: "#ear", heading: "Note Recognition" },
-  { hash: "#intervals", heading: "Interval Laboratory" },
-  { hash: "#harmony", heading: "Chord & Harmony Laboratory" },
-  { hash: "#melody", heading: "Melody & Phrase Laboratory" },
-  { hash: "#song", heading: "Song Laboratory" },
-  { hash: "#skills", heading: "Trainable Skill Graph" },
+  { hash: "#/", heading: "The Forge" },
+  { hash: "#/explore/sound/dyad", heading: "Sound Laboratory" },
+  { hash: "#/practice/pitch-match/glide", heading: "Pitch Match" },
+  { hash: "#/practice/pitch-tunnel", heading: "Pitch Tunnel" },
+  { hash: "#/practice/hum/anchor", heading: "Hum Laboratory" },
+  { hash: "#/progress/range-map", heading: "Vocal Range Map" },
+  { hash: "#/practice/range-loop", heading: "Range-Building Loop" },
+  { hash: "#/arcade", heading: "Voice Arcade" },
+  { hash: "#/practice/pitch-control/diamond", heading: "Pitch & Dynamic Control" },
+  { hash: "#/practice/note-recognition/letters", heading: "Note Recognition" },
+  { hash: "#/practice/intervals/recognition", heading: "Interval Laboratory" },
+  { hash: "#/practice/harmony/chord-tone", heading: "Chord & Harmony Laboratory" },
+  { hash: "#/practice/melody/echo", heading: "Melody & Phrase Laboratory" },
+  { hash: "#/songs/lab", heading: "Song Laboratory" },
 ];
 
 async function availablePort() {
@@ -242,7 +249,7 @@ async function main() {
     await session.send("Page.enable");
     await session.send("Runtime.enable");
     await session.send("Network.enable");
-    await session.send("Page.navigate", { url: `${origin}/#mirror` });
+    await session.send("Page.navigate", { url: `${origin}/#/practice/pitch-match/glide` });
     await waitFor(session, "Boolean(document.querySelector('.app-shell'))", "online production shell");
     await waitFor(session, `(async () => {
       const registration = await navigator.serviceWorker.ready;
@@ -292,26 +299,38 @@ async function main() {
     assert(offline.workletRegistered, "The shipped pitch worklet was unavailable offline.");
     assert(Object.values(offline.rejected).every(Boolean), `Offline API/health/missing assets received shell fallbacks: ${JSON.stringify(offline.rejected)}`);
 
-    const navigationCount = await evaluate(session, "document.querySelectorAll('.sidebar nav button').length");
-    assert.equal(navigationCount, EXPECTED_OFFLINE_ROUTES.length,
-      `Expected ${EXPECTED_OFFLINE_ROUTES.length} canonical navigation controls, found ${navigationCount}.`);
+    await evaluate(session, "document.querySelector('.mobile-menu')?.click(); true");
+    await waitFor(session, "Boolean(document.querySelector('dialog.mobile-sidebar')?.open)", "native navigation dialog");
+    await session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await session.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await waitFor(session, "!document.querySelector('dialog.mobile-sidebar')?.open", "navigation dialog Escape");
+    await waitFor(session, "document.activeElement === document.querySelector('.mobile-menu')", "navigation dialog focus return");
+    await evaluate(session, "document.querySelector('button[aria-label=\"Settings\"]')?.click(); true");
+    await waitFor(session, "Boolean(document.querySelector('dialog.drawer-backdrop')?.open)", "native settings dialog");
+    await session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await session.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await waitFor(session, "!document.querySelector('dialog.drawer-backdrop')", "settings dialog Escape");
+    await waitFor(session, "document.activeElement === document.querySelector('button[aria-label=\"Settings\"]')", "settings dialog focus return");
+
+    const navigationCount = await evaluate(session, "document.querySelectorAll('.sidebar nav a[href]').length");
+    assert.equal(navigationCount, EXPECTED_PRODUCT_NAVIGATION.length,
+      `Expected ${EXPECTED_PRODUCT_NAVIGATION.length} product navigation controls, found ${navigationCount}.`);
+    const productNavigation = await evaluate(session, `[...document.querySelectorAll('.sidebar nav a[href]')].map((link) => ({
+      hash: link.hash,
+      label: link.textContent?.trim() || '',
+    }))`);
+    assert.deepEqual(productNavigation, EXPECTED_PRODUCT_NAVIGATION,
+      `Permanent navigation exposed activities instead of five product jobs: ${JSON.stringify(productNavigation)}`);
     const routes = [];
     for (let index = 0; index < EXPECTED_OFFLINE_ROUTES.length; index += 1) {
       const expected = EXPECTED_OFFLINE_ROUTES[index];
-      const label = await evaluate(session, `(() => {
-        const button = document.querySelectorAll('.sidebar nav button')[${index}];
-        if (!(button instanceof HTMLButtonElement)) throw new Error('Missing navigation button ${index}.');
-        const label = button.textContent?.trim() || 'route-${index}';
-        button.click();
-        return label;
-      })()`);
+      await evaluate(session, `location.hash = ${JSON.stringify(expected.hash)}; true`);
       await waitFor(session, `location.hash === ${JSON.stringify(expected.hash)}
         && document.querySelector('.topbar h2')?.textContent?.trim() === ${JSON.stringify(expected.heading)}
         && !document.querySelector('.route-loading')
         && (document.querySelector('.workspace')?.textContent?.trim().length || 0) > 40`,
       `offline route ${expected.hash}`);
       const snapshot = await evaluate(session, `({
-        label: ${JSON.stringify(label)},
         hash: location.hash,
         heading: document.querySelector('.topbar h2')?.textContent?.trim() || '',
         textLength: document.querySelector('.workspace')?.textContent?.trim().length || 0,
@@ -321,13 +340,40 @@ async function main() {
       routes.push(snapshot);
     }
     await evaluate(session, `(() => {
-      const button = document.querySelector('.sidebar .brand');
-      if (!(button instanceof HTMLButtonElement)) throw new Error('Missing NoteForge home button.');
-      button.click();
+      const link = document.querySelector('.sidebar .brand');
+      if (!(link instanceof HTMLAnchorElement) || link.hash !== '#/') throw new Error('Missing NoteForge home link.');
+      link.click();
     })()`);
-    await waitFor(session, `location.hash === '#home'
+    await waitFor(session, `location.hash === '#/'
       && document.querySelector('.topbar h2')?.textContent?.trim() === 'The Forge'
       && !document.querySelector('.route-loading')`, "offline brand home navigation");
+
+    await evaluate(session, `(() => {
+      const link = document.querySelector('.sidebar nav a[href="#/arcade"]');
+      if (!(link instanceof HTMLAnchorElement)) throw new Error('Missing copyable Voice Arcade link.');
+      link.click();
+    })()`);
+    await waitFor(session, `location.hash === '#/arcade'
+      && Boolean(document.querySelector('.arcade-cabinet-grid'))`, "offline Arcade cabinet route");
+    await evaluate(session, `(() => {
+      const link = document.querySelector('a[data-arcade-mode="draw"][href="#/arcade/draw"]');
+      if (!(link instanceof HTMLAnchorElement)) throw new Error('Missing Vocal Canvas deep link.');
+      link.click();
+    })()`);
+    await waitFor(session, `location.hash === '#/arcade/draw'
+      && Boolean(document.querySelector('.arcade-mode-page.mode-draw'))`, "offline Arcade nested route");
+    await session.send("Page.reload", { ignoreCache: true });
+    await waitFor(session, `location.hash === '#/arcade/draw'
+      && Boolean(document.querySelector('.arcade-mode-page.mode-draw'))
+      && !document.querySelector('.route-loading')`, "reloaded offline Arcade nested route");
+    await evaluate(session, "history.back(); true");
+    await waitFor(session, `location.hash === '#/arcade'
+      && Boolean(document.querySelector('.arcade-cabinet-grid'))`, "Arcade nested browser Back");
+    await evaluate(session, "location.hash = '#/skills'; true");
+    await waitFor(session, `location.hash === '#/'
+      && document.querySelector('.topbar h2')?.textContent?.trim() === 'The Forge'`,
+    "invalid hash canonicalization");
+
     const distinctHashes = new Set(routes.map(({ hash }) => hash));
     assert.equal(distinctHashes.size, EXPECTED_OFFLINE_ROUTES.length,
       `Offline navigation did not reach each canonical route: ${JSON.stringify(routes)}`);
@@ -338,7 +384,9 @@ async function main() {
     console.log(`  precached resources: ${online.keys.length}`);
     console.log("  offline React render: yes");
     console.log("  offline pitch worklet: yes");
+    console.log(`  permanent product links: ${EXPECTED_PRODUCT_NAVIGATION.length}`);
     console.log(`  offline canonical routes: ${routes.length}`);
+    console.log("  native dialog Escape/focus return: 2/2");
     console.log("  API/health/missing-asset shell fallbacks: 0");
   } catch (error) {
     const context = [...previewOutput, ...chromiumOutput].join("\n");

@@ -11,10 +11,8 @@ import {
   createRangeSimulatorSession,
   currentRangeSimulatorProbe,
   normalizeRangeSimulatorSession,
-  projectRangeSimulatorProfile,
   rateRangeSimulatorProbe,
   stopRangeSimulatorSession,
-  summarizeRangeSimulatorSession,
   type CoordinationFlags,
   type EffortRating,
   type ProbeDirection,
@@ -22,6 +20,10 @@ import {
   type RangeSimulatorSessionState,
   type RatedProbe,
 } from "../apps/web/src/features/range-simulator/model";
+import {
+  projectRangeSimulatorProfile,
+  summarizeRangeSimulatorSession,
+} from "../apps/web/src/features/range-simulator/summary";
 
 const STARTED_AT = "2026-08-22T12:00:00.000Z";
 const STARTED_AT_MS = Date.parse(STARTED_AT);
@@ -500,7 +502,7 @@ describe("range inference and coordination markers", () => {
 });
 
 describe("profile projection", () => {
-  it("is idempotent and keeps comfort ratings separate from clean and accuracy claims", () => {
+  it("is idempotent and replaces the shared usable range from the simulator summary", () => {
     const session = summarySession([
       { midi: 48, rating: 1 },
       { midi: 47, rating: 2 },
@@ -509,25 +511,13 @@ describe("profile projection", () => {
       { midi: 49, rating: 1, coordination: { ascending: true } },
       { midi: 50, rating: 4 },
     ]);
-    const evidenceByMidi: PersonalRangeProfile["evidenceByMidi"] = {
-      60: [{
-        supportMode: "solo",
-        toleranceCents: 20,
-        requiredHoldMs: 3_000,
-        resetCount: 0,
-        timeToAcquireMs: 500,
-        observedAt: STARTED_AT,
-      }],
-    };
     const profile: PersonalRangeProfile = {
       ...createDefaultRangeProfile(),
-      cleanStableMidis: [40, 49],
-      accuracyChallengeMidis: [44, 70],
+      usableMidis: [40, 41],
       registerShifts: [
         { midi: 49, ascending: false, descending: true },
         { midi: 60, ascending: true, descending: false },
       ],
-      evidenceByMidi,
     };
 
     const projected = projectRangeSimulatorProfile(profile, session);
@@ -535,16 +525,14 @@ describe("profile projection", () => {
 
     expect(projected).toMatchObject({
       baseline: { midi: 48, source: "manual", updatedAt: "2026-08-22T12:00:01.000Z" },
-      cleanStableMidis: [40, 49],
-      accuracyChallengeMidis: [44, 70],
+      usableMidis: [46, 47, 48, 49],
       registerShifts: [
         { midi: 49, ascending: true, descending: true },
         { midi: 60, ascending: true, descending: false },
       ],
     });
-    expect(projected.evidenceByMidi).toBe(evidenceByMidi);
     expect(projectedAgain).toEqual(projected);
-    expect(profile.cleanStableMidis).toEqual([40, 49]);
+    expect(profile.usableMidis).toEqual([40, 41]);
     expect(profile.registerShifts[0]).toEqual({ midi: 49, ascending: false, descending: true });
   });
 
@@ -567,22 +555,22 @@ describe("profile projection", () => {
 
 describe("hard MIDI boundaries", () => {
   it("clips baseline candidates and initial directions at the supported endpoints", () => {
-    expect(baselineCandidatesForAnchor(RANGE_SIMULATOR_MIN_MIDI)).toEqual([36, 37, 38]);
-    expect(baselineCandidatesForAnchor(RANGE_SIMULATOR_MAX_MIDI)).toEqual([83, 81, 82]);
+    expect(baselineCandidatesForAnchor(RANGE_SIMULATOR_MIN_MIDI)).toEqual([30, 31, 32]);
+    expect(baselineCandidatesForAnchor(RANGE_SIMULATOR_MAX_MIDI)).toEqual([86, 84, 85]);
 
     const low = probingSession(RANGE_SIMULATOR_MIN_MIDI);
-    expect(low.descending).toMatchObject({ status: "capped", plannedEdgeMidi: 36 });
+    expect(low.descending).toMatchObject({ status: "capped", plannedEdgeMidi: 30 });
     expect(low.queue.some((task) => task.direction === "descending")).toBe(false);
 
     const high = probingSession(RANGE_SIMULATOR_MAX_MIDI);
-    expect(high.ascending).toMatchObject({ status: "capped", plannedEdgeMidi: 83 });
+    expect(high.ascending).toMatchObject({ status: "capped", plannedEdgeMidi: 86 });
     expect(high.queue.some((task) => task.direction === "ascending")).toBe(false);
   });
 
-  it("caps expansion at MIDI 83 without emitting an out-of-range task", () => {
-    let session = probingSession(79);
+  it("caps expansion at MIDI 86 without emitting an out-of-range task", () => {
+    let session = probingSession(82);
     session = rateCurrent(session, 1);
-    for (const midi of [80, 81, 82, 83]) {
+    for (const midi of [83, 84, 85, 86]) {
       expect(currentRangeSimulatorProbe(session)?.midi).toBe(midi);
       session = rateCurrent(session, 1);
     }
@@ -592,12 +580,12 @@ describe("hard MIDI boundaries", () => {
     expect(session.queue.every((task) => task.midi <= RANGE_SIMULATOR_MAX_MIDI)).toBe(true);
   });
 
-  it("caps expansion at MIDI 36 without emitting an out-of-range task", () => {
-    let session = probingSession(40);
+  it("caps expansion at MIDI 30 without emitting an out-of-range task", () => {
+    let session = probingSession(34);
     session = rateCurrent(session, 1);
-    expect(currentRangeSimulatorProbe(session)).toMatchObject({ midi: 41, direction: "ascending" });
+    expect(currentRangeSimulatorProbe(session)).toMatchObject({ midi: 35, direction: "ascending" });
     session = rateCurrent(session, 5); // close ascending and expose descending initial probes
-    for (const midi of [39, 38, 37, 36]) {
+    for (const midi of [33, 32, 31, 30]) {
       expect(currentRangeSimulatorProbe(session)?.midi).toBe(midi);
       session = rateCurrent(session, 1);
     }
@@ -615,7 +603,7 @@ describe("range simulator persistence normalization", () => {
 
     expect(normalizeRangeSimulatorSession(null, fallback)).toEqual(expected);
     expect(normalizeRangeSimulatorSession({}, fallback)).toEqual(expected);
-    expect(normalizeRangeSimulatorSession({ anchorMidi: 84 }, fallback)).toEqual(expected);
+    expect(normalizeRangeSimulatorSession({ anchorMidi: 87 }, fallback)).toEqual(expected);
   });
 
   it("rejects corrupt task history and rebuilds a safe deterministic queue", () => {
@@ -701,9 +689,9 @@ describe("range simulator persistence normalization", () => {
 
 describe("range simulator invalid inputs", () => {
   it("rejects invalid session construction and baseline-anchor inputs", () => {
-    expect(() => baselineCandidatesForAnchor(35)).toThrow(RangeError);
+    expect(() => baselineCandidatesForAnchor(29)).toThrow(RangeError);
     expect(() => baselineCandidatesForAnchor(83.5)).toThrow(RangeError);
-    expect(() => createRangeSimulatorSession({ anchorMidi: 84, startedAt: STARTED_AT })).toThrow(RangeError);
+    expect(() => createRangeSimulatorSession({ anchorMidi: 87, startedAt: STARTED_AT })).toThrow(RangeError);
     expect(() => createRangeSimulatorSession({ anchorMidi: 48.5, startedAt: STARTED_AT })).toThrow(RangeError);
     expect(() => createRangeSimulatorSession({ startedAt: "not-a-date" })).toThrow(RangeError);
     expect(() => createRangeSimulatorSession({ preparation: "raw" as never, startedAt: STARTED_AT })).toThrow(RangeError);

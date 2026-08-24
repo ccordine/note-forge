@@ -1,4 +1,8 @@
 import { detectPitch, type YinPitchFrame } from "@noteforge/pitch-engine";
+import {
+  deriveVocalBrightness,
+  type VocalBrightnessTelemetry,
+} from "./vocal-brightness";
 
 export type PitchObservationKind = "voiced" | "unvoiced" | "uncertain";
 
@@ -30,6 +34,9 @@ export interface PitchObservation extends YinPitchFrame {
   readonly periodicity: number;
 }
 
+/** The canonical shared vocal observation consumed by multidimensional tools. */
+export interface VocalObservation extends PitchObservation, VocalBrightnessTelemetry {}
+
 export interface ResolvedNoteInputConfiguration {
   readonly analysisSampleRate: number;
   readonly analysisSampleCount: number;
@@ -43,7 +50,7 @@ export interface ResolvedNoteInputConfiguration {
 
 export interface NoteInputResult {
   /** One authoritative observation for this exact captured PCM window. */
-  readonly observation: Readonly<PitchObservation>;
+  readonly observation: Readonly<VocalObservation>;
   readonly configuration: Readonly<ResolvedNoteInputConfiguration>;
 }
 
@@ -179,8 +186,14 @@ export class NoteInputEngine {
       rmsThreshold: configuration.rmsThreshold,
       timeSeconds: window.capturedAt,
     });
+    const brightness = deriveVocalBrightness(
+      analysisWindow.samples,
+      analysisWindow.sampleRate,
+      detected,
+    );
     const observation = Object.freeze({
       ...detected,
+      ...brightness,
       observationKind: observationKind(detected),
       sampleRate: window.sampleRate,
       startSample: window.startSample,
@@ -192,7 +205,7 @@ export class NoteInputEngine {
       workletProcessCount: window.processCount,
       discontinuity: window.discontinuity,
       periodicity: periodicity(detected),
-    }) satisfies Readonly<PitchObservation>;
+    }) satisfies Readonly<VocalObservation>;
     return Object.freeze({ observation, configuration });
   }
 }

@@ -1,323 +1,264 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import "../../styles-pitch-control.css";
 import { smoothPitchFrames, type PitchFrame } from "@noteforge/pitch-engine";
 import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playSafely, playTone, type ActiveVoice, type Timbre } from "@/audio/synth";
+import { playTone, type Timbre } from "@/audio/synth";
+import type { CompletedAttempt } from "@/features/training-session/attempt-runner";
+import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
+import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
-import { useLab } from "@/state/LabContext";
+import type { ControlMode } from "@/navigation";
+import { useMusicalState } from "@/state/MusicalContext";
+import { useUserPreferences } from "@/state/UserPreferencesContext";
+import { useAppNavigation } from "@/routing/use-app-navigation";
 import { saveAttempt } from "@/storage/database";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
 import { NoteInput } from "@/ui/voice";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
 
-type EnvelopeType = "free" | "steady" | "crescendo" | "decrescendo" | "diamond" | "pulses";
-
-interface ControlAttemptConfiguration {
-  envelopeType: EnvelopeType;
-  midi: number;
-  centsOffset: number;
-  timbre: Timbre;
-  toleranceCents: number;
-  duration: number;
+interface ControlTakeConfiguration {
+  readonly envelopeType: ControlMode;
+  readonly vowel: string;
+  readonly midi: number;
+  readonly centsOffset: number;
+  readonly timbre: Timbre;
+  readonly toleranceCents: number;
+  readonly duration: number;
 }
 
-const envelopes: Record<EnvelopeType, { label: string; points: number[]; cue: string }> = {
+interface ControlResult {
+  readonly metrics: AttemptMetrics;
+  readonly volumeScore: number | undefined;
+}
+
+const envelopes: Record<ControlMode, { label: string; points: readonly number[]; cue: string }> = {
   free: { label: "Free volume", points: [0.5, 0.5], cue: "Hold pitch; shape volume however you choose." },
   steady: { label: "Steady", points: [0.48, 0.48], cue: "One pitch. One volume. No drift." },
   crescendo: { label: "Crescendo", points: [0.12, 0.2, 0.38, 0.62, 0.92], cue: "Grow without lifting the fundamental." },
   decrescendo: { label: "Decrescendo", points: [0.92, 0.68, 0.42, 0.22, 0.12], cue: "Release energy without letting pitch sag." },
   diamond: { label: "Quiet → loud → quiet", points: [0.12, 0.32, 0.78, 0.96, 0.78, 0.32, 0.12], cue: "Open and close the dynamic arc around one center." },
-  pulses: { label: "Pulses", points: [0.18, 0.82, 0.18, 0.82, 0.18, 0.82, 0.18], cue: "Change energy in clean steps while pitch stays put." }
+  pulses: { label: "Pulses", points: [0.18, 0.82, 0.18, 0.82, 0.18, 0.82, 0.18], cue: "Change energy in clean steps while pitch stays put." },
 };
 
 const NUMERICAL_SILENCE_RMS = 1e-6;
 
-function interpolateEnvelope(points: readonly number[], progress: number): number {
+export function interpolateEnvelope(points: readonly number[], progress: number): number {
   const position = Math.max(0, Math.min(1, progress)) * (points.length - 1);
   const index = Math.floor(position);
   const fraction = position - index;
-  return points[index] * (1 - fraction) + (points[Math.min(index + 1, points.length - 1)] ?? points[index]) * fraction;
+  const next = points[Math.min(index + 1, points.length - 1)] ?? points[index]!;
+  return points[index]! * (1 - fraction) + next * fraction;
 }
 
-function scoreEnvelope(
-  frames: readonly PitchFrame[],
+export function scoreEnvelope(
+  frames: readonly Pick<PitchFrame, "rms">[],
+  frameElapsedSeconds: readonly number[],
   points: readonly number[],
-  start: number,
-  duration: number,
-  rmsThreshold: number
+  durationSeconds: number,
+  rmsThreshold = NUMERICAL_SILENCE_RMS,
 ): number | undefined {
-  const data = frames.filter((frame) => (
-    frame.timeSeconds >= start
-    && frame.timeSeconds <= start + duration
-    && Number.isFinite(frame.rms)
-    && frame.rms >= rmsThreshold
-  ));
+  const data = frames.flatMap((frame, index) => {
+    const elapsed = frameElapsedSeconds[index];
+    return elapsed != null && Number.isFinite(frame.rms) && frame.rms >= rmsThreshold
+      ? [{ level: frame.rms, progress: elapsed / durationSeconds }]
+      : [];
+  });
   if (data.length < 4) return undefined;
-  const levels = data.map((frame) => frame.rms);
-  const min = Math.min(...levels);
-  const max = Math.max(...levels);
-  if (max - min < 1e-5) return points.every((point) => Math.abs(point - points[0]) < 0.05) ? 100 : 0;
-  const error = data.reduce((sum, frame) => {
-    const actual = (frame.rms - min) / (max - min);
-    const target = interpolateEnvelope(points, (frame.timeSeconds - start) / duration);
-    return sum + Math.abs(actual - target);
+  const levels = data.map(({ level }) => level);
+  const minimum = Math.min(...levels);
+  const maximum = Math.max(...levels);
+  if (maximum - minimum < 1e-5) {
+    return points.every((point) => Math.abs(point - points[0]!) < 0.05) ? 100 : 0;
+  }
+  const error = data.reduce((sum, item) => {
+    const actual = (item.level - minimum) / (maximum - minimum);
+    return sum + Math.abs(actual - interpolateEnvelope(points, item.progress));
   }, 0) / data.length;
   return Math.max(0, (1 - error) * 100);
 }
 
+function scoreTake(take: Readonly<CompletedAttempt<ControlTakeConfiguration>>): ControlResult {
+  const configuration = take.configuration;
+  const frames = smoothPitchFrames(take.frames);
+  const metrics = scoreSustainedNote(
+    frames,
+    { midi: configuration.midi, centsOffset: configuration.centsOffset, durationMs: configuration.duration * 1_000, timbre: configuration.timbre, amplitude: 0.25 },
+    { toleranceCents: configuration.toleranceCents, promptTimeSeconds: frames[0]?.timeSeconds },
+  );
+  return {
+    metrics,
+    volumeScore: scoreEnvelope(
+      frames,
+      take.frameElapsedSeconds,
+      envelopes[configuration.envelopeType].points,
+      configuration.duration,
+    ),
+  };
+}
+
 export function PitchControl() {
-  const { selectedMidi, setSelectedMidi, centsOffset, timbre, toleranceCents } = useLab();
-  const [envelopeType, setEnvelopeType] = useState<EnvelopeType>("diamond");
+  const { selectedMidi, setSelectedMidi, centsOffset, timbre } = useMusicalState();
+  const { toleranceCents } = useUserPreferences();
+  const { route, navigate } = useAppNavigation();
+  const envelopeType = route.surface === "practice" && route.activity === "pitch-control" ? route.mode : "diamond";
   const [vowel, setVowel] = useState("oo");
   const [duration, setDuration] = useState(8);
-  const [running, setRunning] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [frames, setFrames] = useState<PitchFrame[]>([]);
-  const [metrics, setMetrics] = useState<AttemptMetrics | null>(null);
-  const [volumeScore, setVolumeScore] = useState<number>();
+  const [result, setResult] = useState<ControlResult | null>(null);
   const [saveError, setSaveError] = useState("");
-  const [attemptError, setAttemptError] = useState("");
-  const [elapsed, setElapsed] = useState(0);
-  const recording = useRef<PitchFrame[]>([]);
-  const startTime = useRef(0);
-  const displayStartTime = useRef(0);
-  const recordingActive = useRef(false);
-  const runningRef = useRef(false);
-  const startInFlightRef = useRef(false);
-  const attemptGenerationRef = useRef(0);
-  const attemptConfigurationRef = useRef<ControlAttemptConfiguration | null>(null);
-  const attemptMountedRef = useRef(false);
-  const promptVoiceRef = useRef<ActiveVoice | null>(null);
-  const finishTimer = useRef<number | undefined>(undefined);
-  const startTimer = useRef<number | undefined>(undefined);
-  const animation = useRef<number | undefined>(undefined);
-  const envelope = envelopes[envelopeType];
-  const input = useAudioInput({
-    onFrame: (frame) => {
-      setFrames((current) => [...current.slice(-200), frame]);
-      if (recordingActive.current) {
-        if (startTime.current === 0) startTime.current = frame.timeSeconds;
-        recording.current.push(frame);
-      }
-    }
-  });
-  const micRunning = input.state === "running";
 
-  useEffect(() => {
-    attemptMountedRef.current = true;
-    return () => {
-      attemptMountedRef.current = false;
-      attemptGenerationRef.current += 1;
-      startInFlightRef.current = false;
-      runningRef.current = false;
-      recordingActive.current = false;
-      attemptConfigurationRef.current = null;
-      if (finishTimer.current) window.clearTimeout(finishTimer.current);
-      if (startTimer.current) window.clearTimeout(startTimer.current);
-      if (animation.current) cancelAnimationFrame(animation.current);
-      promptVoiceRef.current?.stop(0.02);
-      promptVoiceRef.current = null;
-    };
-  }, []);
-
-  const finish = () => {
-    if (!runningRef.current) return;
-    runningRef.current = false;
-    recordingActive.current = false;
-    if (startTimer.current !== undefined) window.clearTimeout(startTimer.current);
-    if (finishTimer.current !== undefined) window.clearTimeout(finishTimer.current);
-    if (animation.current !== undefined) cancelAnimationFrame(animation.current);
-    startTimer.current = undefined;
-    finishTimer.current = undefined;
-    animation.current = undefined;
-    promptVoiceRef.current?.stop(0.04);
-    promptVoiceRef.current = null;
-    const configuration = attemptConfigurationRef.current;
-    attemptConfigurationRef.current = null;
-    if (!configuration) {
-      setRunning(false);
-      setElapsed(0);
-      return;
-    }
-    if (!startTime.current) {
-      setRunning(false);
-      setElapsed(0);
-      return;
-    }
-    const smooth = smoothPitchFrames(recording.current);
-    const result = scoreSustainedNote(smooth, { midi: configuration.midi, centsOffset: configuration.centsOffset, durationMs: configuration.duration * 1000, timbre: configuration.timbre, amplitude: 0.25 }, { toleranceCents: configuration.toleranceCents, promptTimeSeconds: startTime.current });
-    setFrames(smooth);
-    setMetrics(result);
-    const nextVolumeScore = scoreEnvelope(smooth, envelopes[configuration.envelopeType].points, startTime.current, configuration.duration, NUMERICAL_SILENCE_RMS);
-    setVolumeScore(nextVolumeScore);
-    const completedAt = new Date();
-    void saveAttempt({
+  const completeAttempt = (completed: Readonly<CompletedAttempt<ControlTakeConfiguration>>) => {
+    const configuration = completed.configuration;
+    const nextResult = scoreTake(completed);
+    setResult(nextResult);
+    const frames = smoothPitchFrames(completed.frames);
+    const completedAt = new Date().toISOString();
+    return saveAttempt({
       id: crypto.randomUUID(),
       exerciseType: `pitch.control.${configuration.envelopeType}`,
       target: { midi: configuration.midi, centsOffset: configuration.centsOffset, durationSeconds: configuration.duration },
-      metrics: { ...(result as Record<string, number | undefined>), volumeScore: nextVolumeScore },
-      pitchFrames: smooth,
-      startedAt: new Date(completedAt.getTime() - configuration.duration * 1_000).toISOString(),
-      completedAt: completedAt.toISOString(),
-    }).catch(() => setSaveError("The controlled-hold attempt could not be saved to local history."));
-    startTime.current = 0;
-    displayStartTime.current = 0;
-    setRunning(false);
-    setElapsed(configuration.duration);
+      metrics: { ...(nextResult.metrics as Record<string, number | undefined>), volumeScore: nextResult.volumeScore },
+      pitchFrames: frames,
+      startedAt: completed.startedAt ?? completedAt,
+      completedAt,
+    });
   };
+  const attempt = useAttemptRunner<ControlTakeConfiguration>({
+    onComplete: completeAttempt,
+    onCompletionError: () => setSaveError("The controlled-hold trace could not be saved to local history."),
+  });
+  const input = useAudioInput({ onFrame: attempt.observe });
+  const storedConfiguration = attempt.state.configuration;
+  const attemptConfiguration = storedConfiguration?.envelopeType === envelopeType
+    ? storedConfiguration
+    : null;
+  const workflowStatus = storedConfiguration !== null && attemptConfiguration === null
+    ? "idle"
+    : attempt.state.status;
+  const activeEnvelopeType = attemptConfiguration?.envelopeType ?? envelopeType;
+  const activeVowel = attemptConfiguration?.vowel ?? vowel;
+  const activeMidi = attemptConfiguration?.midi ?? selectedMidi;
+  const activeCentsOffset = attemptConfiguration?.centsOffset ?? centsOffset;
+  const activeTimbre = attemptConfiguration?.timbre ?? timbre;
+  const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
+  const activeDuration = attemptConfiguration?.duration ?? duration;
+  const envelope = envelopes[activeEnvelopeType];
+  const frames = attempt.state.frames;
+  const normalizedRms = (() => {
+    const maximum = Math.max(...frames.map((frame) => frame.rms), 0.001);
+    return frames.map((frame) => frame.rms / maximum);
+  })();
+  const currentTargetLevel = interpolateEnvelope(envelope.points, attempt.state.elapsedSeconds / activeDuration);
+  const resetAttempt = attempt.reset;
 
-  const start = async () => {
-    if (runningRef.current || startInFlightRef.current) return;
-    const generation = ++attemptGenerationRef.current;
-    const configuration: ControlAttemptConfiguration = { envelopeType, midi: selectedMidi, centsOffset, timbre, toleranceCents, duration };
-    startInFlightRef.current = true;
-    promptVoiceRef.current?.stop(0.03);
-    promptVoiceRef.current = null;
-    setStarting(true);
-    setAttemptError("");
-    // A retained MediaStream can outlive a suspended AudioContext. Always pass
-    // through the shared start/resume path before beginning an attempt.
-    let microphone: Awaited<ReturnType<typeof input.enable>>;
-    try {
-      microphone = await input.enable();
-    } catch {
-      if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
-      startInFlightRef.current = false;
-      setStarting(false);
-      setAttemptError("The microphone could not start. No controlled hold began.");
-      return;
-    }
-    if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
-    if (!microphone) {
-      startInFlightRef.current = false;
-      setStarting(false);
-      setAttemptError(input.error || "The microphone could not start. No controlled hold began.");
-      return;
-    }
-    let promptVoice: ActiveVoice;
-    try {
-      promptVoice = await playTone({
-        frequencyHz: continuousMidiToHz(configuration.midi, configuration.centsOffset),
-        timbre: configuration.timbre,
-        duration: 1.1,
-        amplitude: 0.18,
-      });
-    } catch {
-      if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) return;
-      startInFlightRef.current = false;
-      runningRef.current = false;
-      recordingActive.current = false;
-      attemptConfigurationRef.current = null;
-      setStarting(false);
-      setRunning(false);
-      setElapsed(0);
-      setAttemptError("The required reference pitch could not start. The hold stayed ready and no microphone frames were scored.");
-      return;
-    }
-    if (!attemptMountedRef.current || generation !== attemptGenerationRef.current) {
-      promptVoice.stop(0.02);
-      return;
-    }
-    promptVoiceRef.current = promptVoice;
-    startInFlightRef.current = false;
-    setStarting(false);
-    attemptConfigurationRef.current = configuration;
+  useEffect(() => {
+    resetAttempt();
+    setResult(null);
     setSaveError("");
-    runningRef.current = true;
-    recording.current = [];
-    setFrames([]);
-    setMetrics(null);
-    setVolumeScore(undefined);
-    setElapsed(0);
-    setRunning(true);
-    const animate = () => {
-      if (
-        !attemptMountedRef.current
-        || generation !== attemptGenerationRef.current
-        || !recordingActive.current
-      ) return;
-      setElapsed(Math.max(0, Math.min(configuration.duration, performance.now() / 1000 - displayStartTime.current)));
-      animation.current = requestAnimationFrame(animate);
-    };
-    startTime.current = 0;
-    recordingActive.current = false;
-    startTimer.current = window.setTimeout(() => {
-      if (
-        !attemptMountedRef.current
-        || generation !== attemptGenerationRef.current
-        || !runningRef.current
-      ) return;
-      setFrames([]);
-      recordingActive.current = true;
-      displayStartTime.current = performance.now() / 1000;
-      animation.current = requestAnimationFrame(animate);
-    }, 1_250);
-    finishTimer.current = window.setTimeout(() => {
-      if (attemptMountedRef.current && generation === attemptGenerationRef.current) finish();
-    }, (configuration.duration + 1.4) * 1000);
+  }, [envelopeType, resetAttempt]);
+
+  const clearTake = () => {
+    resetAttempt();
+    setResult(null);
+    setSaveError("");
   };
+  const begin = () => {
+    setSaveError("");
+    setResult(null);
+    attempt.begin({ envelopeType, vowel, midi: selectedMidi, centsOffset, timbre, toleranceCents, duration }, duration);
+  };
+  const hearReference = () => attempt.playReference("Pitch Control reference", () => playTone({
+    frequencyHz: continuousMidiToHz(activeMidi, activeCentsOffset),
+    timbre: activeTimbre,
+    duration: BRIEF_REFERENCE_SECONDS,
+    amplitude: 0.22,
+  }));
+  let dynamicCue = "LOUD";
+  if (currentTargetLevel < 0.3) dynamicCue = "QUIET";
+  else if (currentTargetLevel < 0.7) dynamicCue = "MEDIUM";
+  const medianCenter = result?.metrics.medianErrorCents == null
+    ? "—"
+    : `${result.metrics.medianErrorCents > 0 ? "+" : ""}${result.metrics.medianErrorCents.toFixed(1)}¢`;
+  const targetMidiFloat = activeMidi + activeCentsOffset / 100;
+  const beginLabel = input.state === "running" ? `Begin ${duration} s trace` : "Enable voice in header";
+  const envelopeOptions = (Object.entries(envelopes) as [ControlMode, (typeof envelopes)[ControlMode]][])
+    .map(([value, item]) => ({ value, label: item.label }));
+  const chooseMode = (nextMode: ControlMode) => navigate({ surface: "practice", activity: "pitch-control", mode: nextMode });
 
-  const controlsLocked = running || starting;
-
-  const normalizedRms = useMemo(() => {
-    const values = frames.map((frame) => frame.rms);
-    const max = Math.max(...values, 0.001);
-    return values.map((value) => value / max);
-  }, [frames]);
-  const currentTargetLevel = interpolateEnvelope(envelope.points, elapsed / duration);
-  const ribbonFrames = frames;
-
-  return (
-    <div className="page control-page">
-      <div className="lab-intro">
-        <div><Eyebrow>Decouple the controls</Eyebrow><h1>Move the energy. Keep the center.</h1><p>Pitch and loudness are scored as independent dimensions. A crescendo is not an invitation to go sharp.</p></div>
-      </div>
-
-      {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
-      {attemptError && <div className="error-banner" role="alert"><strong>Controlled hold did not start.</strong><span>{attemptError}</span></div>}
-
-      <Panel className="control-config">
-        <div className="control-config-main">
-          <Segmented value={envelopeType} disabled={controlsLocked} onChange={setEnvelopeType} options={(Object.entries(envelopes) as [EnvelopeType, (typeof envelopes)[EnvelopeType]][]).map(([value, item]) => ({ value, label: item.label }))} />
-        </div>
+  let currentStep: ReactNode;
+  if (workflowStatus === "idle") {
+    currentStep = (
+      <Panel className="control-config" data-workflow-step="idle">
+        <div className="control-config-main"><Segmented value={envelopeType} onChange={chooseMode} options={envelopeOptions} /></div>
         <div className="control-config-fields">
-          <Select label="Target" value={selectedMidi} disabled={controlsLocked} onChange={(event) => setSelectedMidi(Number(event.target.value))}>{Array.from({ length: 30 }, (_, index) => 45 + index).map((midi) => <option key={midi} value={midi}>{noteLabel(midi)}</option>)}</Select>
-          <Select label="Gesture" value={vowel} disabled={controlsLocked} onChange={(event) => setVowel(event.target.value)}><option value="hum">Hum</option><option value="oo">Oo</option><option value="oh">Oh</option><option value="ah">Ah</option><option value="ee">Ee</option></Select>
-          <Select label="Duration" value={duration} disabled={controlsLocked} onChange={(event) => setDuration(Number(event.target.value))}><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option></Select>
+          <Select label="Target" value={selectedMidi} onChange={(event) => { clearTake(); setSelectedMidi(Number(event.target.value)); }}>{Array.from({ length: 30 }, (_, index) => 45 + index).map((midi) => <option key={midi} value={midi}>{noteLabel(midi)}</option>)}</Select>
+          <Select label="Gesture" value={vowel} onChange={(event) => { clearTake(); setVowel(event.target.value); }}><option value="hum">Hum</option><option value="oo">Oo</option><option value="oh">Oh</option><option value="ah">Ah</option><option value="ee">Ee</option></Select>
+          <Select label="Duration" value={duration} onChange={(event) => { clearTake(); setDuration(Number(event.target.value)); }}><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option></Select>
+        </div>
+        <div className="envelope-header"><div><span>MISSION · {vowel.toUpperCase()}</span><h2>{envelopes[envelopeType].cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(selectedMidi)}</strong><span>±{toleranceCents}¢</span></div></div>
+        <div className="stage-actions">
+          <PlayButton label="Hear brief reference" onClick={hearReference} />
+          <ActionButton className="primary" disabled={input.state !== "running"} onClick={begin}><Icon name="mic" size={18} /> {beginLabel}</ActionButton>
         </div>
       </Panel>
-
-      <NoteInput
-        variant="scope"
-        input={input}
-        targetMidiFloat={selectedMidi + centsOffset / 100}
-        toleranceCents={toleranceCents}
-        title="Pitch and level monitor"
-      />
-
-      <Panel className={`envelope-stage ${running ? "active" : ""}`}>
-        <div className="envelope-header"><div><span>MISSION · {vowel.toUpperCase()}</span><h2>{envelope.cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(selectedMidi)}</strong><span>±{toleranceCents}¢</span></div></div>
+    );
+  } else if (workflowStatus === "tracking") {
+    currentStep = (
+      <Panel className="envelope-stage active" data-workflow-step="tracking">
+        <div className="envelope-header"><div><span>MISSION · {activeVowel.toUpperCase()}</span><h2>{envelope.cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(activeMidi)}</strong><span>±{activeToleranceCents}¢</span></div></div>
         <div className="envelope-visual">
           <svg viewBox="0 0 1000 220" preserveAspectRatio="none" aria-label="Target volume envelope">
             <defs><linearGradient id="envelope-fill" x1="0" x2="1"><stop stopColor="#63d7ff" stopOpacity=".05" /><stop offset=".5" stopColor="#d8ff3e" stopOpacity=".3" /><stop offset="1" stopColor="#ff6b45" stopOpacity=".08" /></linearGradient></defs>
             {[0, 1, 2, 3, 4].map((row) => <line key={row} x1="0" x2="1000" y1={20 + row * 45} y2={20 + row * 45} />)}
             <path className="target-envelope-area" d={`M 0 205 ${envelope.points.map((point, index) => `L ${(index / (envelope.points.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} L 1000 205 Z`} />
             <path className="target-envelope-line" d={envelope.points.map((point, index) => `${index ? "L" : "M"} ${(index / (envelope.points.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} />
-            {running && <line className="playhead" x1={(elapsed / duration) * 1000} x2={(elapsed / duration) * 1000} y1="0" y2="220" />}
+            <line className="playhead" x1={(attempt.state.elapsedSeconds / activeDuration) * 1000} x2={(attempt.state.elapsedSeconds / activeDuration) * 1000} y1="0" y2="220" />
             {normalizedRms.length > 1 && <path className="actual-envelope-line" d={normalizedRms.map((point, index) => `${index ? "L" : "M"} ${(index / (normalizedRms.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} />}
           </svg>
-          <div className="dynamic-readout"><span>FOLLOW</span><b style={{ transform: `scale(${0.8 + currentTargetLevel * 0.4})` }}>{currentTargetLevel < .3 ? "QUIET" : currentTargetLevel < .7 ? "MEDIUM" : "LOUD"}</b></div>
+          <div className="dynamic-readout"><span>FOLLOW</span><b style={{ transform: `scale(${0.8 + currentTargetLevel * 0.4})` }}>{dynamicCue}</b></div>
           <div className="envelope-axis"><span>quiet</span><span>VOLUME · RMS</span><span>loud</span></div>
         </div>
-        <PitchRibbon frames={ribbonFrames} targetMidiFloat={selectedMidi + centsOffset / 100} toleranceCents={toleranceCents} durationSeconds={duration} envelope={normalizedRms} />
-        <div className="stage-actions"><PlayButton label="Reference pitch" disabled={controlsLocked} onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(selectedMidi, centsOffset), timbre, duration: 1.15 }), "Pitch Control reference tone")} /><ActionButton className="primary" onClick={start} disabled={controlsLocked || input.state === "opening"}><Icon name="mic" size={18} /> {running ? `${Math.max(0, duration - elapsed).toFixed(1)}s` : starting || input.state === "opening" ? "Connecting…" : micRunning ? "Begin controlled hold" : "Enable mic to begin"}</ActionButton>{running && <ActionButton onClick={finish}>Finish</ActionButton>}</div>
+        <PitchRibbon frames={frames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} durationSeconds={activeDuration} envelope={normalizedRms} />
+        <div className="stage-actions"><PlayButton label="Hear brief reference" onClick={hearReference} /><ActionButton onClick={attempt.finish}>Finish trace</ActionButton></div>
       </Panel>
-
-      <div className="split-score">
-        <Panel className="dimension-score pitch"><Eyebrow>Dimension 01</Eyebrow><div className="dimension-title"><span className="dimension-icon">∿</span><div><h2>Pitch control</h2><p>Center, stability, and drift</p></div><strong>{metrics?.inToleranceRatio == null ? "—" : `${(metrics.inToleranceRatio * 100).toFixed(0)}%`}</strong></div><dl><div><dt>Median center</dt><dd>{metrics?.medianErrorCents == null ? "—" : `${metrics.medianErrorCents > 0 ? "+" : ""}${metrics.medianErrorCents.toFixed(1)}¢`}</dd></div><div><dt>Stability</dt><dd>{metrics?.stabilityCents == null ? "—" : `${metrics.stabilityCents.toFixed(1)}¢`}</dd></div><div><dt>Drift</dt><dd>{metrics?.driftCentsPerSecond == null ? "—" : `${metrics.driftCentsPerSecond.toFixed(1)}¢/s`}</dd></div></dl></Panel>
-        <Panel className="dimension-score volume"><Eyebrow>Dimension 02</Eyebrow><div className="dimension-title"><span className="dimension-icon">◢</span><div><h2>Dynamic control</h2><p>Envelope shape, separate from pitch</p></div><strong>{volumeScore == null ? "—" : `${volumeScore.toFixed(0)}%`}</strong></div><dl><div><dt>Shape match</dt><dd>{volumeScore == null ? "—" : `${volumeScore.toFixed(1)}%`}</dd></div><div><dt>Dynamic range</dt><dd>{metrics?.volume?.dynamicRangeDb == null ? "—" : `${metrics.volume.dynamicRangeDb.toFixed(1)} dB`}</dd></div><div><dt>Peak RMS</dt><dd>{metrics?.volume?.maximumRms == null ? "—" : metrics.volume.maximumRms.toFixed(3)}</dd></div></dl></Panel>
+    );
+  } else {
+    currentStep = (
+      <div className="split-score" data-workflow-step="complete">
+        <Panel className="dimension-score pitch">
+          <Eyebrow>Dimension 01</Eyebrow>
+          <div className="dimension-title"><span className="dimension-icon">∿</span><div><h2>Pitch control</h2><p>Center, stability, and drift</p></div><strong>{result?.metrics.inToleranceRatio == null ? "—" : `${(result.metrics.inToleranceRatio * 100).toFixed(0)}%`}</strong></div>
+          <dl>
+            <div><dt>Median center</dt><dd>{medianCenter}</dd></div>
+            <div><dt>Stability</dt><dd>{result?.metrics.stabilityCents == null ? "—" : `${result.metrics.stabilityCents.toFixed(1)}¢`}</dd></div>
+            <div><dt>Drift</dt><dd>{result?.metrics.driftCentsPerSecond == null ? "—" : `${result.metrics.driftCentsPerSecond.toFixed(1)}¢/s`}</dd></div>
+          </dl>
+        </Panel>
+        <Panel className="dimension-score volume">
+          <Eyebrow>Dimension 02</Eyebrow>
+          <div className="dimension-title"><span className="dimension-icon">◢</span><div><h2>Dynamic control</h2><p>Envelope shape, separate from pitch</p></div><strong>{result?.volumeScore == null ? "—" : `${result.volumeScore.toFixed(0)}%`}</strong></div>
+          <dl>
+            <div><dt>Shape match</dt><dd>{result?.volumeScore == null ? "—" : `${result.volumeScore.toFixed(1)}%`}</dd></div>
+            <div><dt>Dynamic range</dt><dd>{result?.metrics.volume?.dynamicRangeDb == null ? "—" : `${result.metrics.volume.dynamicRangeDb.toFixed(1)} dB`}</dd></div>
+            <div><dt>Peak RMS</dt><dd>{result?.metrics.volume?.maximumRms == null ? "—" : result.metrics.volume.maximumRms.toFixed(3)}</dd></div>
+          </dl>
+          <ActionButton className="wide" onClick={clearTake}>Shape another trace</ActionButton>
+        </Panel>
       </div>
+    );
+  }
+
+  return (
+    <div className="page control-page">
+      <div className="lab-intro">
+        <div><Eyebrow>Continuous pitch + level evidence</Eyebrow><h1>Move the energy. Keep the center.</h1><p>Begin a sample-timed trace whenever you are ready. The microphone never follows the exercise lifecycle.</p></div>
+      </div>
+
+      {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
+
+      <NoteInput variant="scope" input={input} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} title="Pitch and level monitor" />
+      <section className="practice-current-step">{currentStep}</section>
     </div>
   );
 }

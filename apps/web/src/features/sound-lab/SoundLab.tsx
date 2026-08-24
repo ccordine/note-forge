@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import "../../styles-sound-lab.css";
 import {
   analyzeHarmonicRelationship,
   buildChord,
@@ -9,7 +10,10 @@ import {
   splitMidiPitch,
 } from "@noteforge/music-core";
 import { Drone, playFrequencies, playSafely, playTone, TIMBRES } from "@/audio/synth";
-import { useLab } from "@/state/LabContext";
+import { useMusicalState } from "@/state/MusicalContext";
+import { useUserPreferences } from "@/state/UserPreferencesContext";
+import { useAppNavigation } from "@/routing/use-app-navigation";
+import type { SoundMode } from "@/navigation";
 import {
   CHORD_PRESETS, continuousMidiToHz, isChordPresetId, isScalePresetId, noteLabel, pitchClassLabel, SCALE_PRESETS, signed
 } from "@/lib/music-display";
@@ -17,7 +21,15 @@ import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select, Switch } f
 import { Icon } from "@/ui/Icon";
 import { PianoKeyboard } from "@/ui/PianoKeyboard";
 
-type LabMode = "note" | "dyad" | "chord";
+function contextNoteClass(
+  pitchClass: number,
+  chordPitchClasses: readonly number[],
+  scalePitchClasses: readonly number[],
+): string {
+  if (chordPitchClasses.includes(pitchClass)) return "chord";
+  if (scalePitchClasses.includes(pitchClass)) return "scale";
+  return "";
+}
 
 function NoteWheel({ tonic, selected, scalePcs, chordPcs, onSelect }: { tonic: number; selected: number; scalePcs: readonly number[]; chordPcs: readonly number[]; onSelect: (pc: number) => void }) {
   return (
@@ -56,9 +68,12 @@ export function SoundLab() {
   const {
     selectedMidi, setSelectedMidi, centsOffset, setCentsOffset, compareMidi, setCompareMidi, compareCents,
     setCompareCents, tonicPitchClass, setTonicPitchClass, scaleId, setScaleId, chordQuality, setChordQuality,
-    timbre, setTimbre, playbackMode, setPlaybackMode, labelsHidden, setLabelsHidden
-  } = useLab();
-  const [mode, setMode] = useState<LabMode>("dyad");
+    timbre, setTimbre, playbackMode, setPlaybackMode,
+  } = useMusicalState();
+  const { labelsHidden, setLabelsHidden } = useUserPreferences();
+  const { route, navigate } = useAppNavigation();
+  const mode = route.surface === "explore" && route.activity === "sound" ? route.mode : "dyad";
+  const setMode = (nextMode: SoundMode) => navigate({ surface: "explore", activity: "sound", mode: nextMode });
   const [editSlot, setEditSlot] = useState<"first" | "second">("first");
   const [relationshipRevealed, setRelationshipRevealed] = useState(true);
   const [droneEnabled, setDroneEnabled] = useState(false);
@@ -142,15 +157,31 @@ export function SoundLab() {
   };
 
   const playCurrent = () => {
-    const frequencies = mode === "note" ? [firstFrequency] : mode === "dyad" ? [firstFrequency, secondFrequency] : chord.intervals.map((interval) => continuousMidiToHz(60 + tonicPitchClass + interval));
+    let frequencies = [firstFrequency];
+    if (mode === "dyad") frequencies = [firstFrequency, secondFrequency];
+    if (mode === "chord") {
+      frequencies = chord.intervals.map((interval) => continuousMidiToHz(60 + tonicPitchClass + interval));
+    }
     playSafely(playFrequencies(frequencies, mode === "chord" ? "simultaneous" : playbackMode, { timbre, duration: 1.15 }), "Sound Lab playback");
   };
+  let droneActionLabel = "Tonic drone";
+  if (droneState === "starting") droneActionLabel = "Starting drone…";
+  else if (droneEnabled) droneActionLabel = "Stop drone";
+  let playLabel = "Play note";
+  if (mode === "dyad") playLabel = "Hear relationship";
+  if (mode === "chord") playLabel = `Play ${pitchClassLabel(tonicPitchClass)} ${chordPreset.label}`;
+  const chordMembership = relationship.isChordTone
+    ? `Yes · ${relationship.chordRole}`
+    : "No · color tone";
+  const scaleMembership = relationship.isScaleTone
+    ? `Yes · ${scalePreset.label}`
+    : `Outside ${scalePreset.label}`;
 
   return (
     <div className="page sound-lab-page">
       <div className="lab-intro">
         <div><Eyebrow>Phenomenon before verdict</Eyebrow><h1>Place sound in context.</h1><p>Manipulate pitch continuously, then reveal what the relationship is doing—never whether it is “allowed.”</p></div>
-        <div className="intro-actions"><Switch label="Hide labels" checked={labelsHidden} onChange={setLabelsHidden} /><ActionButton className={droneEnabled ? "active coral" : ""} onClick={() => setDroneEnabled((enabled) => !enabled)}><span className="status-dot" /> {droneState === "starting" ? "Starting drone…" : droneEnabled ? "Stop drone" : "Tonic drone"}</ActionButton></div>
+        <div className="intro-actions"><Switch label="Hide labels" checked={labelsHidden} onChange={setLabelsHidden} /><ActionButton className={droneEnabled ? "active coral" : ""} onClick={() => setDroneEnabled((enabled) => !enabled)}><span className="status-dot" /> {droneActionLabel}</ActionButton></div>
       </div>
 
       {playbackError && <div className="error-banner"><strong>Playback needs attention.</strong><span>{playbackError}</span></div>}
@@ -173,7 +204,7 @@ export function SoundLab() {
               <span>B · COLOR</span><strong>{labelsHidden ? "?" : noteLabel(secondPitch.nearestMidi)}</strong><small>{labelsHidden ? "labels hidden" : `${secondFrequency.toFixed(2)} Hz`}</small>
               <i style={{ transform: `translateX(${Math.max(-48, Math.min(48, secondPitch.centsFromNearest))}%)` }} />
             </button>
-            <PlayButton label={mode === "chord" ? `Play ${pitchClassLabel(tonicPitchClass)} ${chordPreset.label}` : mode === "dyad" ? "Hear relationship" : "Play note"} onClick={playCurrent} />
+            <PlayButton label={playLabel} onClick={playCurrent} />
           </div>
 
           <PianoKeyboard
@@ -190,7 +221,14 @@ export function SoundLab() {
           />
 
           <div className="continuous-section">
-            <div className="continuous-heading"><div><Eyebrow>Edit {editSlot === "first" ? "reference A" : "color B"}</Eyebrow><h3>Between the keys</h3></div><div className="cents-readout"><button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) - 1)}>−</button><strong>{signed(editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest)}<small>¢</small></strong><button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) + 1)}>+</button></div></div>
+            <div className="continuous-heading">
+              <div><Eyebrow>Edit {editSlot === "first" ? "reference A" : "color B"}</Eyebrow><h3>Between the keys</h3></div>
+              <div className="cents-readout">
+                <button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) - 1)}>−</button>
+                <strong>{signed(editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest)}<small>¢</small></strong>
+                <button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) + 1)}>+</button>
+              </div>
+            </div>
             <FrequencyReadout midi={editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi} cents={editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest} onChange={(midi, cents) => setPitch(editSlot, midi, cents)} />
             <input className="detune-slider" type="range" min="-50" max="50" step="1" value={editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest} onChange={(event) => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, Number(event.target.value))} aria-label="Cents detuning" />
             <div className="detune-labels"><span>−50¢</span><span>EQUAL TEMPERED</span><span>+50¢</span></div>
@@ -210,7 +248,7 @@ export function SoundLab() {
               <Select label="Scale" value={scaleId} onChange={(event) => { if (isScalePresetId(event.target.value)) setScaleId(event.target.value); }}>{Object.entries(SCALE_PRESETS).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}</Select>
               <Select label="Chord" value={chordQuality} onChange={(event) => { if (isChordPresetId(event.target.value)) setChordQuality(event.target.value); }}>{Object.entries(CHORD_PRESETS).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}</Select>
             </div>
-            <div className="context-notes">{Array.from({ length: 12 }, (_, pc) => <span key={pc} className={`${chordPcs.includes(pc) ? "chord" : scalePcs.includes(pc) ? "scale" : ""}`}>{pitchClassLabel(pc)}</span>)}</div>
+            <div className="context-notes">{Array.from({ length: 12 }, (_, pc) => <span key={pc} className={contextNoteClass(pc, chordPcs, scalePcs)}>{pitchClassLabel(pc)}</span>)}</div>
           </Panel>
         </div>
       </div>
@@ -223,8 +261,8 @@ export function SoundLab() {
             <dl>
               <div><dt>Interval from A</dt><dd>{relationship.interval.name} <small>{relationship.interval.shortName}</small></dd></div>
               <div><dt>Distance</dt><dd>{relationship.semitones} semitones <small>{signed(relationship.totalCents)} cents</small></dd></div>
-              <div><dt>Chord membership</dt><dd>{relationship.isChordTone ? `Yes · ${relationship.chordRole}` : "No · color tone"}</dd></div>
-              <div><dt>Scale membership</dt><dd>{relationship.isScaleTone ? `Yes · ${scalePreset.label}` : `Outside ${scalePreset.label}`}</dd></div>
+              <div><dt>Chord membership</dt><dd>{chordMembership}</dd></div>
+              <div><dt>Scale membership</dt><dd>{scaleMembership}</dd></div>
               <div><dt>Possible resolutions</dt><dd>{relationship.theory.possibleResolutions.map((item) => item.noteName).join(" or ") || "hold"} <small>{relationship.theory.possibleResolutions[0]?.description ?? "already centered on a chord tone"}</small></dd></div>
             </dl>
           </div>

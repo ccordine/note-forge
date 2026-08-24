@@ -17,7 +17,7 @@ The proof instruments the browser independently of the application and fails unl
 5. Pitch Mirror continues receiving and rendering frames while its prompt/exercise phase changes.
 6. Frames continue across a non-microphone route and into Hum Laboratory without another permission request, track disable, detector reset, or stale-note hold.
 7. Independently counted AudioWorklet `samples` messages match production detector diagnostics bijectively by exact `(captureEpoch, startSample, endSample)`, and every interval advances by the configured overlapping hop.
-8. The microphone track is never disabled or stopped before the proof presses the real **Stop input** control. Explicit Stop then stops the owned track exactly once.
+8. The microphone track is never disabled or stopped before the proof presses the real **Disable voice** control. Explicit Disable then stops the owned track exactly once.
 9. PCM samples, worklet callbacks, detector windows, and rendered sample identity remain monotonic through silence, prompt changes, navigation, and a route with no microphone consumer.
 10. The first detector observation that changes to each immediate-change challenge note is the exact `endSample` rendered in the DOM; a hidden multi-frame gate cannot pass.
 11. Every frame reports synchronous production detector execution time, and even the maximum must remain below the 960/48 kHz (20 ms) analysis-hop budget.
@@ -25,6 +25,36 @@ The proof instruments the browser independently of the application and fails unl
 13. The app requests the content-hashed worklet emitted by the production build, and that exact asset is included in the stamped offline precache.
 
 The script listens to production diagnostic requests and DOM changes, but it does not inject pitch frames, replace the detector, call `NoteInputEngine.process()` itself, fabricate a React controller, or mark an unvoiced frame as success.
+
+## Sustained-note and Range Loop acceptance
+
+`npm run proof:sustained-note:browser` uses the same built-bundle Chromium path
+for a longer voice-like fixture. It requires at least eight uninterrupted
+seconds of correct evidence at F♯1, quiet C3, C4, and D6, with vibrato,
+amplitude movement, harmonics, and seeded breath noise. The quiet C3 remains
+below the removed level gate. The proof then navigates the same still-running
+track into Range Loop and requires:
+
+- one retained tuner DOM identity through wrong pitch, silence, reference, and success;
+- earned sample-time dwell continuing during one real short-reference click;
+- exactly one bounded reference oscillator and no quieter persistent replacement;
+- exactly three seconds of credited quiet C3 without a stream, track,
+  AudioContext, or worklet replacement; and
+- exact worklet/detector sample-coordinate pairing until the one explicit
+  **Disable voice** action.
+
+## Pitch Tunnel acceptance
+
+`npm run proof:pitch-tunnel:browser` enters the exact built Practice route and
+anchors from a real rendered C3 observation. Its generated microphone fixture
+then drives the production worklet, detector, external realtime store, and one
+stable lane through `0, +25, +50, +75, +100, +75, +50, +25, 0` cents. An
+independent detector-frame oracle reconstructs each checkpoint from sample
+coordinates and requires exactly 1.00 second inside disjoint ±10-cent walls.
+Every checkpoint/status DOM transition must retain the exact completing frame.
+The fixture also proves silence pauses retained dwell, a credible wrong pitch
+resets only current dwell, completion leaves live F0 running, and no playback or
+feature-owned capture operation occurs.
 
 ## Supplemental detector contract
 
@@ -45,7 +75,12 @@ Controller and gameplay tests consume those real detector frames to check their 
 
 ```bash
 npm run proof:note-input:browser
+npm run proof:sustained-note:browser
+npm run proof:voice-draw:browser
+npm run proof:pitch-tunnel:browser
+npm run proof:offline:browser
 npm test -- --maxWorkers=1 --no-file-parallelism --no-cache
+npm run audit:architecture
 npm run typecheck
 npm run build
 ```
@@ -57,20 +92,44 @@ The browser command requires an installed Chromium and starts only local Vite Pr
 The final run against the built production bundle reported:
 
 - 57/57 enclosed semitones, MIDI 30–86;
-- 45 Hz measured as 45.000 Hz (+0.02 cents) and 1,200 Hz as 1,200.372 Hz (+0.54 cents);
+- 45 Hz measured as 45.000 Hz (-0.02 cents) and 1,200 Hz as 1,200.372 Hz (+0.54 cents);
 - 18/18 quiet low notes, MIDI 30–47, at median -60.0 dBFS;
-- digital silence unvoiced for 55 detector observations and 14 consecutive rendered samples;
-- loud seeded broadband noise unvoiced for 192/192 detector observations and 44 consecutive rendered samples, despite a measured level above the removed gate;
-- exact 1,948/1,948 AudioWorklet-to-detector sample-identity pairs at a 960-sample hop;
+- digital silence unvoiced for 56 detector observations and 14 consecutive rendered samples;
+- loud seeded broadband noise unvoiced for 189/189 detector observations and 44 consecutive rendered samples, despite a measured level above the removed gate;
+- exact 1,946/1,946 AudioWorklet-to-detector sample-identity pairs at a 960-sample hop;
+- the exact runtime-requested `/assets/pitch-capture-worklet-BImFxh7e.js` matched the sole hashed pitch worklet in the stamped service-worker precache;
 - the first C3, E3, and G3 changes rendered from their exact first detector `endSample`;
-- rendered C3 occupancy advanced 0, 960, 1,920, 2,880, 3,840, and 4,800 samples, reset at E3 entry, and cleared during silence;
+- rendered C3 occupancy entered at zero; every bounded React publication retained the exact authoritative sample coordinate and hop-multiple dwell, then reset at E3 entry and cleared during silence;
 - a forced production AudioContext suspension recovered automatically with continuity epoch 0→1 and `discontinuity=true`, retaining one stream, track, and worklet;
-- detector execution median 2.3 ms, p95 3.5 ms, maximum 12.4 ms, all below the 20 ms hop budget;
-- 1,095 observations in Pitch Mirror, 117 with no microphone consumer mounted, and 729 in Hum Laboratory, with a 93 ms maximum diagnostic gap and 22 ms maximum no-consumer gap;
+- detector execution median 2.1 ms, p95 2.8 ms, maximum 10.3 ms, all below the 20 ms hop budget;
+- 1,096 observations in Pitch Mirror, 116 with no microphone consumer mounted, and 728 in Hum Laboratory, with a 76 ms maximum diagnostic gap and 24 ms maximum no-consumer gap;
 - live notes present while the Pitch Mirror prompt advanced;
-- one `getUserMedia` call, zero track disables, zero pre-Stop track stops, and exactly one stop after the real Stop control.
+- one `getUserMedia` call, zero track disables, zero pre-Disable track stops, and exactly one stop after the real global Disable control.
 
-The supplemental low-register matrix passed 576/576 weak-fundamental/dominant-second trials. Its controls passed 160/160 pure-high trials and 32/32 50/60/120 Hz mains-plus-noise trials. The complete final frontend suite passed 608/608 tests across 50 files.
+The 38-second sustain proof independently paired 2,533/2,533 worklet windows
+and detector frames. F♯1, quiet C3 at median -62.9 dBFS, C4, and D6 each
+retained more than 8.4 seconds of uninterrupted correct evidence. Range Loop
+kept one tuner identity, ended its single 0.5-second reference oscillator with
+no quieter replacement, and credited exactly 3.0 seconds of quiet C3 without a
+stream, context, or worklet reset.
+
+Vocal Canvas consumed all 452 native worklet observations while React emitted
+202 bounded publications. Each published sample identified its exact worklet
+ordinal; C3/D3/E3/F♯3 moved Up/Right/Down/Left, five silence intervals remained
+stationary, and four SVG strokes returned to origin with 0.0 px closure error.
+
+Pitch Tunnel consumed 784/784 post-anchor worklet observations in exact order
+while React emitted 351 bounded exact publications across 15.66 sample-seconds.
+All nine independently reconstructed 1.00-second dwells and their DOM
+transitions matched exact detector frames. Silence retained 0.44 seconds,
+credible wrong pitch reset current dwell without erasing aggregate evidence,
+and the same lane remained live after completion with no playback.
+
+The headless kernel stress consumed 30,000 silence windows—ten minutes of sample
+time—with no React subscriber or exercise attached and zero capture stops. The
+complete final frontend suite passed 753/753 tests across 79 files. Coverage is
+62.21% statements, 57.35% branches, 52.83% functions, and 64.66% lines; the
+pitch engine has 94.36% statement coverage.
 
 ## Scope of the claim
 

@@ -10,6 +10,8 @@ import {
   resolveArcadeCurriculum,
 } from "../apps/web/src/features/voice-arcade/curriculum";
 import {
+  MAX_COMPLETED_VARIANTS_PER_MODE,
+  MAX_COMPLETED_VARIANT_LENGTH,
   applyArcadeOutcome,
   createDefaultArcadeProgress,
   hasArcadeStageMastery,
@@ -140,6 +142,56 @@ describe("Voice Arcade curriculum contracts", () => {
 });
 
 describe("Voice Arcade current progress schema and evidence", () => {
+  it("migrates documents without variant completion evidence to registry-derived empty sets", () => {
+    const normalized = normalizeArcadeProgress({
+      totalXp: 40,
+      gamesPlayed: 1,
+      variant: "historical-attempt-only",
+    });
+
+    expect(Object.keys(normalized.completedVariantsByMode)).toEqual(ARCADE_MODES);
+    for (const mode of ARCADE_MODES) {
+      expect(normalized.completedVariantsByMode[mode]).toEqual([]);
+      expect(Object.isFrozen(normalized.completedVariantsByMode[mode])).toBe(true);
+    }
+    expect(Object.isFrozen(normalized.completedVariantsByMode)).toBe(true);
+  });
+
+  it("normalizes completion IDs conservatively, deduplicates them, and enforces storage bounds", () => {
+    const candidates = Array.from(
+      { length: MAX_COMPLETED_VARIANTS_PER_MODE + 20 },
+      (_, index) => `chapter-${index}`,
+    );
+    const normalized = normalizeArcadeProgress({
+      completedVariantsByMode: {
+        flight: [
+          "chapter-0",
+          " chapter-1 ",
+          "chapter-0",
+          "",
+          42,
+          "x".repeat(MAX_COMPLETED_VARIANT_LENGTH + 1),
+          ...candidates,
+        ],
+        unknown: ["must-not-migrate"],
+        maze: "not-an-array",
+      },
+    });
+
+    expect(normalized.completedVariantsByMode.flight).toHaveLength(
+      MAX_COMPLETED_VARIANTS_PER_MODE,
+    );
+    expect(normalized.completedVariantsByMode.flight.slice(0, 3)).toEqual([
+      "chapter-0",
+      "chapter-1",
+      "chapter-2",
+    ]);
+    expect(new Set(normalized.completedVariantsByMode.flight).size)
+      .toBe(normalized.completedVariantsByMode.flight.length);
+    expect(normalized.completedVariantsByMode.maze).toEqual([]);
+    expect("unknown" in normalized.completedVariantsByMode).toBe(false);
+  });
+
   it("normalizes a pre-drawing progress document and adds empty drawing evidence", () => {
     const current = {
       totalXp: 1_234,
@@ -271,6 +323,7 @@ describe("Voice Arcade current progress schema and evidence", () => {
       maze: 75,
       resonance: 0,
       draw: 0,
+      flight: 0,
     });
     expect(normalized.masteryByMode.maze.reflex).toEqual({
       runs: 2,
@@ -313,6 +366,48 @@ describe("Voice Arcade current progress schema and evidence", () => {
     });
     expect(second.masteryByMode.pattern.reflex.runs).toBe(0);
     expect(second.masteryByMode.pong.deliberate.runs).toBe(0);
+  });
+
+  it("records only explicit completed variants, deduplicated and isolated by mode", () => {
+    const initial = createDefaultArcadeProgress();
+    const attemptedOnly = applyArcadeOutcome(
+      initial,
+      outcome({ mode: "flight", variant: "neutral-find-center" }),
+      "2026-08-24T12:00:00.000Z",
+    );
+    const completed = applyArcadeOutcome(
+      attemptedOnly,
+      outcome({
+        mode: "flight",
+        variant: "ring-run",
+        completedVariant: "neutral-find-center",
+      }),
+      "2026-08-24T12:01:00.000Z",
+    );
+    const duplicate = applyArcadeOutcome(
+      completed,
+      outcome({ mode: "flight", completedVariant: "neutral-find-center" }),
+      "2026-08-24T12:02:00.000Z",
+    );
+    const otherMode = applyArcadeOutcome(
+      duplicate,
+      outcome({ mode: "maze", completedVariant: "campaign-1" }),
+      "2026-08-24T12:03:00.000Z",
+    );
+
+    expect(initial.completedVariantsByMode.flight).toEqual([]);
+    expect(attemptedOnly.completedVariantsByMode.flight).toEqual([]);
+    expect(completed.completedVariantsByMode.flight).toEqual(["neutral-find-center"]);
+    expect(duplicate.completedVariantsByMode.flight).toEqual(["neutral-find-center"]);
+    expect(otherMode.completedVariantsByMode).toMatchObject({
+      flight: ["neutral-find-center"],
+      maze: ["campaign-1"],
+      pong: [],
+    });
+    expect(Object.isFrozen(otherMode.completedVariantsByMode)).toBe(true);
+    expect(Object.isFrozen(otherMode.completedVariantsByMode.flight)).toBe(true);
+    expect(() => (otherMode.completedVariantsByMode.flight as string[]).push("mutation"))
+      .toThrow(TypeError);
   });
 
   it("records manually selected advanced stages without treating recommendations as locks", () => {
@@ -382,6 +477,11 @@ describe("Voice Arcade current progress schema and evidence", () => {
       .toThrow(RangeError);
     expect(() => applyArcadeOutcome(progress, outcome({ curriculumStage: "expert" as never }), "2026-08-23T12:00:00Z"))
       .toThrow(RangeError);
+    expect(() => applyArcadeOutcome(progress, outcome({ completedVariant: " " }), "2026-08-23T12:00:00Z"))
+      .toThrow(RangeError);
+    expect(() => applyArcadeOutcome(progress, outcome({
+      completedVariant: "x".repeat(MAX_COMPLETED_VARIANT_LENGTH + 1),
+    }), "2026-08-23T12:00:00Z")).toThrow(RangeError);
   });
 });
 

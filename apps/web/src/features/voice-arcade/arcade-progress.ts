@@ -1,15 +1,17 @@
 import {
-  ARCADE_MODES,
   type ArcadeCurriculumStage,
   type ArcadeMode,
   type ArcadeOutcome,
 } from "./types";
+import { ARCADE_MODES } from "./arcade-registry";
 import {
   getArcadeCurriculumStage,
   getArcadeStageMasteryRequirement,
 } from "./curriculum";
 
 export const ARCADE_PROGRESS_STORAGE_KEY = "voice.arcade.progress";
+export const MAX_COMPLETED_VARIANTS_PER_MODE = 128;
+export const MAX_COMPLETED_VARIANT_LENGTH = 160;
 
 export interface ArcadeStageMasteryEvidence {
   readonly runs: number;
@@ -26,12 +28,14 @@ export type ArcadeStageMastery = Readonly<Record<
 >>;
 
 export type ArcadeMasteryByMode = Readonly<Record<ArcadeMode, ArcadeStageMastery>>;
+export type ArcadeCompletedVariantsByMode = Readonly<Record<ArcadeMode, readonly string[]>>;
 
 export interface ArcadeProgress {
   readonly totalXp: number;
   readonly gamesPlayed: number;
   readonly bestByMode: Readonly<Record<ArcadeMode, number>>;
   readonly masteryByMode: ArcadeMasteryByMode;
+  readonly completedVariantsByMode: ArcadeCompletedVariantsByMode;
   readonly lastPlayedAt: string | null;
 }
 
@@ -81,18 +85,41 @@ function emptyStageMastery(): ArcadeStageMastery {
 }
 
 function emptyMasteryByMode(): ArcadeMasteryByMode {
-  return Object.freeze({
-    pattern: emptyStageMastery(),
-    pong: emptyStageMastery(),
-    song: emptyStageMastery(),
-    maze: emptyStageMastery(),
-    resonance: emptyStageMastery(),
-    draw: emptyStageMastery(),
-  });
+  return Object.freeze(Object.fromEntries(
+    ARCADE_MODES.map((mode) => [mode, emptyStageMastery()]),
+  ) as Record<ArcadeMode, ArcadeStageMastery>);
 }
 
 function emptyBestByMode(): Readonly<Record<ArcadeMode, number>> {
-  return Object.freeze({ pattern: 0, pong: 0, song: 0, maze: 0, resonance: 0, draw: 0 });
+  return Object.freeze(Object.fromEntries(
+    ARCADE_MODES.map((mode) => [mode, 0]),
+  ) as Record<ArcadeMode, number>);
+}
+
+function emptyCompletedVariantsByMode(): ArcadeCompletedVariantsByMode {
+  return Object.freeze(Object.fromEntries(
+    ARCADE_MODES.map((mode) => [mode, Object.freeze([] as string[])]),
+  ) as Record<ArcadeMode, readonly string[]>);
+}
+
+function completedVariantValue(candidate: unknown): string | null {
+  if (typeof candidate !== "string") return null;
+  const value = candidate.trim();
+  return value.length > 0 && value.length <= MAX_COMPLETED_VARIANT_LENGTH ? value : null;
+}
+
+function normalizeCompletedVariants(candidate: unknown): readonly string[] {
+  if (!Array.isArray(candidate)) return Object.freeze([]);
+  const seen = new Set<string>();
+  const variants: string[] = [];
+  for (const candidateVariant of candidate) {
+    const variant = completedVariantValue(candidateVariant);
+    if (variant === null || seen.has(variant)) continue;
+    seen.add(variant);
+    variants.push(variant);
+    if (variants.length === MAX_COMPLETED_VARIANTS_PER_MODE) break;
+  }
+  return Object.freeze(variants);
 }
 
 export function createDefaultArcadeProgress(): ArcadeProgress {
@@ -101,6 +128,7 @@ export function createDefaultArcadeProgress(): ArcadeProgress {
     gamesPlayed: 0,
     bestByMode: emptyBestByMode(),
     masteryByMode: emptyMasteryByMode(),
+    completedVariantsByMode: emptyCompletedVariantsByMode(),
     lastPlayedAt: null,
   });
 }
@@ -140,6 +168,7 @@ export function normalizeArcadeProgress(candidate: unknown): ArcadeProgress {
   if (!source) return createDefaultArcadeProgress();
   const bestSource = asRecord(source.bestByMode);
   const masterySource = asRecord(source.masteryByMode);
+  const completedVariantsSource = asRecord(source.completedVariantsByMode);
 
   const bestByMode = Object.fromEntries(ARCADE_MODES.map((mode) => [
     mode,
@@ -149,12 +178,17 @@ export function normalizeArcadeProgress(candidate: unknown): ArcadeProgress {
     mode,
     normalizeStageMastery(masterySource?.[mode]),
   ])) as Record<ArcadeMode, ArcadeStageMastery>;
+  const completedVariantsByMode = Object.fromEntries(ARCADE_MODES.map((mode) => [
+    mode,
+    normalizeCompletedVariants(completedVariantsSource?.[mode]),
+  ])) as Record<ArcadeMode, readonly string[]>;
 
   return Object.freeze({
     totalXp: Math.round(finiteNonNegative(source.totalXp)),
     gamesPlayed: nonNegativeInteger(source.gamesPlayed),
     bestByMode: Object.freeze(bestByMode),
     masteryByMode: Object.freeze(masteryByMode),
+    completedVariantsByMode: Object.freeze(completedVariantsByMode),
     lastPlayedAt: normalizedTimestamp(source.lastPlayedAt),
   });
 }
@@ -186,6 +220,13 @@ function requireCompletedAt(value: string): string {
   return normalized;
 }
 
+function requireCompletedVariant(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const variant = completedVariantValue(value);
+  if (variant === null) throw new RangeError("Completed Arcade variant must be a bounded non-empty identifier.");
+  return variant;
+}
+
 /** Record evidence at any selected stage; recommendations are never access gates. */
 export function applyArcadeOutcome(
   current: Readonly<ArcadeProgress>,
@@ -198,6 +239,7 @@ export function applyArcadeOutcome(
   const score = requireOutcomeScore(outcome.score);
   const xp = requireOutcomeXp(outcome.xp);
   const timestamp = requireCompletedAt(completedAt);
+  const completedVariant = requireCompletedVariant(outcome.completedVariant);
   const previousEvidence = progress.masteryByMode[mode][stage];
   const requirement = getArcadeStageMasteryRequirement(mode, stage);
   const nextRuns = previousEvidence.runs + 1;
@@ -214,6 +256,12 @@ export function applyArcadeOutcome(
     ...progress.masteryByMode[mode],
     [stage]: nextEvidence,
   });
+  const previousVariants = progress.completedVariantsByMode[mode];
+  const nextVariants = completedVariant === null
+    || previousVariants.includes(completedVariant)
+    || previousVariants.length >= MAX_COMPLETED_VARIANTS_PER_MODE
+    ? previousVariants
+    : Object.freeze([...previousVariants, completedVariant]);
 
   return Object.freeze({
     totalXp: progress.totalXp + xp,
@@ -226,6 +274,9 @@ export function applyArcadeOutcome(
       ...progress.masteryByMode,
       [mode]: nextModeMastery,
     }),
+    completedVariantsByMode: nextVariants === previousVariants
+      ? progress.completedVariantsByMode
+      : Object.freeze({ ...progress.completedVariantsByMode, [mode]: nextVariants }),
     lastPlayedAt: timestamp,
   });
 }

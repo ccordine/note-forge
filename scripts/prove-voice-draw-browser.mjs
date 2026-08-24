@@ -281,10 +281,33 @@ async function waitForBrowser(session, expression, description, timeoutMilliseco
 }
 
 async function proofSnapshot(session) {
-  return evaluate(session, `(() => {
+  return evaluate(session, `(async () => new Promise((resolveSnapshot) => {
     const control = window.__noteforgeVoiceDrawProof;
-    return typeof control?.snapshot === 'function' ? control.snapshot() : null;
-  })()`);
+    if (typeof control?.snapshot !== 'function') {
+      resolveSnapshot(null);
+      return;
+    }
+    let interval = null;
+    let timeout = null;
+    const observer = new MutationObserver(() => check());
+    const finish = (snapshot) => {
+      observer.disconnect();
+      if (interval !== null) clearInterval(interval);
+      if (timeout !== null) clearTimeout(timeout);
+      resolveSnapshot(snapshot);
+    };
+    const check = () => {
+      const snapshot = control.snapshot();
+      const published = snapshot.drawSnapshots.at(-1);
+      if (published?.observedFrameCount === snapshot.workletSampleMessages) {
+        finish(snapshot);
+      }
+    };
+    observer.observe(document, { subtree: true, childList: true, attributes: true });
+    interval = setInterval(check, 5);
+    timeout = setTimeout(() => finish(null), 5_000);
+    check();
+  }))()`, true);
 }
 
 function canonicalDrawFrames(snapshots) {
@@ -357,7 +380,7 @@ async function main() {
     const chromiumProfile = join(temporaryDirectory, "chromium-profile");
     const previewPort = await availablePort();
     const debugPort = await availablePort();
-    const pageUrl = `http://127.0.0.1:${previewPort}/#arcade`;
+    const pageUrl = `http://127.0.0.1:${previewPort}/#/arcade`;
     await writeFile(wavPath, generatedVoiceDrawWav());
 
     preview = spawn(process.execPath, [
@@ -639,8 +662,8 @@ async function main() {
     await waitForBrowser(
       session,
       `(() => {
-        const button = document.querySelector('button[data-arcade-mode="draw"]');
-        return document.readyState === 'complete' && Boolean(button && !button.disabled);
+        const link = document.querySelector('a[data-arcade-mode="draw"][href="#/arcade/draw"]');
+        return document.readyState === 'complete' && Boolean(link);
       })()`,
       "the hydrated Voice Arcade cabinet",
       10_000,
@@ -653,19 +676,18 @@ async function main() {
       `Voice Draw proof loaded development/source modules: ${JSON.stringify(entryScripts)}`);
 
     const cabinetClicked = await evaluate(session, `(() => {
-      const button = document.querySelector('button[data-arcade-mode="draw"]');
-      button?.click();
-      return Boolean(button && !button.disabled);
+      const link = document.querySelector('a[data-arcade-mode="draw"][href="#/arcade/draw"]');
+      link?.click();
+      return Boolean(link);
     })()`);
     assert(cabinetClicked, "The real Vocal Canvas cabinet control was not clickable.");
     await waitForBrowser(session, "Boolean(document.querySelector('[data-voice-draw]'))", "Voice Draw");
     const enableClicked = await evaluate(session, `(() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((candidate) => candidate.textContent?.trim() === 'Enable voice input');
+      const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
       return Boolean(button);
     })()`);
-    assert(enableClicked, "Voice Draw's explicit Enable voice input control was not clickable.");
+    assert(enableClicked, "The sole global Enable voice control was not clickable from Voice Draw.");
     await waitForBrowser(
       session,
       "document.querySelector('[data-voice-draw]')?.getAttribute('data-input-state') === 'running'",
@@ -706,6 +728,9 @@ async function main() {
     const workletFrames = snapshot.workletSampleEvents;
     const diagnosticFrames = pitchFramesFrom(diagnosticBatches);
     const workletByKey = new Map(workletFrames.map((frame) => [frameKey(frame), frame]));
+    const workletOrdinalByKey = new Map(
+      workletFrames.map((frame, index) => [frameKey(frame), index + 1]),
+    );
     const diagnosticByKey = new Map(diagnosticFrames.map((frame) => [frameKey(frame), frame]));
 
     assert(snapshot.instrumentationErrors.length === 0,
@@ -735,17 +760,36 @@ async function main() {
     `Voice Draw did not use exactly one content-hashed production worklet: ${JSON.stringify(workletPaths)}`);
     assert(workletFrames.length === snapshot.workletSampleMessages && workletFrames.length > 250,
       `Worklet sample evidence was absent or truncated: ${workletFrames.length}/${snapshot.workletSampleMessages}.`);
+    assert(workletByKey.size === workletFrames.length,
+      "Voice Draw worklet evidence contained duplicate sample identities.");
 
-    assert(frames.length > 250, `Voice Draw rendered only ${frames.length} authoritative observations.`);
+    const firstPublishedFrame = frames[0];
+    const lastPublishedFrame = frames.at(-1);
+    assert(firstPublishedFrame && lastPublishedFrame,
+      "Voice Draw published no authoritative runtime state.");
+    const publishedAuthoritySeconds = (
+      lastPublishedFrame.observedFrameCount - firstPublishedFrame.observedFrameCount
+    ) * HOP_SAMPLES / SAMPLE_RATE;
+    const maximumPublishedFrames = Math.ceil(publishedAuthoritySeconds * 30) + 1;
+    const minimumPublishedFrames = Math.max(100, Math.floor(publishedAuthoritySeconds * 10));
+    assert(frames.length >= minimumPublishedFrames
+      && frames.length <= maximumPublishedFrames,
+    `Voice Draw publication was not a bounded, live projection of authoritative input: ${frames.length} snapshots across ${publishedAuthoritySeconds.toFixed(3)} sample-seconds (expected ${minimumPublishedFrames}-${maximumPublishedFrames}).`);
+    assert(lastPublishedFrame.observedFrameCount === workletFrames.length,
+      `Voice Draw runtime consumed ${lastPublishedFrame.observedFrameCount} of ${workletFrames.length} authoritative worklet observations.`);
     const authorityFailures = [];
     for (let index = 0; index < frames.length; index += 1) {
       const frame = frames[index];
       const previous = frames[index - 1];
       const workletFrame = workletByKey.get(frameKey(frame));
+      const workletOrdinal = workletOrdinalByKey.get(frameKey(frame));
       if (!workletFrame
         || workletFrame.sampleCount !== WINDOW_SAMPLES
-        || workletFrame.processedSampleCount !== frame.endSample) {
-        authorityFailures.push(`${frameKey(frame)} missing/mismatched worklet authority`);
+        || workletFrame.processedSampleCount !== frame.endSample
+        || frame.observedFrameCount !== workletOrdinal) {
+        authorityFailures.push(
+          `${frameKey(frame)} missing/mismatched worklet authority or runtime count ${frame.observedFrameCount}/${String(workletOrdinal)}`,
+        );
       }
       if (previous && (
         frame.captureEpoch < previous.captureEpoch
@@ -847,7 +891,7 @@ async function main() {
     const firstFrame = frames[0];
     console.log("Voice Draw production browser proof passed.");
     console.log(`  authority: 1 stream · 1 track · 1 source · 1 worklet · ${workletFrames.length} PCM windows`);
-    console.log(`  draw frames: ${frames.length} · endSample ${firstFrame.endSample}->${finalFrame.endSample} · ${silentRuns.length} sustained stationary silence runs`);
+    console.log(`  draw frames: ${frames.length} bounded DOM projections of ${finalFrame.observedFrameCount} exactly consumed observations · endSample ${firstFrame.endSample}->${finalFrame.endSample} · ${silentRuns.length} sustained stationary silence runs`);
     console.log(`  commands: ${motionProof.map(({ midi, direction, materialDistance }) => `${midi}:${direction} ${materialDistance.toFixed(3)}`).join(" · ")}`);
     console.log(`  SVG: 4 coalesced strokes · closure ${closureDistance.toFixed(1)} px · opposite mismatch V${verticalMismatch.toFixed(1)}/H${horizontalMismatch.toFixed(1)} px`);
     console.log(`  cursor: (${strokes[0].from.x.toFixed(1)}, ${strokes[0].from.y.toFixed(1)}) -> (${strokes.at(-1).to.x.toFixed(1)}, ${strokes.at(-1).to.y.toFixed(1)})`);

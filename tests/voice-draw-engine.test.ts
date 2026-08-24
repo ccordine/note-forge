@@ -1,21 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
-  VOICE_DRAW_DIRECTIONS,
-  VOICE_DRAW_TRACE_TARGETS,
   centerVoiceDrawCursor,
   clearVoiceDraw,
   configureVoiceDrawState,
-  createVoiceDrawNoteBank,
   createVoiceDrawState,
-  getVoiceDrawTraceTarget,
-  scoreVoiceDrawTrace,
   undoVoiceDrawStroke,
   updateVoiceDrawFromObservation,
+} from "../apps/web/src/features/voice-arcade/voice-draw-engine";
+import { createVoiceDrawNoteBank } from "../apps/web/src/features/voice-arcade/voice-draw-mapping";
+import {
+  VOICE_DRAW_TRACE_TARGETS,
+  getVoiceDrawTraceTarget,
+  scoreVoiceDrawTrace,
+} from "../apps/web/src/features/voice-arcade/voice-draw-trace";
+import {
+  VOICE_DRAW_DIRECTIONS,
   type VoiceDrawSegment,
   type VoiceDrawState,
   type VoiceDrawTraceTarget,
-} from "../apps/web/src/features/voice-arcade/voice-draw-engine";
+} from "../apps/web/src/features/voice-arcade/voice-draw-types";
 
 const RANGE = Object.freeze({ lowMidi: 48, highMidi: 60, baselineMidi: 54 });
 const SAMPLE_RATE = 48_000;
@@ -408,6 +412,14 @@ describe("Voice Draw deterministic engine", () => {
     expect(state.cursor).toEqual({ x: 0.5, y: 0.5 });
     expect(state.segments).toEqual([]);
     expect(state.lastAuthority).toBe(authority);
+    expect(state.motionAnchorSample).toBeNull();
+    expect(state.activeDirection).toBeNull();
+    state = updateVoiceDrawFromObservation(
+      state,
+      observation(8_640, { nearestMidi: right.midi }),
+    );
+    expect(state.cursor).toEqual({ x: 0.5, y: 0.5 });
+    expect(state.segments).toEqual([]);
   });
 
   it("centers the cursor without deleting art or drawing a jump on the next held frame", () => {

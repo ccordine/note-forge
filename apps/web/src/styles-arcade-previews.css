@@ -1,0 +1,178 @@
+/* Animated cabinet previews */
+.arcade-demo-highway,
+.arcade-demo-pong,
+.arcade-demo-song,
+.arcade-demo-maze {
+  position: absolute;
+  inset: 0;
+}
+
+.arcade-demo-highway::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 23%;
+  border-left: 2px solid rgba(216, 255, 62, .72);
+  box-shadow: 0 0 17px rgba(216, 255, 62, .35);
+}
+
+.arcade-demo-highway i {
+  --demo-top: calc(16% + var(--demo-index) * 16%);
+  position: absolute;
+  top: var(--demo-top);
+  left: calc(45% + var(--demo-index) * 7%);
+  width: 20%;
+  height: 14px;
+  border: 1px solid rgba(216, 255, 62, .5);
+  border-radius: 4px;
+  background: rgba(216, 255, 62, .16);
+  box-shadow: 0 0 18px rgba(216, 255, 62, .1);
+  animation: arcade-demo-run 3.2s linear infinite;
+  animation-delay: calc(var(--demo-index) * -.44s);
+}
+
+.arcade-demo-highway span {
+  position: absolute;
+  top: 47%;
+  left: 21%;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--cream);
+  border-radius: 50%;
+  box-shadow: 0 0 16px var(--cream);
+}
+
+.arcade-demo-pong::before {
+  content: "PITCH\A↑\A\A↓";
+  white-space: pre;
+  position: absolute;
+  top: 14%;
+  bottom: 12%;
+  left: 13px;
+  display: flex;
+  align-items: center;
+  color: rgba(99, 215, 255, .38);
+  font: 6px/4.8 var(--mono);
+}
+
+.arcade-demo-pong > i:first-child,
+.arcade-demo-pong > i:nth-child(2) {
+  position: absolute;
+  width: 7px;
+  height: 58px;
+  border-radius: 8px;
+  background: var(--blue);
+  box-shadow: 0 0 17px rgba(99, 215, 255, .5);
+}
+
+.arcade-demo-pong > i:first-child {
+  top: 33%;
+  left: 13%;
+  animation: arcade-demo-paddle 2.2s ease-in-out infinite alternate;
+}
+
+.arcade-demo-pong > i:nth-child(2) {
+  top: 52%;
+  right: 13%;
+  background: rgba(240, 241, 231, .7);
+}
+
+.arcade-demo-pong > b {
+  position: absolute;
+  top: 43%;
+  left: 48%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cream);
+  box-shadow: 0 0 18px rgba(255, 244, 214, .72);
+  animation: arcade-demo-ball 2.2s linear infinite alternate;
+}
+
+.arcade-demo-pong > span {
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  left: 50%;
+  border-left: 1px dashed rgba(240, 241, 231, .17);
+}
+
+.arcade-demo-song::before {
+  content: "";
+  position: absolute;
+  right: 18%;
+  bottom: 8%;
+  left: 18%;
+  height: 2px;
+  background: var(--violet);
+  box-shadow: 0 0 14px rgba(179, 154, 255, .55);
+}
+
+.arcade-demo-song i {
+  position: absolute;
+  top: calc((1 - var(--demo-note)) * 72% + 7%);
+  left: calc(22% + var(--demo-time) * 13%);
+  width: 10%;
+  height: 13px;
+  border-radius: 4px;
+  background: rgba(179, 154, 255, .36);
+  border: 1px solid rgba(179, 154, 255, .78);
+  box-shadow: 0 0 15px rgba(179, 154, 255, .15);
+  animation: arcade-demo-song-pulse 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--demo-time) * -.2s);
+}
+
+.arcade-demo-song span {
+  position: absolute;
+  top: 10%;
+  bottom: 8%;
+  left: 18%;
+  border-left: 2px solid var(--coral);
+  box-shadow: 0 0 10px rgba(255, 107, 69, .42);
+}
+
+.arcade-demo-maze {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 5px;
+  padding: 15%;
+  transform: rotate(-4deg);
+}
+
+.arcade-demo-maze i {
+  border: solid rgba(255, 107, 69, .48);
+  border-width: 1px 2px 2px 1px;
+  background: rgba(255, 107, 69, .035);
+}
+
+.arcade-demo-maze i:nth-child(2),
+.arcade-demo-maze i:nth-child(4),
+.arcade-demo-maze i:nth-child(8) { border-right-color: transparent; }
+.arcade-demo-maze i:nth-child(3),
+.arcade-demo-maze i:nth-child(5),
+.arcade-demo-maze i:nth-child(7) { border-bottom-color: transparent; }
+
+.arcade-demo-maze b,
+.arcade-demo-maze span {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+}
+
+.arcade-demo-maze b {
+  top: 23%;
+  left: 24%;
+  background: var(--coral);
+  box-shadow: 0 0 18px rgba(255, 107, 69, .65);
+  animation: arcade-demo-maze-run 3.4s steps(1, end) infinite;
+}
+
+.arcade-demo-maze span {
+  right: 22%;
+  bottom: 21%;
+  border: 2px solid var(--lime);
+  box-shadow: 0 0 18px rgba(216, 255, 62, .5);
+}

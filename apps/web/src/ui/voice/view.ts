@@ -2,12 +2,12 @@ import type { YinPitchFrame } from "@noteforge/pitch-engine";
 import type { AudioInputState } from "../../audio/use-audio-input";
 import { noteLabel } from "../../lib/music-display";
 
-export type VoiceCoachPhase = "idle" | "prompting" | "listening" | "paused" | "complete";
+export type VoiceCoachPhase = "idle" | "listening" | "complete";
 
 export interface VoiceCoachHold {
   heldSeconds: number;
   requiredSeconds: number;
-  status: "waiting" | "holding" | "paused" | "complete";
+  status: "waiting" | "holding" | "complete";
 }
 
 export interface VoiceCoachViewInput {
@@ -31,6 +31,18 @@ export interface VoiceCoachView {
   guidanceTone: "waiting" | "flat" | "sharp" | "locked" | "success";
   holdLabel: string;
   inBand: boolean;
+}
+
+function holdStatusLabel(
+  inputState: AudioInputState,
+  holdStatus: VoiceCoachHold["status"],
+): string {
+  if (inputState === "disabled") return "MICROPHONE OFF";
+  if (inputState === "opening") return "OPENING MICROPHONE";
+  if (inputState === "error") return "MICROPHONE ERROR";
+  if (holdStatus === "complete") return "EARNED · DETECTION CONTINUES";
+  if (holdStatus === "holding") return "IN LANE · HOLD CLOCK MOVING";
+  return "FIND THE TARGET LANE";
 }
 
 export function createVoiceCoachView({
@@ -64,24 +76,18 @@ export function createVoiceCoachView({
   let detail = "Every microphone window is processed immediately. Produce any note to see it here.";
   let tone: VoiceCoachView["guidanceTone"] = "waiting";
   if (inputState === "disabled") {
-    title = "Microphone off";
-    detail = "Enable microphone input to begin continuous note detection.";
+    title = "Voice input is off";
+    detail = "Use Enable voice in the global header to start continuous note detection.";
   } else if (inputState === "opening") {
     title = "Opening microphone";
     detail = "Waiting for browser permission and the first production PCM window.";
   } else if (inputState === "error") {
     title = "Microphone unavailable";
-    detail = inputError || "Review browser permission or reconnect the input, then enable it again.";
+    detail = inputError || "Review browser permission or reconnect the device, then use Retry voice in the global header.";
   } else if (phase === "complete" || hold.status === "complete") {
     title = "Note earned";
     detail = "The exercise hold completed; live note detection remains active.";
     tone = "success";
-  } else if (phase === "prompting") {
-    title = "Reference playing · detector still live";
-    detail = "The exercise may exclude prompt leakage from scoring, but the live note readout never stops.";
-  } else if (hold.status === "paused") {
-    title = "Scoring is waiting · detector still live";
-    detail = "No stale note is held. Each current PCM result remains visible while the exercise waits.";
   } else if (errorCents !== null && inBand) {
     title = "Locked · keep it steady";
     detail = "The current detector frame is inside the target lane.";
@@ -96,21 +102,7 @@ export function createVoiceCoachView({
     tone = "sharp";
   }
 
-  const holdLabel = inputState === "disabled"
-    ? "MICROPHONE OFF"
-    : inputState === "opening"
-      ? "OPENING MICROPHONE"
-      : inputState === "error"
-        ? "MICROPHONE ERROR"
-        : hold.status === "complete"
-          ? "EARNED · DETECTION CONTINUES"
-          : hold.status === "paused"
-            ? "SCORING WAITING · DETECTION LIVE"
-            : hold.status === "holding"
-              ? "IN LANE · HOLD CLOCK MOVING"
-              : phase === "prompting"
-                ? "REFERENCE PLAYING · DETECTION LIVE"
-                : "FIND THE TARGET LANE";
+  const holdLabel = holdStatusLabel(inputState, hold.status);
 
   return {
     measuredNote,

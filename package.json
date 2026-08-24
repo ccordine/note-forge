@@ -11,8 +11,13 @@
     "dev": "vite --config vite.config.ts",
     "build": "tsc -b && vite build --config vite.config.ts && node scripts/stamp-service-worker.mjs",
     "preview": "vite preview --config vite.config.ts",
+    "audit:architecture": "node scripts/audit-architecture.mjs --enforce",
     "proof:note-input:browser": "npm run build && node scripts/prove-note-input-browser.mjs",
+    "proof:sustained-note:browser": "npm run build && node scripts/prove-sustained-note-browser.mjs",
     "proof:voice-draw:browser": "npm run build && node scripts/prove-voice-draw-browser.mjs",
+    "proof:vocal-flight:browser": "npm run build && node scripts/prove-vocal-flight-browser.mjs",
+    "proof:pitch-tunnel:browser": "npm run build && node scripts/prove-pitch-tunnel-browser.mjs",
+    "proof:pitch-match:responsive": "npm run build && node scripts/prove-pitch-match-responsive.mjs",
     "proof:offline:browser": "npm run build && node scripts/prove-offline-browser.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",
@@ -21,7 +26,8 @@
   },
   "dependencies": {
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "react-router": "8.3.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

@@ -1,0 +1,158 @@
+/* Shared grade screen ---------------------------------------------------- */
+.arcade-result-stage {
+  min-height: 500px;
+  display: grid;
+  grid-template-columns: minmax(220px, .55fr) minmax(0, 1.45fr);
+  align-items: center;
+  gap: clamp(30px, 6vw, 88px);
+  padding: clamp(28px, 6vw, 72px);
+  overflow: hidden;
+  position: relative;
+  border-color: rgba(var(--arcade-accent-rgb), .22);
+  background:
+    radial-gradient(circle at 19% 50%, rgba(var(--arcade-accent-rgb), .11), transparent 27%),
+    linear-gradient(90deg, rgba(var(--arcade-accent-rgb), .03) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(rgba(var(--arcade-accent-rgb), .03) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(150deg, #1a1d18, #10130f);
+}
+
+.arcade-result-grade {
+  width: clamp(190px, 22vw, 270px);
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  position: relative;
+  border: 1px solid rgba(var(--arcade-accent-rgb), .48);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(var(--arcade-accent-rgb), .12), rgba(9, 12, 10, .94) 68%);
+  box-shadow: 0 0 0 13px rgba(var(--arcade-accent-rgb), .025), 0 0 75px rgba(var(--arcade-accent-rgb), .12);
+}
+
+.arcade-result-grade::after {
+  content: "";
+  position: absolute;
+  inset: 11%;
+  border: 1px dashed rgba(var(--arcade-accent-rgb), .22);
+  border-radius: 50%;
+}
+
+.arcade-result-grade > span,
+.arcade-result-grade > strong,
+.arcade-result-grade > b {
+  position: relative;
+  z-index: 2;
+}
+
+.arcade-result-grade > span {
+  color: var(--dim);
+  font: 7px var(--mono);
+  letter-spacing: 1.3px;
+}
+
+.arcade-result-grade > strong {
+  margin: 5px 0 -1px;
+  color: var(--arcade-accent);
+  font: 800 clamp(62px, 8vw, 94px)/.92 var(--mono);
+  letter-spacing: -8px;
+}
+
+.arcade-result-grade > b {
+  color: var(--cream);
+  font: 19px var(--mono);
+}
+
+.arcade-result-grade > b small {
+  color: var(--dim);
+  font-size: 8px;
+}
+
+.arcade-result-copy h2 {
+  margin: 10px 0;
+  font-size: clamp(30px, 4vw, 54px);
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.arcade-result-copy > p {
+  max-width: 670px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.arcade-result-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 22px 0;
+}
+
+.arcade-result-metrics > span {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(7, 9, 7, .42);
+}
+
+.arcade-result-metrics small,
+.arcade-result-metrics b {
+  display: block;
+}
+
+.arcade-result-metrics small {
+  color: var(--dim);
+  font: 6px var(--mono);
+  text-transform: uppercase;
+}
+
+.arcade-result-metrics b {
+  overflow: hidden;
+  margin-top: 7px;
+  color: var(--cream);
+  font: 18px var(--mono);
+  text-overflow: ellipsis;
+}
+
+.arcade-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@keyframes arcade-demo-run {
+  from { transform: translateX(225%); }
+  to { transform: translateX(-275%); }
+}
+
+@keyframes arcade-demo-paddle {
+  from { transform: translateY(-20px); }
+  to { transform: translateY(62px); }
+}
+
+@keyframes arcade-demo-ball {
+  0% { transform: translate(-105px, -46px); }
+  50% { transform: translate(0, 42px); }
+  100% { transform: translate(105px, -13px); }
+}
+
+@keyframes arcade-demo-song-pulse {
+  0%, 100% { opacity: .38; }
+  50% { opacity: 1; box-shadow: 0 0 24px rgba(179, 154, 255, .35); }
+}
+
+@keyframes arcade-demo-maze-run {
+  0%, 18% { transform: translate(0, 0); }
+  19%, 38% { transform: translate(0, 70px); }
+  39%, 58% { transform: translate(74px, 70px); }
+  59%, 78% { transform: translate(74px, 140px); }
+  79%, 100% { transform: translate(148px, 140px); }
+}
+
+@keyframes arcade-orb-breathe {
+  0%, 100% { transform: scale(.97); box-shadow: 0 0 0 10px rgba(var(--arcade-accent-rgb), .02), 0 0 45px rgba(var(--arcade-accent-rgb), .08); }
+  50% { transform: scale(1.03); box-shadow: 0 0 0 17px rgba(var(--arcade-accent-rgb), .035), 0 0 75px rgba(var(--arcade-accent-rgb), .17); }
+}

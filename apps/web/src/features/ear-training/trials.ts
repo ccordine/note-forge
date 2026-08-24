@@ -87,24 +87,6 @@ export function getNoteFamily(familyId: NoteFamilyId): NoteFamilyDefinition {
   return family;
 }
 
-export function unlockedFamilyIdsThrough(highestUnlockedFamilyId: NoteFamilyId): NoteFamilyId[] {
-  const highestIndex = NOTE_FAMILIES.findIndex((family) => family.id === highestUnlockedFamilyId);
-  return NOTE_FAMILIES.slice(0, highestIndex + 1).map((family) => family.id);
-}
-
-export function advanceHighestUnlockedFamily(
-  highestUnlockedFamilyId: NoteFamilyId,
-  completedFamilyId: NoteFamilyId,
-  familyIsComplete: boolean,
-): NoteFamilyId {
-  if (!familyIsComplete) return highestUnlockedFamilyId;
-  const completedIndex = NOTE_FAMILIES.findIndex((family) => family.id === completedFamilyId);
-  const nextFamily = NOTE_FAMILIES[completedIndex + 1];
-  if (!nextFamily) return highestUnlockedFamilyId;
-  const highestIndex = NOTE_FAMILIES.findIndex((family) => family.id === highestUnlockedFamilyId);
-  return completedIndex + 1 > highestIndex ? nextFamily.id : highestUnlockedFamilyId;
-}
-
 export function pitchClassForLetter(letter: NoteLetter): NaturalPitchClass {
   return NOTE_LETTER_TO_PITCH_CLASS[letter];
 }

@@ -1,0 +1,484 @@
+/* Vocal Flight ---------------------------------------------------------- */
+
+.vocal-flight-shell {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  height: clamp(620px, calc(100dvh - 168px), 850px);
+  overflow: hidden;
+  color: var(--cream);
+}
+
+.vocal-flight-hud {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) repeat(6, minmax(76px, .72fr)) auto;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid rgba(94, 232, 255, .2);
+  border-radius: 11px;
+  background: rgba(6, 14, 17, .94);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .28);
+}
+
+.vocal-flight-hud > div {
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 9px;
+  border: 1px solid rgba(94, 232, 255, .1);
+  border-radius: 7px;
+  background: rgba(14, 26, 28, .8);
+}
+
+.vocal-flight-hud > div > span,
+.vocal-flight-controller > span,
+.vocal-flight-calibration-evidence small,
+.vocal-flight-calibration-summary small,
+.vocal-flight-selected-course small,
+.vocal-flight-result-metrics small {
+  color: rgba(181, 210, 207, .68);
+  font: 10px/1.2 var(--mono);
+  letter-spacing: .12em;
+}
+
+.vocal-flight-hud > div > strong {
+  margin-top: 4px;
+  font: 13px/1.25 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.vocal-flight-hud strong small {
+  color: rgba(181, 210, 207, .58);
+  font-size: 10px;
+}
+
+.vocal-flight-hud-title strong,
+.vocal-flight-hud .is-active strong {
+  color: #5ee8ff;
+}
+
+.vocal-flight-hud-actions {
+  padding: 0 !important;
+  border: 0 !important;
+  background: none !important;
+}
+
+.vocal-flight-hud-actions:empty {
+  display: none;
+}
+
+.vocal-flight-hud-actions .action-button {
+  height: 100%;
+  min-width: 108px;
+}
+
+.phase-calibration .vocal-flight-hud {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+}
+
+.phase-calibration .vocal-flight-hud-speed,
+.phase-calibration .vocal-flight-hud-attitude,
+.phase-calibration .vocal-flight-hud-bank,
+.phase-calibration .vocal-flight-hud-course,
+.phase-calibration .vocal-flight-hud-score,
+.phase-calibration .vocal-flight-hud-actions {
+  display: none;
+}
+
+.vocal-flight-stage {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(94, 232, 255, .22);
+  border-radius: 16px;
+  background: #0a171b;
+  box-shadow: inset 0 0 70px rgba(0, 0, 0, .36);
+}
+
+.vocal-flight-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+}
+
+.vocal-flight-controller {
+  width: clamp(170px, 18vw, 235px);
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(94, 232, 255, .3);
+  border-radius: 12px;
+  background: rgba(3, 12, 15, .82);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .3);
+  backdrop-filter: blur(12px);
+}
+
+.vocal-flight-controller.is-expanded {
+  width: clamp(215px, 22vw, 300px);
+}
+
+.vocal-flight-controller.is-compact {
+  width: clamp(170px, 18vw, 235px);
+}
+
+.vocal-flight-controller > small {
+  color: rgba(181, 210, 207, .62);
+  font: 10px/1.35 var(--mono);
+}
+
+.vocal-control-reticle {
+  min-width: 0;
+  position: relative;
+  margin: 0;
+  color: #5ee8ff;
+}
+
+.vocal-control-reticle svg {
+  width: 100%;
+  max-height: 235px;
+  display: block;
+  overflow: visible;
+}
+
+.vocal-control-reticle line {
+  stroke: rgba(181, 210, 207, .28);
+  stroke-width: 1;
+}
+
+.vocal-control-boundary {
+  fill: rgba(94, 232, 255, .035);
+  stroke: rgba(94, 232, 255, .54);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+.vocal-control-dead-zone {
+  fill: rgba(217, 255, 80, .08);
+  stroke: rgba(217, 255, 80, .6);
+  stroke-width: 1;
+}
+
+.vocal-control-neutral {
+  fill: #d9ff50;
+  filter: drop-shadow(0 0 5px rgba(217, 255, 80, .8));
+}
+
+.vocal-control-current {
+  fill: #f6f4e7;
+  stroke: #5ee8ff;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 7px rgba(94, 232, 255, .95));
+  transition: opacity .1s ease;
+}
+
+.vocal-control-reticle[data-active="false"] .vocal-control-current {
+  opacity: .46;
+}
+
+.vocal-control-label {
+  position: absolute;
+  color: rgba(218, 236, 231, .72);
+  font: 9px var(--mono);
+  text-transform: uppercase;
+}
+
+.vocal-control-label.label-up { top: 1%; left: 50%; transform: translateX(-50%); }
+.vocal-control-label.label-down { bottom: 20%; left: 50%; transform: translateX(-50%); }
+.vocal-control-label.label-left { top: 46%; left: 1%; }
+.vocal-control-label.label-right { top: 46%; right: 1%; }
+
+.vocal-control-reticle figcaption {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.vocal-control-reticle figcaption span {
+  min-width: 0;
+  padding: 5px;
+  border: 1px solid rgba(94, 232, 255, .1);
+  color: rgba(181, 210, 207, .6);
+  font: 10px/1.25 var(--mono);
+}
+
+.vocal-control-reticle figcaption b {
+  display: block;
+  margin-bottom: 2px;
+  color: #5ee8ff;
+  font-size: 12px;
+}
+
+.vocal-flight-overlay {
+  width: min(590px, 52%);
+  position: absolute;
+  inset: 12px auto 12px 12px;
+  z-index: 6;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: clamp(18px, 2.7vw, 34px);
+  border: 1px solid rgba(94, 232, 255, .24);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(7, 18, 21, .96), rgba(9, 22, 23, .9));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+  backdrop-filter: blur(17px);
+  scrollbar-color: rgba(94, 232, 255, .35) transparent;
+}
+
+.vocal-flight-overlay header {
+  min-width: 0;
+}
+
+.vocal-flight-overlay h1 {
+  margin: 9px 0;
+  font-size: clamp(27px, 3vw, 48px);
+  line-height: .98;
+  letter-spacing: -.05em;
+}
+
+.vocal-flight-overlay p {
+  margin: 0;
+  color: rgba(218, 229, 222, .7);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.vocal-flight-overlay footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: auto;
+}
+
+.vocal-flight-calibration-evidence,
+.vocal-flight-calibration-summary,
+.vocal-flight-result-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.vocal-flight-calibration-diagnostics {
+  padding: 9px 11px;
+  border: 1px solid rgba(94, 232, 255, .12);
+  border-radius: 8px;
+  background: rgba(94, 232, 255, .025);
+}
+
+.vocal-flight-calibration-diagnostics summary {
+  color: rgba(181, 210, 207, .78);
+  font: 10px/1.4 var(--mono);
+  cursor: pointer;
+}
+
+.vocal-flight-calibration-diagnostics[open] summary {
+  margin-bottom: 8px;
+}
+
+.vocal-flight-calibration-evidence > span,
+.vocal-flight-calibration-summary > span,
+.vocal-flight-result-metrics > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px;
+  border: 1px solid rgba(94, 232, 255, .12);
+  border-radius: 8px;
+  background: rgba(94, 232, 255, .035);
+}
+
+.vocal-flight-calibration-evidence b,
+.vocal-flight-calibration-summary b,
+.vocal-flight-result-metrics b {
+  overflow: hidden;
+  margin-top: 5px;
+  color: #f6f4e7;
+  font: 14px/1.25 var(--mono);
+  text-overflow: ellipsis;
+}
+
+.vocal-flight-calibration-summary em {
+  margin-top: 4px;
+  color: rgba(181, 210, 207, .55);
+  font: normal 10px/1.35 var(--mono);
+}
+
+.vocal-flight-calibration-status,
+.vocal-flight-selected-course,
+.vocal-flight-input-notice,
+.vocal-flight-result-proof {
+  padding: 11px 13px;
+  border: 1px solid rgba(217, 255, 80, .2);
+  border-radius: 9px;
+  background: rgba(217, 255, 80, .045);
+}
+
+.vocal-flight-calibration-status {
+  display: grid;
+  gap: 4px;
+}
+
+.vocal-flight-calibration-status b,
+.vocal-flight-selected-course b {
+  color: #d9ff50;
+  font: 12px/1.3 var(--mono);
+}
+
+.vocal-flight-calibration-status span,
+.vocal-flight-input-notice {
+  color: rgba(226, 236, 223, .75);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.vocal-flight-input-notice {
+  border-color: rgba(255, 148, 119, .3);
+  color: #ffad96;
+  background: rgba(255, 107, 69, .06);
+}
+
+.vocal-flight-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.vocal-flight-mode-grid button {
+  min-width: 0;
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 11px;
+  border: 1px solid rgba(94, 232, 255, .12);
+  border-radius: 9px;
+  color: rgba(218, 229, 222, .72);
+  background: rgba(6, 15, 17, .72);
+  cursor: pointer;
+  text-align: left;
+}
+
+.vocal-flight-mode-grid button.active {
+  border-color: rgba(94, 232, 255, .55);
+  color: #f6f4e7;
+  background: rgba(94, 232, 255, .09);
+  box-shadow: inset 0 -2px #5ee8ff;
+}
+
+.vocal-flight-mode-grid button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.vocal-flight-mode-grid button b {
+  font-size: 13px;
+}
+
+.vocal-flight-mode-grid button span {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vocal-flight-mode-grid button small {
+  margin-top: 6px;
+  color: #ffad96;
+  font: 10px/1.3 var(--mono);
+}
+
+.vocal-flight-loadout .field {
+  min-width: 0;
+}
+
+.vocal-flight-selected-course {
+  display: grid;
+  gap: 6px;
+}
+
+.vocal-flight-selected-course strong {
+  color: #ffad96;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vocal-flight-result {
+  flex-direction: row;
+  align-items: stretch;
+  width: min(760px, 68%);
+}
+
+.vocal-flight-result-grade {
+  width: 150px;
+  flex: 0 0 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(94, 232, 255, .15);
+  text-align: center;
+}
+
+.vocal-flight-result-grade span {
+  color: rgba(181, 210, 207, .6);
+  font: 10px var(--mono);
+}
+
+.vocal-flight-result-grade strong {
+  color: #d9ff50;
+  font: 82px/.9 var(--mono);
+  text-shadow: 0 0 25px rgba(217, 255, 80, .28);
+}
+
+.vocal-flight-result-grade b {
+  margin-top: 8px;
+  font: 20px var(--mono);
+}
+
+.vocal-flight-result-grade small {
+  color: rgba(181, 210, 207, .55);
+  font-size: 8px;
+}
+
+.vocal-flight-result-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.vocal-flight-result-copy h1 {
+  margin: 0;
+}
+
+.vocal-flight-result-proof {
+  color: rgba(181, 210, 207, .64) !important;
+  font: 10px/1.5 var(--mono) !important;
+}
+
+.vocal-flight-provenance {
+  overflow: hidden;
+  color: rgba(181, 210, 207, .5);
+  font: 10px/1.3 var(--mono);
+  letter-spacing: .07em;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

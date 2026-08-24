@@ -1,0 +1,265 @@
+/* Vocal Flight responsive layout --------------------------------------- */
+
+@media (max-width: 1180px) {
+  .vocal-flight-hud {
+    grid-template-columns: minmax(150px, 1.4fr) repeat(4, minmax(74px, .72fr)) minmax(130px, 1.1fr) auto;
+  }
+
+  .vocal-flight-hud-score {
+    display: none;
+  }
+
+  .phase-calibration .vocal-flight-hud {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+  }
+
+  .vocal-flight-overlay {
+    width: min(610px, 62%);
+  }
+}
+
+@media (max-width: 820px) {
+  .vocal-flight-shell {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .vocal-flight-hud {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .vocal-flight-hud-title {
+    grid-column: span 2;
+  }
+
+  .vocal-flight-hud-actions {
+    grid-column: span 3;
+  }
+
+  .vocal-flight-hud-actions .action-button {
+    min-height: 44px;
+  }
+
+  .vocal-flight-stage {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .vocal-flight-canvas {
+    height: clamp(270px, 48dvh, 430px);
+    flex: 0 0 auto;
+    border-radius: 15px 15px 0 0;
+  }
+
+  .vocal-flight-controller {
+    width: auto;
+    position: static;
+    order: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 260px) minmax(130px, 1fr);
+    align-items: center;
+    margin: 0;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    backdrop-filter: none;
+  }
+
+  .vocal-flight-controller.is-expanded,
+  .vocal-flight-controller.is-compact {
+    width: auto;
+  }
+
+  .vocal-flight-controller > span,
+  .vocal-flight-controller > small {
+    grid-column: 2;
+  }
+
+  .vocal-flight-controller .vocal-control-reticle {
+    grid-row: 1 / 4;
+  }
+
+  .vocal-control-reticle svg {
+    max-height: 210px;
+  }
+
+  .vocal-flight-overlay {
+    width: auto;
+    max-height: none;
+    position: static;
+    order: 3;
+    overflow: visible;
+    border-width: 1px 0 0;
+    border-radius: 0 0 15px 15px;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .phase-calibration .vocal-flight-hud {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
+  }
+
+  .phase-calibration .vocal-flight-hud-title {
+    grid-column: auto;
+  }
+
+  .phase-calibration .vocal-flight-hud-link {
+    display: flex;
+  }
+
+  .phase-calibration .vocal-flight-canvas {
+    display: none;
+  }
+
+  .phase-calibration .vocal-flight-hud {
+    display: none;
+  }
+
+  .phase-calibration .vocal-flight-controller {
+    order: 2;
+    grid-template-columns: minmax(135px, 180px) minmax(0, 1fr);
+    min-height: 0;
+    padding: 8px 12px;
+    border-width: 0;
+    border-radius: 15px 15px 0 0;
+  }
+
+  .phase-calibration .vocal-flight-controller .vocal-control-reticle {
+    grid-row: 1 / 4;
+  }
+
+  .phase-calibration .vocal-flight-controller .vocal-control-reticle svg {
+    max-height: 145px;
+  }
+
+  .phase-calibration .vocal-flight-overlay {
+    order: 1;
+    gap: 11px;
+    padding: 16px;
+    border-radius: 0 0 15px 15px;
+  }
+
+  .phase-calibration .vocal-flight-overlay footer .primary {
+    order: -1;
+    flex: 1 0 100%;
+  }
+
+  .vocal-flight-result {
+    flex-direction: column;
+  }
+
+  .vocal-flight-result-grade {
+    width: auto;
+    min-height: 120px;
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(94, 232, 255, .15);
+  }
+
+  .vocal-flight-result-grade strong {
+    font-size: 58px;
+  }
+}
+
+@media (max-width: 560px) {
+  .vocal-flight-hud {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vocal-flight-hud-title,
+  .vocal-flight-hud-actions {
+    grid-column: span 2;
+  }
+
+  .vocal-flight-hud-bank,
+  .vocal-flight-hud-course {
+    display: none;
+  }
+
+  .phase-calibration .vocal-flight-hud {
+    grid-template-columns: minmax(0, 1fr) minmax(112px, auto);
+  }
+
+  .phase-calibration .vocal-flight-hud-title,
+  .phase-calibration .vocal-flight-hud-link {
+    grid-column: auto;
+  }
+
+  .vocal-flight-controller {
+    grid-template-columns: minmax(0, 210px) minmax(90px, 1fr);
+  }
+
+  .vocal-flight-overlay {
+    gap: 12px;
+    padding: 18px 13px;
+  }
+
+  .phase-calibration .vocal-flight-overlay h1 {
+    font-size: clamp(25px, 8.5vw, 34px);
+  }
+
+  .vocal-flight-overlay h1 {
+    font-size: clamp(27px, 10vw, 39px);
+  }
+
+  .vocal-flight-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vocal-flight-mode-grid button {
+    min-height: 78px;
+  }
+
+  .vocal-flight-overlay footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .vocal-flight-overlay footer .action-button {
+    width: 100%;
+  }
+
+  .vocal-flight-provenance {
+    padding: 0 4px 4px;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 390px) {
+  .vocal-flight-calibration-summary,
+  .vocal-flight-result-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .vocal-flight-controller {
+    grid-template-columns: 1fr;
+  }
+
+  .vocal-flight-controller > span,
+  .vocal-flight-controller > small,
+  .vocal-flight-controller .vocal-control-reticle {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .phase-calibration .vocal-flight-controller {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .phase-calibration .vocal-flight-controller > span,
+  .phase-calibration .vocal-flight-controller > small {
+    display: none;
+  }
+
+  .phase-calibration .vocal-flight-controller .vocal-control-reticle {
+    width: min(100%, 175px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vocal-control-current {
+    transition: none;
+  }
+}

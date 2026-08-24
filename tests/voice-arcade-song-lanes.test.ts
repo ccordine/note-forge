@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SONG_LANE_TOLERANCE_CENTS,
-  analyzeSongLanes,
   createSongAnalysisChunks,
   resampleMonoPcm,
+} from "../apps/web/src/features/voice-arcade/song-analysis-pcm";
+import {
+  SONG_LANE_TOLERANCE_CENTS,
   toleranceCentsForDifficulty,
-  type SongLaneAnalysisOptions,
-} from "../apps/web/src/features/voice-arcade/song-lanes";
+} from "../apps/web/src/features/voice-arcade/song-lane-options";
+import type {
+  SongLaneAnalysisOptions,
+} from "../apps/web/src/features/voice-arcade/song-lane-types";
+import { analyzeSongLanes } from "../apps/web/src/features/voice-arcade/song-lanes";
 
 const SAMPLE_RATE = 8_000;
 

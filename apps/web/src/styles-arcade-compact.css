@@ -1,0 +1,256 @@
+@media (max-width: 430px) {
+  .arcade-range-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-cabinet-title {
+    grid-template-columns: auto 1fr;
+  }
+
+  .arcade-cabinet-title > strong {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .arcade-game-topbar > .action-button {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .arcade-live-profile {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .arcade-live-profile b {
+    font-size: 9px;
+  }
+
+  .arcade-game-hud > div:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+
+  .arcade-game-hud > .arcade-game-hud-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-game-hud-actions .action-button {
+    width: 100%;
+  }
+
+  .arcade-contract-grid {
+    gap: 5px;
+  }
+
+  .arcade-contract-grid b {
+    font-size: 14px;
+  }
+
+  .arcade-headphone-confirm {
+    align-items: flex-start;
+  }
+
+  .echo-target-readout > div {
+    display: block;
+  }
+
+  .echo-target-readout strong,
+  .echo-target-readout span,
+  .echo-target-readout small {
+    display: block;
+  }
+
+  .echo-target-readout strong {
+    margin: 4px 0;
+  }
+
+  .echo-target-readout small {
+    max-width: 100%;
+  }
+
+  .echo-highway {
+    height: 390px;
+  }
+
+  .pong-voice-readout,
+  .song-ride-readout,
+  .song-analysis-contract {
+    grid-template-columns: 1fr;
+  }
+
+  .pong-range-readout,
+  .song-ride-readout > div:first-child {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .pong-court,
+  .song-rail {
+    height: 400px;
+  }
+
+  .pong-range-label:not(.pong-range-high):not(.pong-range-low) {
+    display: none;
+  }
+
+  .pong-pause-overlay > div {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .pong-pause-overlay .action-button {
+    width: 100%;
+  }
+
+  .song-file-meta {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .song-file-meta > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .song-transport {
+    grid-template-columns: 1fr;
+  }
+
+  .song-transport > :last-child {
+    grid-column: auto;
+  }
+
+  .echo-note-tile {
+    min-width: 34px;
+  }
+
+  .echo-note-tile > b {
+    padding-left: 7px;
+    font-size: 8px;
+  }
+
+  .echo-voice-cursor > b {
+    margin-left: 6px;
+  }
+
+  .arcade-result-metrics {
+    gap: 5px;
+  }
+
+  .arcade-result-metrics > span {
+    padding: 11px;
+  }
+
+  .arcade-result-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .arcade-result-actions .action-button {
+    width: 100%;
+  }
+}
+
+@media (max-height: 650px) and (min-width: 681px) {
+  .arcade-mode-page {
+    padding-top: 10px;
+    padding-bottom: 22px;
+  }
+
+  .arcade-game-topbar {
+    margin-bottom: 6px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .arcade-game-hud {
+    position: static;
+    margin-bottom: 6px;
+    padding: 4px;
+  }
+
+  .arcade-game-hud > div {
+    min-height: 43px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .echo-target-readout > div {
+    min-height: 59px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .echo-target-readout strong {
+    font-size: 21px;
+  }
+
+  .echo-highway,
+  .pong-court,
+  .song-rail {
+    height: 270px;
+  }
+
+  .pong-voice-readout > div,
+  .pong-silence-cue,
+  .song-ride-readout > div {
+    min-height: 55px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+
+  .echo-step-strip > span {
+    min-height: 43px;
+  }
+
+  .arcade-live-status {
+    min-height: 42px;
+    margin-top: 4px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+
+  .arcade-countdown-stage,
+  .arcade-result-stage,
+  .arcade-game-loadout {
+    min-height: 410px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arcade-page *,
+  .arcade-page *::before,
+  .arcade-page *::after {
+    scroll-behavior: auto !important;
+  }
+
+  .arcade-demo-highway i,
+  .arcade-demo-pong > i,
+  .arcade-demo-pong > b,
+  .arcade-demo-song i,
+  .arcade-demo-maze b,
+  .arcade-countdown-orb {
+    animation: none !important;
+  }
+
+  .arcade-cabinet,
+  .arcade-difficulty button,
+  .arcade-curriculum-stages button,
+  .arcade-mode-toggle button,
+  .arcade-level-card > div i,
+  .echo-note-tile,
+  .echo-note-tile > i,
+  .echo-voice-cursor,
+  .pong-paddle,
+  .pong-ball,
+  .pong-range-track > i,
+  .song-rail-lane,
+  .song-voice-cursor {
+    transition: none !important;
+  }
+
+  .arcade-cabinet:hover,
+  .arcade-mode-toggle button:hover {
+    transform: none;
+  }
+}

@@ -153,7 +153,7 @@ func TestPitchDiagnosticsAcceptAndLogDerivedMetrics(t *testing.T) {
 		t.Fatalf("logged %d lines, want %d", len(lines), len(batch.Events))
 	}
 	for index, line := range lines {
-		if line.Component != "pitch-diagnostics" || line.SchemaVersion != 2 {
+		if line.Component != "pitch-diagnostics" || line.SchemaVersion != batch.Version {
 			t.Errorf("line %d has unexpected envelope: %+v", index, line)
 		}
 		if line.Timestamp != fixedTestTime.Format(time.RFC3339Nano) {
@@ -171,6 +171,8 @@ func TestPitchDiagnosticsAcceptAndLogDerivedMetrics(t *testing.T) {
 		pitchFrame.ContinuityEpoch == nil || *pitchFrame.ContinuityEpoch != 0 ||
 		pitchFrame.GraphGeneration == nil || *pitchFrame.GraphGeneration != 1 ||
 		pitchFrame.WorkletProcessCount == nil || *pitchFrame.WorkletProcessCount != 96 ||
+		pitchFrame.Brightness == nil || *pitchFrame.Brightness != 0.24 ||
+		pitchFrame.BrightnessConfidence == nil || *pitchFrame.BrightnessConfidence != 0.91 ||
 		pitchFrame.Discontinuity == nil || *pitchFrame.Discontinuity {
 		t.Errorf("logged frame lost continuous-stream coordinates: %+v", pitchFrame)
 	}
@@ -679,6 +681,8 @@ func validDiagnosticBatch() DiagnosticBatch {
 	cents := 0.1
 	yin := 0.01
 	period := 366.94
+	brightness := 0.24
+	brightnessConfidence := 0.91
 	target := 48.0
 	tolerance := 25.0
 	errorCents := 0.1
@@ -705,12 +709,14 @@ func validDiagnosticBatch() DiagnosticBatch {
 		CentsFromNearest:     &cents,
 		RMS:                  0.08,
 		Confidence:           0.99,
+		Brightness:           &brightness,
+		BrightnessConfidence: &brightnessConfidence,
 		YINValue:             &yin,
 		PeriodSamples:        &period,
 		Reason:               "detected",
 	}
 	return DiagnosticBatch{
-		Version:       2,
+		Version:       3,
 		SessionID:     "pitch-a1b2c3d4",
 		Sequence:      42,
 		Flow:          "range-simulator",
@@ -751,6 +757,8 @@ func unvoicedFrame(reason string) FrameDiagnostic {
 	frame.MIDIFloat = nil
 	frame.NearestMIDI = nil
 	frame.CentsFromNearest = nil
+	frame.Brightness = nil
+	frame.BrightnessConfidence = pointer(0.0)
 	frame.Confidence = 0.76
 	frame.Reason = reason
 	return frame

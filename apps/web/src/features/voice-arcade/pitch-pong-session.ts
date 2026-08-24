@@ -1,0 +1,454 @@
+import type { PitchObservation } from "@/audio/note-input";
+import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "@/audio/microphone";
+import { noteLabel } from "@/lib/music-display";
+import { resolveArcadeCurriculum } from "./curriculum";
+import { gradeChallengeScore } from "./model";
+import {
+  createPongState,
+  updatePongState,
+  type PongConfig,
+  type PongState,
+} from "./pong-physics";
+import type {
+  ArcadeDifficultyId,
+  ArcadeCurriculumStage,
+  ArcadeVoiceRange,
+  ResolvedArcadeCurriculum,
+} from "./types";
+import {
+  advanceVoiceAxisController,
+  createVoiceAxisController,
+  freezeVoiceAxisController,
+  isVoiceAxisFrameReliable,
+  updateVoiceAxisFromFrame,
+  type VoiceAxisControllerOptions,
+  type VoiceAxisControllerState,
+} from "./voice-axis-controller";
+
+export type PongPhase = "setup" | "countdown" | "playing" | "paused" | "result";
+
+export interface PongRoundStats {
+  readonly playerReturns: number;
+  readonly maximumRally: number;
+  readonly reliableFrames: number;
+  readonly observedFrames: number;
+  readonly activeSampleSeconds: number;
+  readonly voicedControlSeconds: number;
+  readonly lowestPitchMidi: number | null;
+  readonly highestPitchMidi: number | null;
+}
+
+export interface PongRoundResult {
+  readonly grade: ReturnType<typeof gradeChallengeScore>["grade"];
+  readonly gradeLabel: string;
+  readonly scorePercent: number;
+  readonly returnRatePercent: number;
+  readonly matchSharePercent: number;
+  readonly rangeCoveragePercent: number;
+  readonly maximumRally: number;
+  readonly playerReturns: number;
+  readonly incomingShots: number;
+  readonly playerScore: number;
+  readonly opponentScore: number;
+  readonly durationSeconds: number;
+  readonly lowestPitchMidi: number | null;
+  readonly highestPitchMidi: number | null;
+  readonly winner: PongState["winner"];
+}
+
+interface ObservationAuthority {
+  readonly sampleRate: number;
+  readonly startSample: number;
+  readonly endSample: number;
+  readonly captureEpoch: number;
+  readonly continuityEpoch: number;
+  readonly graphGeneration: number;
+}
+
+export interface PitchPongSpec {
+  readonly difficulty: ArcadeDifficultyId;
+  readonly curriculumStage: ArcadeCurriculumStage;
+  readonly voiceRange: ArcadeVoiceRange;
+  readonly curriculum: ResolvedArcadeCurriculum;
+  readonly controllerCenterMidi: number;
+  readonly rangeSpan: number;
+  readonly pongConfig: Readonly<Partial<PongConfig>>;
+  readonly voiceAxisOptions: VoiceAxisControllerOptions;
+}
+
+export interface PitchPongState {
+  readonly phase: PongPhase;
+  readonly game: PongState;
+  readonly countdown: number;
+  readonly status: string;
+  readonly scoreFlash: "player" | "opponent" | null;
+  readonly scoreFlashUntilSeconds: number | null;
+  readonly result: PongRoundResult | null;
+  readonly voiceAxis: VoiceAxisControllerState;
+  readonly stats: PongRoundStats;
+  readonly lastAuthority: ObservationAuthority | null;
+  readonly roundNumber: number;
+  readonly spec: PitchPongSpec;
+}
+
+export type PitchPongAction =
+  | { readonly type: "start" }
+  | { readonly type: "countdown"; readonly remaining: number }
+  | { readonly type: "observation"; readonly observation: PitchObservation }
+  | { readonly type: "cancel" }
+  | { readonly type: "pause"; readonly message: string }
+  | { readonly type: "resume" }
+  | { readonly type: "finish"; readonly message: string }
+  | { readonly type: "reset" };
+
+const SCORE_FLASH_SECONDS = 0.72;
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function difficultyConfig(difficulty: ArcadeDifficultyId): Readonly<Partial<PongConfig>> {
+  if (difficulty === "easy") {
+    return Object.freeze({ winningScore: 3, paddleHeight: 0.3, ballSpeed: 0.33, aiSpeed: 0.2 });
+  }
+  if (difficulty === "hard") {
+    return Object.freeze({ winningScore: 7, paddleHeight: 0.17, ballSpeed: 0.57, aiSpeed: 0.34 });
+  }
+  return Object.freeze({ winningScore: 5, paddleHeight: 0.22, ballSpeed: 0.44, aiSpeed: 0.27 });
+}
+
+export function createPitchPongSpec(options: Readonly<{
+  difficulty: ArcadeDifficultyId;
+  curriculumStage: ArcadeCurriculumStage;
+  voiceRange: ArcadeVoiceRange;
+}>): PitchPongSpec {
+  const rangeSpan = Math.max(0.01, options.voiceRange.highMidi - options.voiceRange.lowMidi);
+  const deadZoneCents = options.difficulty === "easy" ? 25 : options.difficulty === "hard" ? 10 : 18;
+  const deadZoneSemitones = deadZoneCents / 100;
+  const controllerCenterMidi = clamp(
+    options.voiceRange.baselineMidi,
+    options.voiceRange.lowMidi + deadZoneSemitones + 0.01,
+    options.voiceRange.highMidi - deadZoneSemitones - 0.01,
+  );
+  return Object.freeze({
+    ...options,
+    voiceRange: Object.freeze({ ...options.voiceRange }),
+    curriculum: resolveArcadeCurriculum("pong", options.curriculumStage),
+    controllerCenterMidi,
+    rangeSpan,
+    pongConfig: difficultyConfig(options.difficulty),
+    voiceAxisOptions: Object.freeze({
+      lowMidi: options.voiceRange.lowMidi,
+      highMidi: options.voiceRange.highMidi,
+      centerMidi: controllerCenterMidi,
+      deadZoneCents,
+      responsePerSecond: options.difficulty === "hard" ? 15 : 11,
+    }),
+  });
+}
+
+function emptyStats(): PongRoundStats {
+  return Object.freeze({
+    playerReturns: 0,
+    maximumRally: 0,
+    reliableFrames: 0,
+    observedFrames: 0,
+    activeSampleSeconds: 0,
+    voicedControlSeconds: 0,
+    lowestPitchMidi: null,
+    highestPitchMidi: null,
+  });
+}
+
+function resetAxis(state: Readonly<VoiceAxisControllerState>): VoiceAxisControllerState {
+  return createVoiceAxisController({
+    ...state.options,
+    initialPosition: state.position,
+  });
+}
+
+function gradeLabel(grade: PongRoundResult["grade"]): string {
+  switch (grade) {
+    case "A+": return "Total pitch command";
+    case "A": return "Controlled and responsive";
+    case "B": return "Strong vocal navigation";
+    case "C": return "Rally control is forming";
+    case "D": return "Keep the paddle in motion";
+  }
+}
+
+function scoreRound(
+  game: Readonly<PongState>,
+  stats: Readonly<PongRoundStats>,
+  rangeSpan: number,
+): PongRoundResult {
+  const incomingShots = stats.playerReturns + game.opponentScore;
+  const returnRatePercent = incomingShots === 0 ? 0 : stats.playerReturns / incomingShots * 100;
+  const decidedPoints = game.playerScore + game.opponentScore;
+  const matchSharePercent = decidedPoints === 0 ? 0 : game.playerScore / decidedPoints * 100;
+  const observedSpan = stats.lowestPitchMidi === null || stats.highestPitchMidi === null
+    ? 0
+    : stats.highestPitchMidi - stats.lowestPitchMidi;
+  const rangeCoveragePercent = clamp(observedSpan / rangeSpan * 100, 0, 100);
+  const rallyPercent = clamp(stats.maximumRally / 10 * 100, 0, 100);
+  const scorePercent = Math.round(clamp(
+    returnRatePercent * 0.5
+      + matchSharePercent * 0.25
+      + rallyPercent * 0.15
+      + rangeCoveragePercent * 0.1,
+    0,
+    100,
+  ));
+  const { grade } = gradeChallengeScore(scorePercent);
+  return Object.freeze({
+    grade,
+    gradeLabel: gradeLabel(grade),
+    scorePercent,
+    returnRatePercent,
+    matchSharePercent,
+    rangeCoveragePercent,
+    maximumRally: stats.maximumRally,
+    playerReturns: stats.playerReturns,
+    incomingShots,
+    playerScore: game.playerScore,
+    opponentScore: game.opponentScore,
+    durationSeconds: stats.activeSampleSeconds,
+    lowestPitchMidi: stats.lowestPitchMidi,
+    highestPitchMidi: stats.highestPitchMidi,
+    winner: game.winner,
+  });
+}
+
+function authorityOf(observation: Readonly<PitchObservation>): ObservationAuthority {
+  return Object.freeze({
+    sampleRate: observation.sampleRate,
+    startSample: observation.startSample,
+    endSample: observation.endSample,
+    captureEpoch: observation.captureEpoch,
+    continuityEpoch: observation.continuityEpoch,
+    graphGeneration: observation.graphGeneration,
+  });
+}
+
+function continuousDelta(
+  previous: Readonly<ObservationAuthority> | null,
+  observation: Readonly<PitchObservation>,
+): number {
+  if (previous === null || observation.discontinuity) return 0;
+  const sameAuthority = previous.sampleRate === observation.sampleRate
+    && previous.captureEpoch === observation.captureEpoch
+    && previous.continuityEpoch === observation.continuityEpoch
+    && previous.graphGeneration === observation.graphGeneration;
+  const previousWindow = previous.endSample - previous.startSample;
+  const currentWindow = observation.endSample - observation.startSample;
+  const hop = observation.endSample - previous.endSample;
+  const expectedHop = Math.round(observation.sampleRate * MICROPHONE_ANALYSIS_HOP_SECONDS);
+  const overlapping = hop === expectedHop
+    && previousWindow === currentWindow
+    && observation.startSample - previous.startSample === hop
+    && hop < currentWindow;
+  return sameAuthority && overlapping ? hop / observation.sampleRate : 0;
+}
+
+function finishState(
+  state: Readonly<PitchPongState>,
+  game: PongState,
+  stats: PongRoundStats,
+  message: string,
+): PitchPongState {
+  return Object.freeze({
+    ...state,
+    phase: "result",
+    game,
+    status: message,
+    scoreFlash: null,
+    scoreFlashUntilSeconds: null,
+    result: scoreRound(game, stats, state.spec.rangeSpan),
+    voiceAxis: resetAxis(state.voiceAxis),
+    stats,
+    lastAuthority: null,
+  });
+}
+
+export function createPitchPongState(spec: PitchPongSpec): PitchPongState {
+  return Object.freeze({
+    phase: "setup",
+    game: createPongState({ seed: "pong-preview", config: spec.pongConfig }),
+    countdown: 3,
+    status: "Glide through your mapped range to move the left paddle.",
+    scoreFlash: null,
+    scoreFlashUntilSeconds: null,
+    result: null,
+    voiceAxis: createVoiceAxisController(spec.voiceAxisOptions),
+    stats: emptyStats(),
+    lastAuthority: null,
+    roundNumber: 0,
+    spec,
+  });
+}
+
+function consumeObservation(
+  state: Readonly<PitchPongState>,
+  observation: Readonly<PitchObservation>,
+): PitchPongState {
+  if (state.phase !== "playing") return state as PitchPongState;
+  const deltaSeconds = continuousDelta(state.lastAuthority, observation);
+  const boundary = deltaSeconds === 0;
+  const previousAxis = boundary ? resetAxis(state.voiceAxis) : state.voiceAxis;
+  const reliable = isVoiceAxisFrameReliable(observation);
+  const advancedAxis = reliable && previousAxis.status === "steering" && deltaSeconds > 0
+    ? advanceVoiceAxisController(previousAxis, { deltaSeconds })
+    : previousAxis;
+  const axisUpdate = updateVoiceAxisFromFrame(advancedAxis, observation);
+  const midiFloat = axisUpdate.accepted ? axisUpdate.state.pitchMidi : null;
+  const nextStats = Object.freeze({
+    ...state.stats,
+    observedFrames: state.stats.observedFrames + 1,
+    reliableFrames: state.stats.reliableFrames + (axisUpdate.accepted ? 1 : 0),
+    activeSampleSeconds: state.stats.activeSampleSeconds + deltaSeconds,
+    voicedControlSeconds: state.stats.voicedControlSeconds
+      + (axisUpdate.accepted && previousAxis.status === "steering" ? deltaSeconds : 0),
+    lowestPitchMidi: midiFloat === null
+      ? state.stats.lowestPitchMidi
+      : Math.min(state.stats.lowestPitchMidi ?? Infinity, midiFloat),
+    highestPitchMidi: midiFloat === null
+      ? state.stats.highestPitchMidi
+      : Math.max(state.stats.highestPitchMidi ?? -Infinity, midiFloat),
+  });
+  const previousGame = state.game;
+  const nextGame = updatePongState(previousGame, {
+    deltaSeconds,
+    voicePaddleY: axisUpdate.state.position,
+  });
+  const playerReturned = previousGame.ball.velocityX < 0
+    && nextGame.ball.velocityX > 0
+    && nextGame.rally > previousGame.rally;
+  const stats = playerReturned
+    ? Object.freeze({
+        ...nextStats,
+        playerReturns: nextStats.playerReturns + 1,
+        maximumRally: Math.max(nextStats.maximumRally, nextGame.rally),
+      })
+    : Object.freeze({
+        ...nextStats,
+        maximumRally: Math.max(nextStats.maximumRally, nextGame.rally),
+      });
+  let scoreFlash = state.scoreFlash;
+  let scoreFlashUntilSeconds = state.scoreFlashUntilSeconds;
+  let status = state.status;
+  if (scoreFlashUntilSeconds !== null && observation.timeSeconds >= scoreFlashUntilSeconds) {
+    scoreFlash = null;
+    scoreFlashUntilSeconds = null;
+  }
+  if (nextGame.playerScore > previousGame.playerScore) {
+    scoreFlash = "player";
+    scoreFlashUntilSeconds = observation.timeSeconds + SCORE_FLASH_SECONDS;
+    status = "Point secured. Reset your pitch and read the next serve.";
+  } else if (nextGame.opponentScore > previousGame.opponentScore) {
+    scoreFlash = "opponent";
+    scoreFlashUntilSeconds = observation.timeSeconds + SCORE_FLASH_SECONDS;
+    status = "Ball passed. Breathe, recenter, and catch the next line.";
+  }
+  if (nextGame.status === "finished") {
+    return finishState(
+      state,
+      nextGame,
+      stats,
+      nextGame.winner === "player"
+        ? "Match won. Your voice held the court."
+        : "Match complete. The result now shows exactly what to train next.",
+    );
+  }
+  return Object.freeze({
+    ...state,
+    game: nextGame,
+    status,
+    scoreFlash,
+    scoreFlashUntilSeconds,
+    voiceAxis: axisUpdate.state,
+    stats,
+    lastAuthority: authorityOf(observation),
+  });
+}
+
+export function reducePitchPongState(
+  state: Readonly<PitchPongState>,
+  action: Readonly<PitchPongAction>,
+): PitchPongState {
+  switch (action.type) {
+    case "start": {
+      if (state.phase !== "setup") return state as PitchPongState;
+      const roundNumber = state.roundNumber + 1;
+      return Object.freeze({
+        ...state,
+        phase: "countdown",
+        game: createPongState({
+          seed: `pong:${state.spec.difficulty}:${roundNumber}`,
+          serveToward: "player",
+          config: state.spec.pongConfig,
+        }),
+        countdown: 3,
+        status: `Find ${noteLabel(state.spec.controllerCenterMidi)} for center court.`,
+        scoreFlash: null,
+        scoreFlashUntilSeconds: null,
+        result: null,
+        voiceAxis: createVoiceAxisController(state.spec.voiceAxisOptions),
+        stats: emptyStats(),
+        lastAuthority: null,
+        roundNumber,
+      });
+    }
+    case "countdown":
+      if (state.phase !== "countdown") return state as PitchPongState;
+      return action.remaining === 0
+        ? Object.freeze({
+            ...state,
+            phase: "playing",
+            countdown: 0,
+            status: "Court live. Sing higher to rise, lower to drop, or breathe to freeze.",
+            lastAuthority: null,
+          })
+        : Object.freeze({ ...state, countdown: action.remaining });
+    case "observation": return consumeObservation(state, action.observation);
+    case "cancel":
+      return state.phase === "countdown"
+        ? Object.freeze({
+            ...createPitchPongState(state.spec),
+            roundNumber: state.roundNumber,
+            status: "Round cancelled. The microphone remains available for the next start.",
+          })
+        : state as PitchPongState;
+    case "pause":
+      return state.phase === "playing"
+        ? Object.freeze({
+            ...state,
+            phase: "paused",
+            status: action.message,
+            voiceAxis: resetAxis(freezeVoiceAxisController(state.voiceAxis)),
+            lastAuthority: null,
+          })
+        : state as PitchPongState;
+    case "resume":
+      return state.phase === "paused"
+        ? Object.freeze({
+            ...state,
+            phase: "playing",
+            status: "Court live. Sing higher to rise, lower to drop, or breathe to freeze.",
+            voiceAxis: resetAxis(state.voiceAxis),
+            lastAuthority: null,
+          })
+        : state as PitchPongState;
+    case "finish":
+      return state.phase === "playing" || state.phase === "paused"
+        ? finishState(state, state.game, state.stats, action.message)
+        : state as PitchPongState;
+    case "reset": {
+      const reset = createPitchPongState(state.spec);
+      return Object.freeze({
+        ...reset,
+        roundNumber: state.roundNumber,
+        status: "New court ready. The app-owned microphone stream stays continuous.",
+      });
+    }
+  }
+}

@@ -13,6 +13,7 @@ function renderVoiceDraw(curriculumStage: ArcadeCurriculumStage): string {
       difficulty: "medium",
       curriculumStage,
       voiceRange: { lowMidi: 43, highMidi: 55, baselineMidi: 48 },
+      completedVariants: [],
       onExit: () => undefined,
       onComplete: () => undefined,
     }),
@@ -20,7 +21,7 @@ function renderVoiceDraw(curriculumStage: ArcadeCurriculumStage): string {
 }
 
 describe("Voice Draw rendered contracts", () => {
-  it("renders a code-native voice cursor, all ordinary tools, and one explicit enable action", () => {
+  it("renders a code-native voice cursor, all ordinary tools, and points activation to the header", () => {
     const markup = renderVoiceDraw("deliberate");
 
     expect(markup).toContain("data-voice-draw");
@@ -41,7 +42,8 @@ describe("Voice Draw rendered contracts", () => {
     expect(markup).toContain("Reset cursor");
     expect(markup).toContain('type="color"');
     expect(markup).toContain('type="range"');
-    expect(markup).toContain("Enable voice input");
+    expect(markup).toContain("Enable voice in the header");
+    expect(markup).not.toContain("Enable voice input");
     expect(markup.match(/class="voice-draw-direction/g)).toHaveLength(8);
     expect(markup).toContain("silence<br/>stop");
   });

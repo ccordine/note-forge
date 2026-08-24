@@ -12,18 +12,14 @@
   .function-note { flex-direction: row; gap: 8px; justify-content: center; }
   .function-note strong { font-size: 42px; }
   .voice-leading-view,.follow-view { grid-template-columns: 1.35fr .65fr; }
-  .domain-columns { grid-template-columns: 1fr 1fr; }
-  .skill-layout { grid-template-columns: 1.3fr .7fr; }
 }
 
 @media (max-width: 1040px) {
   .sidebar { width: 250px; transform: translateX(-100%); transition: transform .25s ease; box-shadow: 20px 0 60px rgba(0,0,0,.45); }
-  .sidebar.open { transform: translateX(0); }
-  .menu-scrim { position: fixed; z-index: 29; inset: 0; background: rgba(0,0,0,.55); border: 0; }
+  .mobile-sidebar[open] { transform: translateX(0); }
   .workspace { margin-left: 0; }
   .mobile-menu { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; }
   .mobile-menu span { width: 15px; height: 1px; background: var(--text); }
-  .coordinate-strip > div.wide { display: none; }
   .hero-copy h1 { font-size: 64px; }
   .sound-workbench { grid-template-columns: 1fr; }
   .sound-side { display: grid; grid-template-columns: 1fr 1fr; }
@@ -35,18 +31,18 @@
   .voice-leading-view,.follow-view { grid-template-columns: 1fr; }
   .song-settings-grid { grid-template-columns: 1fr 1fr; }
   .phrase-markers { grid-column: 1 / -1; }
-  .skill-layout { grid-template-columns: minmax(0,1fr); }
-  .skill-side { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); min-width: 0; }
 }
 
 @media (max-width: 760px) {
   .topbar { height: 67px; padding: 0 14px; gap: 11px; }
   .page-title { min-width: 0; flex: 1; }
   .page-title h2 { font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .coordinate-strip { display: none; }
   .global-mic-control > span { font-size: 0; }
   .global-mic-control > span::after { content: "Mic"; font-size: 8px; }
   .page { padding: 23px 14px 60px; }
+  .surface-navigation { padding: 9px 14px 0; }
+  .surface-navigation label { width: 100%; justify-content: flex-end; }
+  .surface-navigation select { min-height: 44px; font-size: 10px; }
   .lab-intro { display: block; margin-bottom: 20px; }
   .lab-intro h1 { font-size: 34px; letter-spacing: -1.5px; }
   .lab-intro p { font-size: 10px; }
@@ -64,9 +60,9 @@
   .home-lower-grid,.mirror-results-grid,.split-score { grid-template-columns: 1fr; }
   .section-heading { align-items: start; }
   .section-heading .text-button { margin-top: 22px; }
-  .mirror-mode-panel,.control-config,.ear-config,.interval-config,.harmony-config,.melody-config { display: block; overflow: hidden; }
-  .mirror-mode-panel > *, .control-config > *, .ear-config > *, .interval-config > *, .harmony-config > *, .melody-config > * { margin-top: 10px; }
-  .mirror-settings,.control-config-fields,.harmony-fields,.melody-fields { display: grid; grid-template-columns: 1fr 1fr; }
+  .control-config,.ear-config,.interval-config,.harmony-config,.melody-config { display: block; overflow: hidden; }
+  .control-config > *, .ear-config > *, .interval-config > *, .harmony-config > *, .melody-config > * { margin-top: 10px; }
+  .control-config-fields,.harmony-fields,.melody-fields { display: grid; grid-template-columns: 1fr 1fr; }
   .instrument-top { grid-template-columns: 1fr; }
   .pitch-slots { grid-template-columns: 1fr; }
   .relationship-mark { height: 25px; }
@@ -123,22 +119,25 @@
   .loop-handles { grid-template-columns: 1fr; gap: 9px; }
   .song-settings-grid { grid-template-columns: 1fr; }
   .phrase-markers { grid-column: auto; }
+  .song-workflow-navigation button { min-height: 52px; padding: 0 9px; }
+  .song-workflow-navigation span { display: none; }
+  .song-stage-heading { align-items: flex-start; flex-direction: column; gap: 13px; padding: 16px; }
+  .song-stage-heading .action-button { width: 100%; }
   .three-passes .panel-heading { display: block; }
   .three-passes .segmented-field { margin-top: 15px; }
   .pass-mission { padding: 16px; }
   .record-strip { display: block; }
   .record-strip .action-button { width: 100%; margin-top: 15px; }
   .song-starter-steps { flex-direction: column; gap: 8px; }
-  .representation-map { height: 400px; }
-  .representation-map > svg { display: none; }
-  .rep-center { width: 120px; height: 120px; }
-  .rep-node.heard { left: 3%; top: 12%; }.rep-node.function { right: 3%; top: 12%; }.rep-node.space { top: auto; bottom: 4%; }.rep-node.motor { left: 3%; bottom: 25%; }.rep-node.label { right: 3%; bottom: 25%; }
-  .rep-node { padding: 9px; font-size: 5px; }
-  .skill-layout,.graph-panel,.skill-side,.skill-detail-card,.adaptive-mix-card { min-width: 0; }
-  .domain-columns,.filtered-skill-grid,.skill-side { grid-template-columns: minmax(0,1fr); }
 }
 
 @media (max-width: 430px) {
+  .topbar { padding-inline: 10px; gap: 8px; }
+  .topbar > .mobile-menu,
+  .topbar > .icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
+  .global-mic-control { min-width: 0; padding: 2px 3px; gap: 0; }
+  .global-mic-control > span { display: none; }
+  .global-mic-control button { min-height: 44px; padding-inline: 8px; white-space: nowrap; }
   .mode-grid { grid-template-columns: 1fr; }
   .mode-card { min-height: 135px; }
   .hero-copy h1 { font-size: 47px; }
@@ -146,7 +145,7 @@
   .hero-signal { height: 150px; }
   .context-notes { grid-template-columns: repeat(6,1fr); }
   .relationship-content dl { grid-template-columns: 1fr; }
-  .mirror-settings,.control-config-fields,.harmony-fields,.melody-fields { grid-template-columns: 1fr; }
+  .control-config-fields,.harmony-fields,.melody-fields { grid-template-columns: 1fr; }
   .pitch-class-grid { grid-template-columns: repeat(3,1fr); }
   .octave-grid { grid-template-columns: 1fr 1fr; }
   .interval-answer-grid { grid-template-columns: 1fr; }
@@ -155,7 +154,8 @@
   .chord-orbit { width: 225px; }
   .song-settings-grid .field { min-width: 0; }
   .transport-settings>div,.manual-context>div,.phrase-markers>div { flex-direction: column; }
-  .rep-node span { display: none; }
+  .takes-list > div { grid-template-columns: 46px minmax(0,1fr); }
+  .takes-list > div > small { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

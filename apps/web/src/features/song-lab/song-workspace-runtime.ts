@@ -1,25 +1,24 @@
 import { decodeAudioFile } from "@/audio/audio-context";
 import {
-  MAX_LOCAL_AUDIO_DURATION_SECONDS,
-  MAX_LOCAL_AUDIO_FILE_BYTES,
-  formatFileSize,
   validateDecodedLocalAudio,
   validateLocalAudioFile,
 } from "@/audio/local-audio-file";
+import {
+  LOCAL_RECORDING_CHUNK_STORE,
+  type LocalRecordingChunkSession,
+  type LocalRecordingChunkStore,
+} from "@/audio/local-recording-store";
 import type { SongWorkspaceAction, VoiceTake } from "./song-workspace";
 
 const WAVEFORM_BIN_COUNT = 240;
 const MEDIA_RECORDER_TIMESLICE_MS = 1_000;
 export const MAX_VOICE_TAKES = 4;
 
-type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
-
 export interface SongWorkspaceEnvironment {
   readonly decodeAudio: (encoded: ArrayBuffer) => Promise<AudioBuffer>;
   readonly createObjectURL: (value: Blob) => string;
   readonly revokeObjectURL: (url: string) => void;
-  readonly schedule: (callback: () => void, delayMs: number) => TimerHandle;
-  readonly cancelSchedule: (handle: TimerHandle) => void;
+  readonly recordingStore: LocalRecordingChunkStore;
   readonly createId: () => string;
   readonly now: () => Date;
 }
@@ -28,8 +27,7 @@ const BROWSER_ENVIRONMENT: SongWorkspaceEnvironment = {
   decodeAudio: decodeAudioFile,
   createObjectURL: (value) => URL.createObjectURL(value),
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
-  schedule: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
-  cancelSchedule: (handle) => globalThis.clearTimeout(handle),
+  recordingStore: LOCAL_RECORDING_CHUNK_STORE,
   createId: () => crypto.randomUUID(),
   now: () => new Date(),
 };
@@ -55,11 +53,16 @@ export interface SongRecordingRequest extends SongPlaybackRequest {
 
 interface ActiveTake {
   readonly recorder: MediaRecorder;
-  readonly chunks: Blob[];
+  readonly storage: LocalRecordingChunkSession;
   readonly priorTakes: readonly VoiceTake[];
-  encodedBytes: number;
+  writeQueue: Promise<void>;
   discardReason: string;
   finalized: boolean;
+  stopReason: "user" | "infrastructure" | null;
+}
+
+interface OpeningTake {
+  cancelled: boolean;
 }
 
 function createSessionScope(): AbortController {
@@ -86,7 +89,7 @@ export function waveformPeaks(channel: Float32Array): number[] {
 
 /**
  * Owns Song Lab's bounded browser resources. React projects dispatched state;
- * this scope alone cancels async work, playback, timers, recorder callbacks,
+ * this scope alone cancels async work, playback, recorder callbacks,
  * and object URLs when the workspace leaves the route.
  */
 export class SongWorkspaceRuntime {
@@ -96,7 +99,7 @@ export class SongWorkspaceRuntime {
   private playbackDesired = false;
   private audioElement: HTMLAudioElement | null = null;
   private activeTake: ActiveTake | null = null;
-  private recordingLimitTimer: TimerHandle | null = null;
+  private openingTake: OpeningTake | null = null;
   private readonly managedObjectUrls = new Set<string>();
 
   constructor(
@@ -105,7 +108,7 @@ export class SongWorkspaceRuntime {
   ) {}
 
   get recordingActive(): boolean {
-    return this.activeTake !== null;
+    return this.activeTake !== null || this.openingTake !== null;
   }
 
   activate(): void {
@@ -122,7 +125,8 @@ export class SongWorkspaceRuntime {
     this.playbackDesired = false;
     this.audioElement?.pause();
     this.audioElement = null;
-    this.cancelRecordingTimer();
+    if (this.openingTake) this.openingTake.cancelled = true;
+    this.openingTake = null;
 
     const active = this.activeTake;
     this.activeTake = null;
@@ -135,6 +139,12 @@ export class SongWorkspaceRuntime {
           // The platform may finish between the state check and stop().
         }
       }
+      void active.writeQueue.then(
+        () => active.storage.discard(),
+        () => active.storage.discard(),
+      ).catch(() => {
+        // Route teardown cannot surface an asynchronous browser-storage error.
+      });
     }
 
     for (const url of this.managedObjectUrls) this.environment.revokeObjectURL(url);
@@ -242,8 +252,8 @@ export class SongWorkspaceRuntime {
     this.dispatchIfActive({ type: "playing-changed", playing: false });
   }
 
-  startRecording(request: Readonly<SongRecordingRequest>): void {
-    if (!this.isActive() || this.activeTake) return;
+  async startRecording(request: Readonly<SongRecordingRequest>): Promise<void> {
+    if (!this.isActive() || this.activeTake || this.openingTake) return;
     if (!request.inputRunning) {
       this.dispatch({
         type: "recording-failed",
@@ -252,30 +262,38 @@ export class SongWorkspaceRuntime {
       return;
     }
 
+    const signal = this.activeSignal();
+    if (!signal) return;
+    const opening: OpeningTake = { cancelled: false };
+    this.openingTake = opening;
     this.dispatch({ type: "recording-starting" });
+    let storage: LocalRecordingChunkSession | null = null;
     try {
+      storage = await this.environment.recordingStore.create(this.environment.createId());
+      if (opening.cancelled || signal.aborted || this.scope?.signal !== signal) {
+        await storage.discard();
+        return;
+      }
       const recorder = request.createRecorder();
       const active: ActiveTake = {
         recorder,
-        chunks: [],
+        storage,
         priorTakes: request.takes,
-        encodedBytes: 0,
+        writeQueue: Promise.resolve(),
         discardReason: "",
         finalized: false,
+        stopReason: null,
       };
+      this.openingTake = null;
       this.activeTake = active;
-      recorder.ondataavailable = (event) => this.collectRecordingData(active, event.data);
-      recorder.onstop = () => this.finalizeRecording(active);
+      recorder.ondataavailable = (event) => this.queueRecordingData(active, event.data);
+      recorder.onstop = () => { void this.recorderStopped(active); };
       recorder.onerror = () => this.failRecorder(active);
       recorder.start(MEDIA_RECORDER_TIMESLICE_MS);
-      this.recordingLimitTimer = this.environment.schedule(
-        () => this.stopAtRecordingLimit(active),
-        MAX_LOCAL_AUDIO_DURATION_SECONDS * 1_000,
-      );
       this.dispatch({ type: "recording-started" });
       if (request.element?.paused) void this.togglePlayback(request);
     } catch (error) {
-      this.cancelRecordingTimer();
+      if (this.openingTake === opening) this.openingTake = null;
       const recorder = this.activeTake?.recorder;
       if (recorder) {
         this.detachRecorder(recorder);
@@ -288,27 +306,43 @@ export class SongWorkspaceRuntime {
         }
       }
       this.activeTake = null;
+      if (storage) {
+        try {
+          await storage.discard();
+        } catch {
+          // Preserve the originating infrastructure error for the user.
+        }
+      }
+      if (opening.cancelled || signal.aborted || this.scope?.signal !== signal) return;
       this.dispatchIfActive({
         type: "recording-failed",
         message: errorMessage(error, "Could not start recording."),
       });
+    } finally {
+      if (this.openingTake === opening) this.openingTake = null;
     }
   }
 
   stopRecording(): void {
+    const opening = this.openingTake;
+    if (opening) {
+      opening.cancelled = true;
+      this.openingTake = null;
+      this.dispatchIfActive({ type: "recording-stopped" });
+      this.stopPlayback();
+      return;
+    }
     const active = this.activeTake;
-    this.cancelRecordingTimer();
     if (!active) {
       this.dispatchIfActive({ type: "recording-stopped" });
     } else if (active.recorder.state === "inactive") {
-      this.finalizeRecording(active);
+      active.stopReason = "user";
+      this.dispatchIfActive({ type: "recording-finalizing" });
+      void this.finalizeRecording(active);
     } else {
-      try {
-        active.recorder.stop();
-      } catch (error) {
-        active.discardReason = errorMessage(error, "The recorder could not stop cleanly.");
-        this.finalizeRecording(active);
-      }
+      active.stopReason = "user";
+      this.dispatchIfActive({ type: "recording-finalizing" });
+      this.requestRecorderStop(active);
     }
     this.stopPlayback();
   }
@@ -377,76 +411,123 @@ export class SongWorkspaceRuntime {
     this.environment.revokeObjectURL(url);
   }
 
-  private collectRecordingData(active: ActiveTake, data: Blob): void {
+  private queueRecordingData(active: ActiveTake, data: Blob): void {
     if (this.activeTake !== active || !data.size || active.discardReason) return;
-    active.encodedBytes += data.size;
-    if (active.encodedBytes > MAX_LOCAL_AUDIO_FILE_BYTES) {
-      active.discardReason = `The take exceeded ${formatFileSize(MAX_LOCAL_AUDIO_FILE_BYTES)} and was discarded.`;
-      this.requestRecorderStop(active);
-      return;
-    }
-    active.chunks.push(data);
+    active.writeQueue = active.writeQueue
+      .then(() => active.storage.append(data))
+      .catch((error) => {
+        this.failRecordingStorage(active, error);
+      });
   }
 
   private failRecorder(active: ActiveTake): void {
     if (this.activeTake !== active) return;
     active.discardReason = "The browser recorder failed; no take was added.";
+    active.stopReason = "infrastructure";
+    this.dispatchIfActive({ type: "recording-finalizing" });
     this.requestRecorderStop(active);
   }
 
-  private stopAtRecordingLimit(active: ActiveTake): void {
-    if (this.activeTake !== active) return;
-    active.discardReason = `Take stopped at the ${Math.round(MAX_LOCAL_AUDIO_DURATION_SECONDS / 60)} minute local recording limit.`;
-    this.requestRecorderStop(active);
+  private failRecordingStorage(active: ActiveTake, error: unknown): void {
+    if (this.activeTake !== active || active.discardReason) return;
+    const reason = errorMessage(
+      error,
+      "Durable local recording storage failed; no take was added.",
+    );
+    active.discardReason = `${reason} Recording remains live until you press Stop; this take cannot be saved.`;
+    // Storage is not Stop authority. Keep accepting the native recorder's
+    // lifetime while dropping later chunks at the callback boundary. The user
+    // still owns the only normal recorder shutdown call.
+    this.dispatchIfActive({
+      type: "recording-degraded",
+      message: active.discardReason,
+    });
   }
 
   private requestRecorderStop(active: ActiveTake): void {
     if (active.recorder.state === "inactive") {
-      this.finalizeRecording(active);
+      void this.finalizeRecording(active);
       return;
     }
     try {
       active.recorder.stop();
     } catch (error) {
       active.discardReason = errorMessage(error, "The recorder could not stop cleanly.");
-      this.finalizeRecording(active);
+      active.stopReason = "infrastructure";
+      void this.finalizeRecording(active);
     }
   }
 
-  private finalizeRecording(active: ActiveTake): void {
+  private async recorderStopped(active: ActiveTake): Promise<void> {
+    if (this.activeTake !== active) return;
+    if (active.stopReason === null) {
+      active.stopReason = "infrastructure";
+      active.discardReason = "The browser recorder ended unexpectedly; no take was added.";
+      this.dispatchIfActive({ type: "recording-finalizing" });
+    }
+    await this.finalizeRecording(active);
+  }
+
+  private async finalizeRecording(active: ActiveTake): Promise<void> {
     if (active.finalized || this.activeTake !== active) return;
     active.finalized = true;
-    this.cancelRecordingTimer();
-    this.activeTake = null;
     this.detachRecorder(active.recorder);
-    if (!this.isActive()) return;
-
-    this.dispatch({ type: "recording-stopped" });
-    if (active.discardReason) {
-      this.dispatch({ type: "recording-failed", message: active.discardReason });
+    await active.writeQueue;
+    if (this.activeTake !== active || !this.isActive()) {
+      try {
+        await active.storage.discard();
+      } catch {
+        // No active workspace remains to receive this infrastructure failure.
+      }
       return;
     }
-    const blob = new Blob(active.chunks, { type: active.recorder.mimeType || "audio/webm" });
-    if (blob.size === 0) {
+    if (active.discardReason || active.stopReason !== "user") {
+      try {
+        await active.storage.discard();
+      } catch (error) {
+        active.discardReason ||= errorMessage(
+          error,
+          "Durable local recording cleanup failed.",
+        );
+      }
+      this.activeTake = null;
       this.dispatch({
         type: "recording-failed",
-        message: "The recorder produced an empty take.",
+        message: active.discardReason || "The local recording ended before you pressed Stop.",
       });
       return;
     }
 
-    const url = this.environment.createObjectURL(blob);
-    this.managedObjectUrls.add(url);
-    const take = { id: this.environment.createId(), url, createdAt: this.environment.now() };
-    const removed = active.priorTakes.slice(MAX_VOICE_TAKES - 1);
-    for (const oldTake of removed) this.revoke(oldTake.url);
-    this.dispatch({ type: "take-added", take, maximum: MAX_VOICE_TAKES });
-  }
-
-  private cancelRecordingTimer(): void {
-    if (this.recordingLimitTimer === null) return;
-    this.environment.cancelSchedule(this.recordingLimitTimer);
-    this.recordingLimitTimer = null;
+    try {
+      const blob = await active.storage.finalize(active.recorder.mimeType || "audio/webm");
+      if (this.activeTake !== active || !this.isActive()) return;
+      this.activeTake = null;
+      if (blob.size === 0) {
+        this.dispatch({
+          type: "recording-failed",
+          message: "The recorder produced an empty take.",
+        });
+        return;
+      }
+      const url = this.environment.createObjectURL(blob);
+      this.managedObjectUrls.add(url);
+      const take = { id: this.environment.createId(), url, createdAt: this.environment.now() };
+      const removed = active.priorTakes.slice(MAX_VOICE_TAKES - 1);
+      for (const oldTake of removed) this.revoke(oldTake.url);
+      this.dispatch({ type: "take-added", take, maximum: MAX_VOICE_TAKES });
+    } catch (error) {
+      try {
+        await active.storage.discard();
+      } catch {
+        // Report the original finalization failure; cleanup is best-effort here.
+      }
+      if (this.activeTake !== active || !this.isActive()) return;
+      this.activeTake = null;
+      this.dispatch({
+        type: "recording-failed",
+        message: errorMessage(error, "Could not finalize the locally recorded take."),
+      });
+    }
   }
 
   private detachRecorder(recorder: MediaRecorder): void {

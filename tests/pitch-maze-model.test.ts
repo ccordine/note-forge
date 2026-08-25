@@ -366,13 +366,15 @@ describe("Pitch Maze voice-completed movement", () => {
       expect(level.player).toEqual(level.goal);
       expect(level.levelComplete).toBe(true);
       expect(level.moves).toBe(solution.length);
-      const afterCompletion = applyCompletedPitchMazeMove(level, solution.at(-1)!);
+      const returnDirection = getPitchMazeLegalDirections(level)[0]!;
+      const afterCompletion = applyCompletedPitchMazeMove(level, returnDirection);
       expect(afterCompletion).toMatchObject({
-        moved: false,
-        reason: "level-complete",
+        moved: true,
+        reason: "moved",
         levelComplete: true,
       });
-      expect(afterCompletion.level).toBe(level);
+      expect(afterCompletion.level.player).not.toEqual(level.player);
+      expect(afterCompletion.level.moves).toBe(level.moves + 1);
     }
   });
 });

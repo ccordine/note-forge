@@ -13,6 +13,7 @@
     "preview": "vite preview --config vite.config.ts",
     "audit:architecture": "node scripts/audit-architecture.mjs --enforce",
     "proof:note-input:browser": "npm run build && node scripts/prove-note-input-browser.mjs",
+    "proof:user-owned-traces:browser": "npm run build && node scripts/prove-user-owned-live-traces-browser.mjs",
     "proof:sustained-note:browser": "npm run build && node scripts/prove-sustained-note-browser.mjs",
     "proof:voice-draw:browser": "npm run build && node scripts/prove-voice-draw-browser.mjs",
     "proof:vocal-flight:browser": "npm run build && node scripts/prove-vocal-flight-browser.mjs",

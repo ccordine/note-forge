@@ -33,6 +33,8 @@ export const VOCAL_FLIGHT_PRESENTATION_POLICY = Object.freeze({
     action: Readonly<VocalFlightSessionAction>,
   ) => previous.phase !== next.phase
     || previous.calibration.stage !== next.calibration.stage
+    || previous.achievementResult !== next.achievementResult
+    || previous.result !== next.result
     || previous.course?.nextGateIndex !== next.course?.nextGateIndex
     || previous.telemetry?.observationKind !== next.telemetry?.observationKind
     || authorityChanged(previous, next)

@@ -93,6 +93,26 @@ describe("Range Loop architecture guard", () => {
     expect(implementationSource).not.toMatch(/\bsetDwell\b|input\.(?:enable|disable)\s*\(/);
   });
 
+  it("requires visible Start and Finish commands and gates scoring synchronously", () => {
+    const stage = activeSources.find(({ fileName }) => fileName === "RangeLoopStage.tsx")?.source ?? "";
+    expect(stage).toContain("Start Range Loop");
+    expect(stage).toContain("Finish Range Loop");
+    expect(stage).toContain('data-live-lifetime="user-owned"');
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.getCurrent().phase === "tracking"');
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "start" })');
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "finish" })');
+  });
+
+  it("does not score or render a disposable default target before persistence hydration", () => {
+    const stage = activeSources.find(({ fileName }) => fileName === "RangeLoopStage.tsx")?.source ?? "";
+    expect(RANGE_LOOP_HOOK_SOURCE).toMatch(
+      /onFrame:[\s\S]*if \(hydrated && liveSession\.getCurrent\(\)\.phase === "tracking"\)[\s\S]*dwellSession\.observe/u,
+    );
+    expect(stage).toContain("if (!session.hydrated)");
+    expect(stage.indexOf("if (!session.hydrated)")).toBeLessThan(stage.indexOf("<NoteInput"));
+    expect(stage).toContain("no temporary target is scoring");
+  });
+
   it("uses the shared abort-scoped brief reference", () => {
     expect(RANGE_LOOP_HOOK_SOURCE).toContain("useSessionEffectScope");
     expect(RANGE_LOOP_HOOK_SOURCE).toContain("BRIEF_REFERENCE_SECONDS");

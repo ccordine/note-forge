@@ -15,6 +15,8 @@ import {
 import { createVocalFlightState } from "../apps/web/src/features/voice-arcade/vocal-flight/flight-runtime";
 import type {
   VocalControlCalibration,
+  VocalFlightCourseDefinition,
+  VocalFlightGate,
   VocalTelemetrySample,
 } from "../apps/web/src/features/voice-arcade/vocal-flight/types";
 
@@ -96,6 +98,36 @@ function observe(
   sample: VocalTelemetrySample,
 ): VocalFlightSessionState {
   return reduceVocalFlightSession(state, { type: "observation", sample });
+}
+
+function crossingCourse(
+  id: string,
+  gates: readonly VocalFlightGate[],
+): VocalFlightCourseDefinition {
+  return Object.freeze({
+    id,
+    chapter: "combined",
+    order: 1,
+    title: id,
+    objective: "Exercise exact gate-crossing score authority.",
+    discovery: "application",
+    controlMode: "combined",
+    selfLevelStrength: 1,
+    gates: Object.freeze([...gates]),
+    disturbances: Object.freeze([]),
+    requiredNeutralRecoveries: 0,
+  });
+}
+
+function launchedAtCrossing(
+  definition: Readonly<VocalFlightCourseDefinition>,
+): VocalFlightSessionState {
+  let state = reduceVocalFlightSession(calibratedState(), { type: "launch" });
+  state = {
+    ...state,
+    course: createVocalFlightCourseState(definition),
+  };
+  return observe(state, telemetry(0));
 }
 
 describe("integrated Vocal Flight session", () => {
@@ -199,6 +231,109 @@ describe("integrated Vocal Flight session", () => {
     state = reduceVocalFlightSession(state, { type: "return-loadout" });
     expect(state.phase).toBe("calibration");
     expect(state.calibration.result).not.toBeNull();
+  });
+
+  it("keeps whole-session scoring authoritative for an hour after achievement and freezes only on Finish", () => {
+    const definition = crossingCourse("hour-after-achievement", [
+      { id: "finish", center: { x: 0, y: 0, z: 0.26 }, radius: 100 },
+    ]);
+    let state = launchedAtCrossing(definition);
+    state = observe(state, telemetry(1));
+
+    expect(state.phase).toBe("flying");
+    expect(state.course?.status).toBe("complete");
+    expect(state.achievementResult).not.toBeNull();
+    expect(state.result).toBeNull();
+    expect(state.completedRunId).toBeNull();
+    expect(state.observedFrameCount).toBe(2);
+    const achievement = state.achievementResult;
+    const completedScore = state.scoring;
+    const flightBeforeFreeFlight = state.flight;
+
+    for (let index = 2; index < 180_002; index += 1) {
+      state = observe(state, telemetry(index, {
+        cents: index % 2 === 0 ? 240 : -180,
+        brightness: index % 4 < 2 ? 0.7 : 0.32,
+      }));
+    }
+    expect(state.phase).toBe("flying");
+    expect(state.achievementResult).toBe(achievement);
+    expect(state.result).toBeNull();
+    expect(state.scoring).not.toBe(completedScore);
+    expect(state.scoring.scoredSeconds).toBeCloseTo(3_600.02, 8);
+    expect(state.observedFrameCount).toBe(180_002);
+    expect(state.flight.elapsedSeconds).toBeGreaterThan(flightBeforeFreeFlight.elapsedSeconds);
+
+    const liveScoring = state.scoring;
+    const liveFlight = state.flight;
+    state = reduceVocalFlightSession(state, { type: "finish" });
+    expect(state.phase).toBe("complete");
+    expect(state.completedRunId).toBe(state.runId);
+    expect(state.result).not.toBe(achievement);
+    expect(state.result?.scoredSeconds).toBeCloseTo(3_600.02, 8);
+
+    state = observe(state, telemetry(180_002, { cents: 600, brightness: 0.75 }));
+    expect(state.scoring).toBe(liveScoring);
+    expect(state.flight).toBe(liveFlight);
+    expect(state.observedFrameCount).toBe(180_003);
+  }, 15_000);
+
+  it("scores an intermediate gate-crossing interval against the gate active at interval start", () => {
+    const definition = crossingCourse("intermediate-crossing-demand", [
+      { id: "first", center: { x: 0, y: 8, z: 0.26 }, radius: 2 },
+      { id: "second", center: { x: 0, y: -8, z: 10 }, radius: 100 },
+    ]);
+    let state = launchedAtCrossing(definition);
+
+    state = observe(state, telemetry(1));
+
+    expect(state.course).toMatchObject({
+      status: "flying",
+      nextGateIndex: 1,
+      gatesPassed: 0,
+      gatesMissed: 1,
+    });
+    expect(state.result).toBeNull();
+    expect(state.phase).toBe("flying");
+    expect(state.scoring.scoredSeconds).toBeCloseTo(0.02, 12);
+    // The interval ended eight units from the radius-two first gate. Its
+    // normalized path penalty is clamped to 2, so 2 * 0.02 = 0.04. Scoring
+    // against the post-advance radius-100 gate would make this nearly zero.
+    expect(state.scoring.pathErrorIntegral).toBeCloseTo(0.04, 12);
+    expect(state.scoring.previousPitchError).toBeCloseTo(-1, 12);
+  });
+
+  it("scores the final gate before latching its achievement and keeps flight nonterminal", () => {
+    const definition = crossingCourse("final-crossing-demand", [
+      { id: "finish", center: { x: 0, y: 8, z: 0.26 }, radius: 2 },
+    ]);
+    let state = launchedAtCrossing(definition);
+
+    state = observe(state, telemetry(1));
+
+    expect(state.course).toMatchObject({ status: "complete", nextGateIndex: 1 });
+    expect(state.phase).toBe("flying");
+    expect(state.completedRunId).toBeNull();
+    expect(state.scoring.scoredSeconds).toBeCloseTo(0.02, 12);
+    expect(state.scoring.pathErrorIntegral).toBeCloseTo(0.04, 12);
+    expect(state.achievementResult).toMatchObject({
+      courseAccuracyPercent: 0,
+      scoredSeconds: 0.02,
+    });
+    expect(state.result).toBeNull();
+    const achievement = state.achievementResult;
+    const completedScore = state.scoring;
+    const beforeContinuedFlight = state.flight;
+
+    state = observe(state, telemetry(2, { cents: 180, brightness: 0.7 }));
+
+    expect(state.phase).toBe("flying");
+    expect(state.achievementResult).toBe(achievement);
+    expect(state.result).toBeNull();
+    expect(state.scoring).not.toBe(completedScore);
+    expect(state.scoring.scoredSeconds).toBeCloseTo(0.04, 12);
+    expect(state.flight.elapsedSeconds).toBeGreaterThan(beforeContinuedFlight.elapsedSeconds);
+    expect(state.observedFrameCount).toBe(3);
   });
 
   it("makes the three dedicated challenges sequential before combined modes", () => {

@@ -70,9 +70,11 @@ const STANDARD_MICROPHONE_SEGMENTS = Object.freeze([
     // get literal frequency segments in addition to the enclosed MIDI sweep.
     { frequencyHz: SUPPORTED_MIN_FREQUENCY_HZ, durationSeconds: 0.45, rmsDbfs: NORMAL_RMS_DBFS },
     { frequencyHz: SUPPORTED_MAX_FREQUENCY_HZ, durationSeconds: 0.45, rmsDbfs: NORMAL_RMS_DBFS },
-    // A known voiced bridge is long enough to visit a view with no microphone
-    // consumer without sacrificing either measured sweep.
-    { midi: 60, durationSeconds: 4.2, rmsDbfs: NORMAL_RMS_DBFS },
+    // A known voiced bridge is long enough to finish the user-owned trace,
+    // visit a view with no microphone consumer, and mount Hum Lab before the
+    // quiet sweep begins. This keeps the no-consumer continuity proof from
+    // stealing UI-render coverage from the quiet low-register proof.
+    { midi: 60, durationSeconds: 8.2, rmsDbfs: NORMAL_RMS_DBFS },
     // Repeat the complete low register quietly to reproduce the historical
     // meter-moving/no-note failure through Chromium's actual capture path.
     ...QUIET_LOW_NOTES.map(({ midi }) => ({

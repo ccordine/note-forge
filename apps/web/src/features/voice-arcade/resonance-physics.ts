@@ -337,7 +337,7 @@ function fixedStep(
   const integrated = integrateBall(state, force, deltaSeconds);
   const ball = { ...state.ball, position: integrated.position, velocity: integrated.velocity };
   const waves = advanceWaves(state, voice, activations, deltaSeconds);
-  const won = ballIsInsideResonanceGoal(ball, state.level.goal);
+  const won = state.status === "won" || ballIsInsideResonanceGoal(ball, state.level.goal);
   return {
     collisions: integrated.collisions,
     state: {
@@ -361,7 +361,7 @@ export function advanceResonanceGame(
   deltaSeconds: number,
 ): ResonanceAdvanceResult {
   requireNonNegative(deltaSeconds, "Resonance frame delta");
-  if (state.status === "won" || deltaSeconds === 0) {
+  if (deltaSeconds === 0) {
     return {
       state: state as ResonanceGameState,
       simulatedSteps: 0,
@@ -384,8 +384,8 @@ export function advanceResonanceGame(
   let simulatedSteps = 0;
   let collisions = 0;
   let wonThisAdvance = false;
-  while (current.accumulatorSeconds + EPSILON >= current.options.fixedStepSeconds
-    && current.status === "playing") {
+  while (current.accumulatorSeconds + EPSILON >= current.options.fixedStepSeconds) {
+    const alreadyWon = current.status === "won";
     const accumulatorSeconds = Math.max(
       0,
       current.accumulatorSeconds - current.options.fixedStepSeconds,
@@ -394,7 +394,7 @@ export function advanceResonanceGame(
     current = step.state;
     collisions += step.collisions;
     simulatedSteps += 1;
-    if (current.status === "won") wonThisAdvance = true;
+    if (!alreadyWon && current.status === "won") wonThisAdvance = true;
   }
   return { state: current, simulatedSteps, collisions, wonThisAdvance };
 }

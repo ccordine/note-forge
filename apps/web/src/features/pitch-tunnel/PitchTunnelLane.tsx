@@ -100,8 +100,12 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
     <>
       <ol className="pitch-tunnel-checkpoints" aria-label="Pitch Tunnel checkpoint sequence">
         {state.options.checkpointOffsetsCents.map((offset, index) => {
-          const complete = state.status === "complete" || index < (checkpoint?.index ?? 0);
-          const current = state.status === "tracking" && index === checkpoint?.index;
+          const complete = state.achievementReached
+            || state.status === "complete"
+            || index < (checkpoint?.index ?? 0);
+          const current = state.status === "tracking"
+            && !state.achievementReached
+            && index === checkpoint?.index;
           return (
             <li
               className={`pitch-tunnel-checkpoint ${complete ? "complete" : ""} ${current ? "current" : ""}`}
@@ -119,6 +123,8 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
         data-note-input
         data-pitch-tunnel-lane
         data-workflow-step={state.status}
+        data-trace-lifetime={state.status === "tracking" ? "user-owned" : undefined}
+        data-achievement-reached={String(state.achievementReached)}
         data-input-state={inputState}
         data-detected-note={detectedMidi === null ? "" : noteLabel(detectedMidi)}
         data-observation-kind={state.currentObservationKind ?? ""}

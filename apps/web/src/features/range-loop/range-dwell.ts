@@ -5,8 +5,6 @@ import {
   type PitchObservationKind,
 } from "../../audio/note-input";
 
-export type RangeDwellStatus = "tracking" | "complete";
-
 export const RANGE_DWELL_DEFAULTS = Object.freeze({
   minimumConfidence: NOTE_INPUT_DEFAULTS.minConfidence,
   /** One missing 20 ms detector hop cannot be credited as observed dwell. */
@@ -37,11 +35,16 @@ export interface RangeDwellState {
   readonly requiredHoldSeconds: number;
   readonly minimumConfidence: number;
   readonly maximumCreditedIntervalSeconds: number;
-  readonly status: RangeDwellStatus;
-  /** Exact count of qualifying capture-domain samples credited across all intervals. */
+  /** A threshold milestone. It never stops or freezes observation processing. */
+  readonly achievementReached: boolean;
+  /** Exact count of qualifying capture-domain samples in the current occupation. */
   readonly heldSamples: number;
   /** Sum of each credited sample interval divided by that interval's capture rate. */
   readonly heldSeconds: number;
+  /** Largest exact current-occupation sample count observed before any later reset. */
+  readonly peakHeldSamples: number;
+  /** Largest exact current-occupation duration observed before any later reset. */
+  readonly peakHeldSeconds: number;
   readonly progress: number;
   readonly currentObservationKind: PitchObservationKind | null;
   readonly currentMidiFloat: number | null;
@@ -188,7 +191,6 @@ function resetFromObservation(
   return freezeState({
     ...state,
     ...currentStateFields(current),
-    status: "tracking",
     heldSamples: 0,
     heldSeconds: 0,
     progress: 0,
@@ -232,9 +234,11 @@ export function createRangeDwell(
     requiredHoldSeconds: options.requiredHoldSeconds,
     minimumConfidence,
     maximumCreditedIntervalSeconds,
-    status: "tracking",
+    achievementReached: false,
     heldSamples: 0,
     heldSeconds: 0,
+    peakHeldSamples: 0,
+    peakHeldSeconds: 0,
     progress: 0,
     currentObservationKind: null,
     currentMidiFloat: null,
@@ -252,8 +256,9 @@ export function createRangeDwell(
 /**
  * Reduce one canonical pitch observation using capture-sample coordinates only.
  * Unvoiced/uncertain evidence pauses accumulation without erasing it. A credible
- * wrong pitch resets an unfinished dwell. Completion is terminal for scoring,
- * while current observation telemetry continues to update.
+ * wrong pitch resets the current dwell even after its threshold was reached.
+ * Achievement is a latched milestone; observation processing and exact current
+ * occupation time never become terminal or clamp at the milestone.
  */
 export function updateRangeDwell(
   state: Readonly<RangeDwellState>,
@@ -282,8 +287,7 @@ export function updateRangeDwell(
     || !sameStreamAuthority(previous, observation);
 
   if (
-    state.status !== "complete"
-    && current.reliableVoiced
+    current.reliableVoiced
     && current.currentInTolerance === false
   ) {
     return resetFromObservation(state, observation, current);
@@ -301,33 +305,23 @@ export function updateRangeDwell(
     return observeWithoutCredit(state, observation, current, qualified);
   }
 
-  if (state.status === "complete") {
-    return observeWithoutCredit(state, observation, current, false);
-  }
-
   if (!qualified || !state.previousFrameQualified) {
     return observeWithoutCredit(state, observation, current, qualified);
   }
 
-  const remainingSeconds = Math.max(0, state.requiredHoldSeconds - state.heldSeconds);
-  const remainingSamples = Math.max(
-    0,
-    Math.ceil(remainingSeconds * observation.sampleRate - 1e-9),
-  );
-  const creditedSamples = Math.min(deltaSamples, remainingSamples);
-  const heldSamples = state.heldSamples + creditedSamples;
-  const heldSeconds = Math.min(
-    state.requiredHoldSeconds,
-    state.heldSeconds + creditedSamples / observation.sampleRate,
-  );
-  const complete = heldSeconds + Number.EPSILON >= state.requiredHoldSeconds;
+  const heldSamples = state.heldSamples + deltaSamples;
+  const heldSeconds = state.heldSeconds + deltaSeconds;
+  const achievementReached = state.achievementReached
+    || heldSeconds + Number.EPSILON >= state.requiredHoldSeconds;
   return freezeState({
     ...state,
     ...currentStateFields(current),
-    status: complete ? "complete" : "tracking",
+    achievementReached,
     heldSamples,
-    heldSeconds: complete ? state.requiredHoldSeconds : heldSeconds,
-    progress: complete ? 1 : heldSeconds / state.requiredHoldSeconds,
+    heldSeconds,
+    peakHeldSamples: Math.max(state.peakHeldSamples, heldSamples),
+    peakHeldSeconds: Math.max(state.peakHeldSeconds, heldSeconds),
+    progress: Math.min(1, heldSeconds / state.requiredHoldSeconds),
     observedFrameCount: state.observedFrameCount + 1,
     lastAuthority: authorityFromObservation(observation),
     previousFrameQualified: qualified,

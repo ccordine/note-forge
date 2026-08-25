@@ -18,17 +18,18 @@ import type {
 import {
   advanceVoiceAxisController,
   createVoiceAxisController,
-  freezeVoiceAxisController,
   isVoiceAxisFrameReliable,
   updateVoiceAxisFromFrame,
   type VoiceAxisControllerOptions,
   type VoiceAxisControllerState,
 } from "./voice-axis-controller";
 
-export type PongPhase = "setup" | "countdown" | "playing" | "paused" | "result";
+export type PongPhase = "setup" | "countdown" | "playing" | "result";
 
 export interface PongRoundStats {
   readonly playerReturns: number;
+  readonly playerPoints: number;
+  readonly opponentPoints: number;
   readonly maximumRally: number;
   readonly reliableFrames: number;
   readonly observedFrames: number;
@@ -84,6 +85,8 @@ export interface PitchPongState {
   readonly scoreFlash: "player" | "opponent" | null;
   readonly scoreFlashUntilSeconds: number | null;
   readonly result: PongRoundResult | null;
+  readonly latestAchievement: PongRoundResult | null;
+  readonly achievementCount: number;
   readonly voiceAxis: VoiceAxisControllerState;
   readonly stats: PongRoundStats;
   readonly lastAuthority: ObservationAuthority | null;
@@ -96,8 +99,6 @@ export type PitchPongAction =
   | { readonly type: "countdown"; readonly remaining: number }
   | { readonly type: "observation"; readonly observation: PitchObservation }
   | { readonly type: "cancel" }
-  | { readonly type: "pause"; readonly message: string }
-  | { readonly type: "resume" }
   | { readonly type: "finish"; readonly message: string }
   | { readonly type: "reset" };
 
@@ -150,6 +151,8 @@ export function createPitchPongSpec(options: Readonly<{
 function emptyStats(): PongRoundStats {
   return Object.freeze({
     playerReturns: 0,
+    playerPoints: 0,
+    opponentPoints: 0,
     maximumRally: 0,
     reliableFrames: 0,
     observedFrames: 0,
@@ -182,10 +185,10 @@ function scoreRound(
   stats: Readonly<PongRoundStats>,
   rangeSpan: number,
 ): PongRoundResult {
-  const incomingShots = stats.playerReturns + game.opponentScore;
+  const incomingShots = stats.playerReturns + stats.opponentPoints;
   const returnRatePercent = incomingShots === 0 ? 0 : stats.playerReturns / incomingShots * 100;
-  const decidedPoints = game.playerScore + game.opponentScore;
-  const matchSharePercent = decidedPoints === 0 ? 0 : game.playerScore / decidedPoints * 100;
+  const decidedPoints = stats.playerPoints + stats.opponentPoints;
+  const matchSharePercent = decidedPoints === 0 ? 0 : stats.playerPoints / decidedPoints * 100;
   const observedSpan = stats.lowestPitchMidi === null || stats.highestPitchMidi === null
     ? 0
     : stats.highestPitchMidi - stats.lowestPitchMidi;
@@ -210,8 +213,8 @@ function scoreRound(
     maximumRally: stats.maximumRally,
     playerReturns: stats.playerReturns,
     incomingShots,
-    playerScore: game.playerScore,
-    opponentScore: game.opponentScore,
+    playerScore: stats.playerPoints,
+    opponentScore: stats.opponentPoints,
     durationSeconds: stats.activeSampleSeconds,
     lowestPitchMidi: stats.lowestPitchMidi,
     highestPitchMidi: stats.highestPitchMidi,
@@ -279,6 +282,8 @@ export function createPitchPongState(spec: PitchPongSpec): PitchPongState {
     scoreFlash: null,
     scoreFlashUntilSeconds: null,
     result: null,
+    latestAchievement: null,
+    achievementCount: 0,
     voiceAxis: createVoiceAxisController(spec.voiceAxisOptions),
     stats: emptyStats(),
     lastAuthority: null,
@@ -301,10 +306,19 @@ function consumeObservation(
     : previousAxis;
   const axisUpdate = updateVoiceAxisFromFrame(advancedAxis, observation);
   const midiFloat = axisUpdate.accepted ? axisUpdate.state.pitchMidi : null;
+  const previousGame = state.game;
+  const nextGame = updatePongState(previousGame, {
+    deltaSeconds,
+    voicePaddleY: axisUpdate.state.position,
+  });
   const nextStats = Object.freeze({
     ...state.stats,
     observedFrames: state.stats.observedFrames + 1,
     reliableFrames: state.stats.reliableFrames + (axisUpdate.accepted ? 1 : 0),
+    playerPoints: state.stats.playerPoints
+      + Math.max(0, nextGame.playerScore - previousGame.playerScore),
+    opponentPoints: state.stats.opponentPoints
+      + Math.max(0, nextGame.opponentScore - previousGame.opponentScore),
     activeSampleSeconds: state.stats.activeSampleSeconds + deltaSeconds,
     voicedControlSeconds: state.stats.voicedControlSeconds
       + (axisUpdate.accepted && previousAxis.status === "steering" ? deltaSeconds : 0),
@@ -314,11 +328,6 @@ function consumeObservation(
     highestPitchMidi: midiFloat === null
       ? state.stats.highestPitchMidi
       : Math.max(state.stats.highestPitchMidi ?? -Infinity, midiFloat),
-  });
-  const previousGame = state.game;
-  const nextGame = updatePongState(previousGame, {
-    deltaSeconds,
-    voicePaddleY: axisUpdate.state.position,
   });
   const playerReturned = previousGame.ball.velocityX < 0
     && nextGame.ball.velocityX > 0
@@ -350,14 +359,27 @@ function consumeObservation(
     status = "Ball passed. Breathe, recenter, and catch the next line.";
   }
   if (nextGame.status === "finished") {
-    return finishState(
-      state,
-      nextGame,
+    const achievementCount = state.achievementCount + 1;
+    const latestAchievement = scoreRound(nextGame, stats, state.spec.rangeSpan);
+    const serveToward = nextGame.winner === "player" ? "opponent" : "player";
+    return Object.freeze({
+      ...state,
+      game: createPongState({
+        seed: `pong:${state.spec.difficulty}:${state.roundNumber}:${achievementCount}`,
+        serveToward,
+        config: state.spec.pongConfig,
+      }),
+      status: nextGame.winner === "player"
+        ? "Match won. The court stays live until you stop."
+        : "CPU took the match. The next serve is already live.",
+      scoreFlash,
+      scoreFlashUntilSeconds,
+      latestAchievement,
+      achievementCount,
+      voiceAxis: axisUpdate.state,
       stats,
-      nextGame.winner === "player"
-        ? "Match won. Your voice held the court."
-        : "Match complete. The result now shows exactly what to train next.",
-    );
+      lastAuthority: authorityOf(observation),
+    });
   }
   return Object.freeze({
     ...state,
@@ -392,6 +414,8 @@ export function reducePitchPongState(
         scoreFlash: null,
         scoreFlashUntilSeconds: null,
         result: null,
+        latestAchievement: null,
+        achievementCount: 0,
         voiceAxis: createVoiceAxisController(state.spec.voiceAxisOptions),
         stats: emptyStats(),
         lastAuthority: null,
@@ -418,28 +442,8 @@ export function reducePitchPongState(
             status: "Round cancelled. The microphone remains available for the next start.",
           })
         : state as PitchPongState;
-    case "pause":
-      return state.phase === "playing"
-        ? Object.freeze({
-            ...state,
-            phase: "paused",
-            status: action.message,
-            voiceAxis: resetAxis(freezeVoiceAxisController(state.voiceAxis)),
-            lastAuthority: null,
-          })
-        : state as PitchPongState;
-    case "resume":
-      return state.phase === "paused"
-        ? Object.freeze({
-            ...state,
-            phase: "playing",
-            status: "Court live. Sing higher to rise, lower to drop, or breathe to freeze.",
-            voiceAxis: resetAxis(state.voiceAxis),
-            lastAuthority: null,
-          })
-        : state as PitchPongState;
     case "finish":
-      return state.phase === "playing" || state.phase === "paused"
+      return state.phase === "playing"
         ? finishState(state, state.game, state.stats, action.message)
         : state as PitchPongState;
     case "reset": {

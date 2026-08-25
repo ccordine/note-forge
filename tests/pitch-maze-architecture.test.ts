@@ -13,6 +13,10 @@ const SESSION_SOURCE = readFileSync(new URL(
   "../apps/web/src/features/voice-arcade/pitch-maze-session.ts",
   import.meta.url,
 ), "utf8");
+const MODEL_SOURCE = readFileSync(new URL(
+  "../apps/web/src/features/voice-arcade/pitch-maze-model.ts",
+  import.meta.url,
+), "utf8");
 const CSS_SOURCE = readFileSync(new URL(
   "../apps/web/src/styles-pitch-maze.css",
   import.meta.url,
@@ -51,8 +55,8 @@ describe("Pitch Maze continuous-input architecture guard", () => {
     expect(UI_SOURCE).toContain('input.state !== "running"');
     expect(SESSION_SOURCE).toContain('| "setup"');
     expect(SESSION_SOURCE).toContain('| "playing"');
-    expect(SESSION_SOURCE).toContain('| "level-result"');
     expect(SESSION_SOURCE).toContain('| "campaign-result"');
+    expect(SESSION_SOURCE).not.toContain('| "level-result"');
     expect(ACTIVE_SOURCE).not.toMatch(/\bconnecting\b/i);
     expect(UI_SOURCE).not.toMatch(/await\s+input\.enable\s*\(/);
   });
@@ -98,9 +102,33 @@ describe("Pitch Maze continuous-input architecture guard", () => {
   });
 
   it("keeps Exit wired into both the stable shell and result surface", () => {
-    expect(count(UI_SOURCE, /onClick=\{onExit\}/g)).toBe(1);
+    expect(count(UI_SOURCE, /onClick=\{onExit\}/g)).toBe(2);
     expect(UI_SOURCE).toContain("onClick={exitGame}");
     expect(UI_SOURCE).toContain("onExit={exitGame}");
     expect(UI_SOURCE).toContain("reference.abort();");
+  });
+
+  it("latches maze achievements without ending the live campaign", () => {
+    expect(UI_SOURCE).toContain('data-live-lifetime="user-owned"');
+    expect(UI_SOURCE).toContain('data-live-achievement="pitch-maze"');
+    expect(SESSION_SOURCE).toContain('phase: "playing"');
+    expect(SESSION_SOURCE).toContain("A cleared maze is a latched achievement inside the still-live campaign");
+    expect(SESSION_SOURCE).toContain("achievementOutcome: ArcadeOutcome | null");
+    expect(SESSION_SOURCE.indexOf("const campaignMetrics = recordCommandMetrics"))
+      .toBeLessThan(SESSION_SOURCE.indexOf("if (state.currentResult !== null)"));
+    expect(SESSION_SOURCE).not.toContain("outcome: state.outcome ?? campaignOutcome");
+    expect(SESSION_SOURCE).toContain('case "finish":');
+    expect(SESSION_SOURCE).not.toMatch(/phase:\s*campaignComplete\s*\?/);
+    expect(MODEL_SOURCE).not.toContain("if (level.levelComplete)");
+    expect(UI_SOURCE).toContain('session.phase === "campaign-result" ? session.outcome : null');
+  });
+
+  it("offers Finish throughout play and freezes motion until a new explicit Start", () => {
+    expect(UI_SOURCE).toContain("Finish campaign");
+    expect(UI_SOURCE).toContain("Start another campaign");
+    expect(UI_SOURCE).toContain('session.phase === "campaign-result" ? "complete" : "listening"');
+    expect(SESSION_SOURCE).toContain('if (state.phase !== "playing" || state.campaign === null)');
+    expect(SESSION_SOURCE).toContain('phase: "campaign-result"');
+    expect(SESSION_SOURCE).toContain("lastObservedAtSeconds");
   });
 });

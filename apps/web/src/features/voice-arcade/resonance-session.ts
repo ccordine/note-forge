@@ -43,6 +43,9 @@ export interface ResonanceSessionState {
   readonly game: ResonanceGameState;
   readonly controller: ResonanceControllerState;
   readonly stats: ResonanceRunStats;
+  /** Exact score when the goal was first captured; never terminal authority. */
+  readonly achievement: ResonanceResult | null;
+  /** Whole-session score created only by explicit Finish. */
   readonly result: ResonanceResult | null;
   readonly targetDwell: ResonanceTargetDwell;
   readonly authorityBreakCount: number;
@@ -54,7 +57,8 @@ export type ResonanceSessionAction =
       chamberNumber: number;
       generated: GeneratedResonanceLevel;
     }>
-  | Readonly<{ type: "restart" }>
+  | Readonly<{ type: "start" }>
+  | Readonly<{ type: "finish" }>
   | Readonly<{ type: "observation"; observation: Readonly<PitchObservation> }>;
 
 const ANALYSIS_HOP_SECONDS = 0.02;
@@ -113,6 +117,7 @@ function sessionWithGame(
     game,
     controller: createResonanceController(),
     stats: createResonanceRunStats(game),
+    achievement: null,
     result: null,
     targetDwell: emptyDwell(game),
     authorityBreakCount: 0,
@@ -203,14 +208,18 @@ function advanceFromObservation(
     reliable: controllerUpdate.accepted,
     targetResonatorId: targetBeforeAdvance?.id ?? null,
   });
-  const complete = physics.wonThisAdvance || physics.state.status === "won";
+  const achievement = state.achievement ?? (
+    physics.wonThisAdvance ? summarizeResonanceRun(physics.state, stats) : null
+  );
   return {
     ...state,
-    phase: complete ? "complete" : "tracking",
+    // Capturing the goal latches an achievement snapshot. It never owns the
+    // user-started chamber lifetime or stops the controller/physics reducers.
+    phase: "tracking",
     game: physics.state,
     controller: controllerUpdate.state,
     stats,
-    result: complete ? summarizeResonanceRun(physics.state, stats) : null,
+    achievement,
     targetDwell,
     authorityBreakCount: state.authorityBreakCount + (delta.boundary ? 1 : 0),
   };
@@ -222,9 +231,26 @@ export function reduceResonanceSession(
 ): ResonanceSessionState {
   switch (action.type) {
     case "install":
-      return sessionWithGame("tracking", state.runSerial + 1, action.chamberNumber, action.generated);
-    case "restart":
-      return sessionWithGame("tracking", state.runSerial + 1, state.chamberNumber, state.generated);
+      return state.phase === "tracking"
+        ? state as ResonanceSessionState
+        : sessionWithGame("idle", state.runSerial, action.chamberNumber, action.generated);
+    case "start":
+      return state.phase === "idle" || state.phase === "complete"
+        ? {
+            ...sessionWithGame("tracking", state.runSerial + 1, state.chamberNumber, state.generated),
+            // Keep the user-owned active transition explicit at the reducer
+            // boundary so lifetime authority is statically auditable.
+            phase: "tracking",
+          }
+        : state as ResonanceSessionState;
+    case "finish":
+      return state.phase === "tracking"
+        ? {
+            ...state,
+            phase: "complete",
+            result: summarizeResonanceRun(state.game, state.stats),
+          }
+        : state as ResonanceSessionState;
     case "observation":
       return advanceFromObservation(state, action.observation);
   }

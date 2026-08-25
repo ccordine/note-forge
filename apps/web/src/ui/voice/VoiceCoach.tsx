@@ -139,7 +139,14 @@ export function VoiceCoach(props: VoiceCoachProps) {
           <strong>{hold.heldSeconds.toFixed(1)}<small>{holdMode === "occupancy" ? " sec in lane" : ` / ${hold.requiredSeconds.toFixed(1)} sec`}</small></strong>
           <b>{holdMode === "occupancy" ? "CONTINUOUS SAMPLE TIME" : `${Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining`}</b>
         </div>
-        <div className="nf-voice-hold__track" role="progressbar" aria-label="Exercise in-tune hold" aria-valuemin={0} aria-valuemax={hold.requiredSeconds} aria-valuenow={hold.heldSeconds}><span /></div>
+        <div
+          className="nf-voice-hold__track"
+          role={holdMode === "goal" ? "progressbar" : undefined}
+          aria-label={holdMode === "goal" ? "Exercise in-tune hold" : undefined}
+          aria-valuemin={holdMode === "goal" ? 0 : undefined}
+          aria-valuemax={holdMode === "goal" ? hold.requiredSeconds : undefined}
+          aria-valuenow={holdMode === "goal" ? Math.min(hold.heldSeconds, hold.requiredSeconds) : undefined}
+        ><span /></div>
       </div>
 
       <details className="nf-voice-diagnostics">

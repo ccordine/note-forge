@@ -1,11 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import "../../styles-pitch-mirror.css";
 import { smoothPitchFrames } from "@noteforge/pitch-engine";
-import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
+import { type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
 import { playTone, type Timbre } from "@/audio/synth";
-import type { AttemptRunnerStatus, CompletedAttempt } from "@/features/training-session/attempt-runner";
+import {
+  attemptRecentScoringFrames,
+  attemptScoringFrames,
+  type AttemptRunnerStatus,
+  type CompletedAttempt,
+} from "@/features/training-session/attempt-runner";
 import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
+import { scoreWeightedSustainedNote } from "@/features/training-session/attempt-scoring";
 import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import type { MirrorMode } from "@/navigation";
@@ -26,7 +32,7 @@ interface MirrorTakeConfiguration {
   readonly toleranceCents: number;
 }
 
-const TAKE_SECONDS = 4;
+const TRACE_WINDOW_SECONDS = 8;
 
 const modeInfo: Record<MirrorMode, { label: string; instruction: string; detail: string }> = {
   glide: { label: "Glide", instruction: "Let your voice find the lane.", detail: "Start the trace, then slide toward the remembered target." },
@@ -52,13 +58,13 @@ function Metric({ label, value, unit, tone }: { label: string; value?: number; u
 
 function scoreMirrorTake(take: Readonly<CompletedAttempt<MirrorTakeConfiguration>>): AttemptMetrics {
   const configuration = take.configuration;
-  const frames = smoothPitchFrames(take.frames, { correctOctaveJumps: true });
-  return scoreSustainedNote(
+  const frames = attemptScoringFrames(take);
+  return scoreWeightedSustainedNote(
+    take,
     frames,
     {
       midi: configuration.mode === "anchor" ? 69 : configuration.midi,
       centsOffset: configuration.mode === "anchor" ? 0 : configuration.centsOffset,
-      durationMs: TAKE_SECONDS * 1_000,
       timbre: configuration.timbre,
       amplitude: 0.28,
     },
@@ -88,7 +94,7 @@ export function PitchMirror() {
 
   const completeAttempt = (completed: Readonly<CompletedAttempt<MirrorTakeConfiguration>>) => {
     const configuration = completed.configuration;
-    const frames = smoothPitchFrames(completed.frames, { correctOctaveJumps: true });
+    const frames = attemptScoringFrames(completed);
     const result = scoreMirrorTake(completed);
     setMetrics(result);
     const completedAt = new Date().toISOString();
@@ -97,12 +103,18 @@ export function PitchMirror() {
       exerciseType: `pitch.match.${configuration.mode}`,
       target: { midi: configuration.mode === "anchor" ? 69 : configuration.midi, centsOffset: configuration.mode === "anchor" ? 0 : configuration.centsOffset },
       metrics: result as Record<string, number | undefined>,
-      pitchFrames: frames,
+      pitchFrames: [...frames],
       startedAt: completed.startedAt ?? completedAt,
       completedAt,
     });
   };
   const attempt = useAttemptRunner<MirrorTakeConfiguration>({
+    scoringProfile: (configuration) => ({
+      targetMidiFloat: configuration.mode === "anchor"
+        ? 69
+        : configuration.midi + configuration.centsOffset / 100,
+      toleranceCents: configuration.toleranceCents,
+    }),
     onComplete: completeAttempt,
     onCompletionError: () => setSaveError("The measured trace could not be saved to local history."),
   });
@@ -121,7 +133,7 @@ export function PitchMirror() {
   const effectiveCents = activeMode === "anchor" ? 0 : configuredCents;
   const targetMidiFloat = effectiveMidi + effectiveCents / 100;
   const targetFrequency = continuousMidiToHz(effectiveMidi, effectiveCents);
-  const shownFrames = smoothPitchFrames(attempt.state.frames, { correctOctaveJumps: true });
+  const shownFrames = smoothPitchFrames(attemptRecentScoringFrames(attempt.state), { correctOctaveJumps: true });
   const resetAttempt = attempt.reset;
 
   useEffect(() => {
@@ -141,7 +153,7 @@ export function PitchMirror() {
   const begin = () => {
     setSaveError("");
     setMetrics(null);
-    attempt.begin({ mode, midi: selectedMidi, centsOffset, timbre, toleranceCents }, TAKE_SECONDS);
+    attempt.begin({ mode, midi: selectedMidi, centsOffset, timbre, toleranceCents });
   };
   const hearTarget = () => attempt.playReference("Pitch Mirror reference", () => playTone({
     frequencyHz: targetFrequency,
@@ -171,13 +183,13 @@ export function PitchMirror() {
     );
   } else if (workflowStatus === "tracking") {
     currentStep = (
-      <Panel className="mirror-stage active" data-workflow-step="tracking">
+      <Panel className="mirror-stage active" data-workflow-step="tracking" data-trace-lifetime="user-owned">
         <div className="target-display">
           <span className="target-kicker">TARGET</span><strong>{noteLabel(effectiveMidi)}</strong><span>{targetFrequency.toFixed(2)} Hz</span>
           <button className="round-play" onClick={hearTarget} aria-label={`Hear ${noteLabel(effectiveMidi)} target`}><Icon name="play" size={21} /></button>
         </div>
         <div className="stage-status"><span>{takeStatus(attempt.state.status, input.state)}</span><b>{attempt.state.elapsedSeconds.toFixed(2)} s</b><small>The canonical live note remains in the input scope above.</small></div>
-        <PitchRibbon frames={shownFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} durationSeconds={TAKE_SECONDS} />
+        <PitchRibbon frames={shownFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
         <div className="stage-actions"><PlayButton label="Hear" aria-label={`Hear ${noteLabel(effectiveMidi)} target`} onClick={hearTarget} /><ActionButton data-pitch-mirror-action="finish-trace" onClick={attempt.finish}>Finish trace</ActionButton></div>
       </Panel>
     );

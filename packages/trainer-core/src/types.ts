@@ -8,7 +8,6 @@ export type { PitchFrame } from "@noteforge/pitch-engine";
 export interface NoteTarget {
   midi: number;
   centsOffset: number;
-  durationMs: number;
   timbre: string;
   amplitude: number;
 }

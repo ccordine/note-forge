@@ -72,6 +72,14 @@ describe("Range Simulator continuous-input architecture guard", () => {
     expect(CONTROLLER_SOURCE).not.toMatch(/["'](?:ready|prompting|rating|listening|paused)["']/);
   });
 
+  it("makes probe achievement nonterminal and keeps the canonical tuner live until Finish", () => {
+    expect(UI_SOURCE).toContain('data-live-lifetime="user-owned"');
+    expect(UI_SOURCE).toContain('data-live-achievement="range-map"');
+    expect(CONTROLLER_SOURCE).toContain('status: "tracking"');
+    expect(CONTROLLER_SOURCE).toContain("Exhausting the probe queue records an assessment achievement");
+    expect(CONTROLLER_SOURCE).not.toMatch(/status:\s*achievementReached\s*\?\s*["']complete["']/);
+  });
+
   it("deletes the stylesheet dump and obsolete workflow selectors", () => {
     const lines = CSS_SOURCE.trimEnd().split(/\r?\n/).length;
     expect(lines, `styles-range-simulator.css has ${lines} lines; limit is 600.`).toBeLessThanOrEqual(600);

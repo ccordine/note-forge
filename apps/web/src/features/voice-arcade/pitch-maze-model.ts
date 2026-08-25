@@ -537,12 +537,14 @@ export function applyCompletedPitchMazeMove(
   direction: CardinalDirection,
 ): PitchMazeMoveResult {
   assertDirection(direction);
-  if (level.levelComplete) {
-    return Object.freeze({ level, moved: false, reason: "level-complete", levelComplete: true });
-  }
   const currentCell = getPitchMazeCell(level);
   if (currentCell.walls[direction]) {
-    return Object.freeze({ level, moved: false, reason: "wall", levelComplete: false });
+    return Object.freeze({
+      level,
+      moved: false,
+      reason: "wall",
+      levelComplete: level.levelComplete,
+    });
   }
 
   const definition = DIRECTION_DEFINITIONS[direction];
@@ -550,7 +552,8 @@ export function applyCompletedPitchMazeMove(
     level.player.row + definition.rowDelta,
     level.player.column + definition.columnDelta,
   );
-  const levelComplete = samePosition(player, level.goal);
+  const reachedGoalThisMove = !level.levelComplete && samePosition(player, level.goal);
+  const levelComplete = level.levelComplete || reachedGoalThisMove;
   const nextLevel: PitchMazeLevel = Object.freeze({
     ...level,
     player,
@@ -560,7 +563,7 @@ export function applyCompletedPitchMazeMove(
   return Object.freeze({
     level: nextLevel,
     moved: true,
-    reason: levelComplete ? "level-complete" : "moved",
+    reason: reachedGoalThisMove ? "level-complete" : "moved",
     levelComplete,
   });
 }

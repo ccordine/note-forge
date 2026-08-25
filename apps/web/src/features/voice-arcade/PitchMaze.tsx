@@ -35,12 +35,6 @@ const DIRECTION_GLYPHS: Readonly<Record<CardinalDirection, string>> = Object.fre
   west: "←",
 });
 
-function average(values: readonly number[]): number {
-  return values.length === 0
-    ? 0
-    : values.reduce((total, value) => total + value, 0) / values.length;
-}
-
 function samePosition(
   left: Readonly<{ row: number; column: number }>,
   right: Readonly<{ row: number; column: number }>,
@@ -221,28 +215,40 @@ function SetupControls({
 interface ResultProps {
   readonly result: Readonly<PitchMazeLevelResult>;
   readonly campaignOutcome: Readonly<ArcadeOutcome> | null;
-  readonly campaignComplete: boolean;
+  readonly campaignAchieved: boolean;
+  readonly campaignFinished: boolean;
   readonly nextLevel: number;
   readonly onContinue: () => void;
-  readonly onReset: () => void;
+  readonly onFinish: () => void;
+  readonly onStartAnother: () => void;
   readonly onExit: () => void;
 }
 
 function ResultPanel({
   result,
   campaignOutcome,
-  campaignComplete,
+  campaignAchieved,
+  campaignFinished,
   nextLevel,
   onContinue,
-  onReset,
+  onFinish,
+  onStartAnother,
   onExit,
 }: ResultProps) {
+  let primaryAction = <ActionButton className="primary" onClick={onContinue}>Enter maze {nextLevel} <Icon name="arrow" size={16} /></ActionButton>;
+  if (campaignAchieved) {
+    primaryAction = <ActionButton className="primary" onClick={onFinish}>Finish campaign <Icon name="arrow" size={16} /></ActionButton>;
+  }
+  if (campaignFinished) {
+    primaryAction = <ActionButton className="primary" onClick={onStartAnother}>Start another campaign <Icon name="loop" size={16} /></ActionButton>;
+  }
   return (
-    <section className="pitch-maze-result" aria-label="Pitch Maze result">
-      <div className="pitch-maze-result-mark">{campaignComplete ? campaignOutcome?.grade ?? "✓" : "✓"}</div>
-      <h2>{campaignComplete
+    <section className="pitch-maze-result" aria-label="Pitch Maze achievement" data-live-achievement="pitch-maze">
+      <div className="pitch-maze-result-mark">{campaignAchieved ? campaignOutcome?.grade ?? "✓" : "✓"}</div>
+      <h2>{campaignAchieved
         ? `${campaignOutcome?.score ?? 0} voice-control score`
         : `Maze ${result.level} cleared · ${result.averageQuality.toFixed(0)} quality`}</h2>
+      {!campaignFinished && <p>The maze goal is recorded. Your voice controller remains live until you explicitly continue, finish, or leave.</p>}
       <div className="pitch-maze-result-grid">
         <div><span>VOICE QUALITY</span><strong>{result.averageQuality.toFixed(0)}</strong><small>attack + settle + hold</small></div>
         <div><span>IN-LANE</span><strong>{result.pitchAccuracy.toFixed(0)}%</strong><small>credible observations</small></div>
@@ -259,9 +265,38 @@ function ResultPanel({
       </div>
       <div className="pitch-maze-result-actions">
         <ActionButton onClick={onExit}>Exit arcade</ActionButton>
-        {campaignComplete
-          ? <ActionButton className="primary" onClick={onReset}>Play another campaign <Icon name="loop" size={16} /></ActionButton>
-          : <ActionButton className="primary" onClick={onContinue}>Enter maze {nextLevel} <Icon name="arrow" size={16} /></ActionButton>}
+        {primaryAction}
+      </div>
+    </section>
+  );
+}
+
+function StoppedCampaignPanel({
+  outcome,
+  commandCount,
+  levelsCompleted,
+  onStartAnother,
+  onExit,
+}: {
+  readonly outcome: Readonly<ArcadeOutcome>;
+  readonly commandCount: number;
+  readonly levelsCompleted: number;
+  readonly onStartAnother: () => void;
+  readonly onExit: () => void;
+}) {
+  return (
+    <section className="pitch-maze-result" aria-label="Finished Pitch Maze campaign">
+      <div className="pitch-maze-result-mark">{outcome.grade}</div>
+      <h2>{outcome.score} voice-control score</h2>
+      <p>You finished this campaign. Motion and scoring remain frozen until you explicitly start another one.</p>
+      <div className="pitch-maze-result-grid">
+        <div><span>VOICE COMMANDS</span><strong>{commandCount}</strong><small>before Finish</small></div>
+        <div><span>MAZES CLEARED</span><strong>{levelsCompleted}</strong><small>achievement snapshots</small></div>
+        <div><span>PITCH QUALITY</span><strong>{outcome.accuracy.toFixed(0)}%</strong><small>measured evidence</small></div>
+      </div>
+      <div className="pitch-maze-result-actions">
+        <ActionButton onClick={onExit}>Exit arcade</ActionButton>
+        <ActionButton className="primary" onClick={onStartAnother}>Start another campaign <Icon name="loop" size={16} /></ActionButton>
       </div>
     </section>
   );
@@ -306,15 +341,19 @@ export function PitchMaze({
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const rangeReady = voiceRange.highMidi - voiceRange.lowMidi >= 3;
-  const levelCommands = session.commands.filter((command) => command.level === session.levelNumber);
-  const blockedCommands = levelCommands.filter((command) => command.result === "wall").length;
-  const qualityAverage = average(levelCommands.map((command) => command.qualityScore));
+  const levelCommandCount = session.currentLevelMetrics.commandCount;
+  const blockedCommands = session.currentLevelMetrics.blockedCommandCount;
+  const qualityAverage = levelCommandCount === 0
+    ? 0
+    : session.currentLevelMetrics.qualityTotal / levelCommandCount;
   const holdStatus = controller?.dwell?.currentInTolerance === true
     ? "holding"
     : controller?.dwell?.currentInTolerance === false
       ? "waiting"
       : "waiting";
-  const commandStatus = input.state !== "running"
+  const commandStatus = session.phase === "campaign-result"
+    ? "FINISHED BY YOU · START ANOTHER CAMPAIGN TO MOVE"
+    : input.state !== "running"
     ? "VOICE OFF · ENABLE VOICE IN THE HEADER"
       : controller?.phase === "tracking"
         ? `${activeDirection.toUpperCase()} · ${noteLabel(activeTargetMidi)} · ${holdSeconds.toFixed(2)}S`
@@ -322,7 +361,8 @@ export function PitchMaze({
           ? `${controller.committedDirection.toUpperCase()} COMPLETE · CHANGE NOTE FOR NEXT MOVE`
           : "LIVE · ANY MAPPED NOTE CAN MOVE";
 
-  useArcadeOutcomeHandoff(session.outcome, session.outcome, onComplete);
+  const completedOutcome = session.phase === "campaign-result" ? session.outcome : null;
+  useArcadeOutcomeHandoff(completedOutcome, completedOutcome, onComplete);
 
   const startCampaign = () => {
     reference.abort();
@@ -337,6 +377,10 @@ export function PitchMaze({
       },
     });
   };
+  const startAnotherCampaign = () => {
+    realtime.dispatch({ type: "reset" });
+    startCampaign();
+  };
   const exitGame = () => {
     reference.abort();
     onExit();
@@ -344,7 +388,7 @@ export function PitchMaze({
 
   return (
     <div className={`pitch-maze-page curriculum-${curriculumStage}`}>
-      <Panel className="pitch-maze-shell">
+      <Panel className="pitch-maze-shell" data-live-lifetime="user-owned">
         <header className="pitch-maze-shell-header">
           <div>
             <Eyebrow>{curriculum.stageLabel} · voice is the D-pad</Eyebrow>
@@ -352,6 +396,11 @@ export function PitchMaze({
             <p>{session.notice}</p>
           </div>
           <div className="pitch-maze-shell-actions">
+            {session.phase === "playing" && (
+              <ActionButton className="coral" onClick={() => realtime.dispatch({ type: "finish" })}>
+                Finish campaign
+              </ActionButton>
+            )}
             <ActionButton onClick={exitGame}>Exit arcade</ActionButton>
           </div>
         </header>
@@ -395,7 +444,7 @@ export function PitchMaze({
               input={input}
               targetMidi={activeTargetMidi}
               toleranceCents={displayLevel.config.toleranceCents}
-              phase="listening"
+              phase={session.phase === "campaign-result" ? "complete" : "listening"}
               hold={{
                 heldSeconds: holdSeconds,
                 requiredSeconds: displayLevel.config.holdDurationSeconds,
@@ -426,7 +475,7 @@ export function PitchMaze({
 
         {session.phase === "playing" && (
           <div className="pitch-maze-run-stats">
-            <div><span>VOICE COMMANDS</span><b>{levelCommands.length}</b></div>
+            <div><span>VOICE COMMANDS</span><b>{levelCommandCount}</b></div>
             <div><span>CELLS MOVED</span><b>{displayLevel.moves}</b></div>
             <div><span>BLOCKED NOTES</span><b>{blockedCommands}</b></div>
             <div><span>AVG QUALITY</span><b>{qualityAverage ? qualityAverage.toFixed(0) : "—"}</b></div>
@@ -434,14 +483,27 @@ export function PitchMaze({
           </div>
         )}
 
-        {(session.phase === "level-result" || session.phase === "campaign-result") && session.currentResult && (
+        {session.currentResult && (
           <ResultPanel
             result={session.currentResult}
-            campaignOutcome={session.outcome}
-            campaignComplete={session.phase === "campaign-result"}
+            campaignOutcome={session.phase === "campaign-result"
+              ? session.outcome
+              : session.achievementOutcome}
+            campaignAchieved={session.achievementOutcome !== null}
+            campaignFinished={session.phase === "campaign-result"}
             nextLevel={session.levelNumber + 1}
             onContinue={() => realtime.dispatch({ type: "continue" })}
-            onReset={() => realtime.dispatch({ type: "reset" })}
+            onFinish={() => realtime.dispatch({ type: "finish" })}
+            onStartAnother={startAnotherCampaign}
+            onExit={exitGame}
+          />
+        )}
+        {session.phase === "campaign-result" && session.currentResult === null && session.outcome && (
+          <StoppedCampaignPanel
+            outcome={session.outcome}
+            commandCount={session.campaignMetrics.commandCount}
+            levelsCompleted={session.levelResults.length}
+            onStartAnother={startAnotherCampaign}
             onExit={exitGame}
           />
         )}

@@ -7,6 +7,7 @@ import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
   createVoiceDrawState,
   reduceVoiceDrawSession,
+  startVoiceDraw,
 } from "../apps/web/src/features/voice-arcade/voice-draw-engine";
 import {
   createPitchTunnel,
@@ -145,10 +146,10 @@ describe("RealtimeSessionStore", () => {
 
   it("reduces every real voice-drawing window before one coalesced UI publication", () => {
     const scheduler = new ManualScheduler();
-    const initial = createVoiceDrawState({
+    const initial = startVoiceDraw(createVoiceDrawState({
       voiceRange: { lowMidi: 48, highMidi: 60, baselineMidi: 48 },
       speedNormalizedPerSecond: 0.2,
-    });
+    }));
     const store = new RealtimeSessionStore(
       reduceVoiceDrawSession,
       initial,
@@ -217,7 +218,7 @@ describe("RealtimeSessionStore", () => {
     expect(listener.mock.calls.length - 2).toBeLessThanOrEqual(25);
   });
 
-  it("publishes exact checkpoint and completion observations without waiting for cadence", () => {
+  it("publishes exact checkpoint and nonterminal achievement observations without waiting for cadence", () => {
     const scheduler = new ManualScheduler();
     const store = new RealtimeSessionStore(
       reducePitchTunnel,
@@ -249,10 +250,15 @@ describe("RealtimeSessionStore", () => {
     store.observe({ type: "observation", observation: voicedObservation(65_536, 50.25) });
     const completingFrame = voicedObservation(66_496, 50.25);
     store.observe({ type: "observation", observation: completingFrame });
-    expect(store.getSnapshot().status).toBe("complete");
+    expect(store.getSnapshot().status).toBe("tracking");
+    expect(store.getSnapshot().achievementReached).toBe(true);
     expect(store.getSnapshot().lastAuthority?.endSample).toBe(completingFrame.endSample);
     expect(scheduler.callbacks).toHaveLength(0);
     expect(listener).toHaveBeenCalledTimes(2);
+
+    store.dispatch({ type: "finish" });
+    expect(store.getSnapshot().status).toBe("complete");
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("publishes exact discontinuity and epoch authority while steady pitch remains queued", () => {

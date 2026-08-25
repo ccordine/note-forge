@@ -71,14 +71,20 @@ function guidanceFor(state: Readonly<ResonanceSessionState>): Readonly<{
 }> {
   if (state.phase === "complete") {
     return {
-      title: "Goal captured",
-      detail: "Live pitch remains visible. Replay this chamber or generate the next one.",
+      title: "Chamber finished",
+      detail: "You ended this run. Replay it or generate the next chamber when you choose.",
     };
   }
   if (state.phase === "idle") {
     return {
       title: "Chamber ready",
-      detail: "Start once. Every following PCM window drives this same field until the goal is captured.",
+      detail: "Choose Start chamber. Every following PCM window drives this same field until you finish.",
+    };
+  }
+  if (state.game.status === "won") {
+    return {
+      title: "Goal captured · field still live",
+      detail: "Keep shaping the field for as long as you want, then choose Finish chamber.",
     };
   }
   const target = focusedResonator(state.game);
@@ -158,14 +164,20 @@ function ResonanceGameStats({ state }: { readonly state: Readonly<ResonanceSessi
   );
 }
 
-function ResonanceResultPanel({ result }: { readonly result: Readonly<ResonanceResult> | null }) {
+function ResonanceResultPanel({
+  result,
+  live,
+}: {
+  readonly result: Readonly<ResonanceResult> | null;
+  readonly live: boolean;
+}) {
   return (
-    <section className="resonance-result" aria-live="polite" hidden={result === null}>
+    <section className="resonance-result" aria-live="polite" hidden={result === null} data-live-achievement="resonance">
       {result && (
         <>
           <div className="resonance-result-mark">{result.grade}</div>
           <div>
-            <span>CHAMBER COMPLETE</span>
+            <span>{live ? "GOAL CAPTURED · FIELD STILL LIVE" : "CHAMBER FINISHED"}</span>
             <h2>{result.score} field-control score</h2>
             <p>{result.pathEfficiencyPercent.toFixed(0)}% path · {result.coherentEfficiencyPercent.toFixed(0)}% coherence · {result.tunedEfficiencyPercent.toFixed(0)}% tuned transfer · {result.collisionCount} contact episodes</p>
           </div>
@@ -205,7 +217,7 @@ export function Resonance(props: ArcadeGameProps) {
     },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
-  const completedOutcome = session.result
+  const completedOutcome = session.phase === "complete" && session.result
     ? outcomeFrom(
       session.result,
       { difficulty, curriculumStage },
@@ -234,11 +246,13 @@ export function Resonance(props: ArcadeGameProps) {
     : null;
   const coupled = resonatorIsCoupled(session.controller, target, targetActivation);
   const guidance = guidanceFor(session);
-  const primaryLabel = session.phase === "idle" ? "Start chamber" : "Restart chamber";
+  let primaryLabel = "Start chamber";
+  if (session.phase === "tracking") primaryLabel = "Finish chamber";
+  if (session.phase === "complete") primaryLabel = "Start chamber again";
   const holdStatus = coupled ? "holding" as const : "waiting" as const;
 
   return (
-    <div className="resonance-page">
+    <div className="resonance-page" data-live-lifetime="user-owned">
       <Panel className="resonance-header">
         <div>
           <Eyebrow>Resonance · continuous pitch physics</Eyebrow>
@@ -250,16 +264,17 @@ export function Resonance(props: ArcadeGameProps) {
             className="primary"
             onClick={() => {
               reference.abort();
-              if (session.phase === "idle") {
-                realtime.dispatch({ type: "install", chamberNumber: session.chamberNumber, generated: session.generated });
+              if (session.phase === "tracking") {
+                realtime.dispatch({ type: "finish" });
               } else {
-                realtime.dispatch({ type: "restart" });
+                realtime.dispatch({ type: "start" });
               }
             }}
           >
             <Icon name="arrow" size={17} /> {primaryLabel}
           </ActionButton>
           <ActionButton
+            disabled={session.phase === "tracking"}
             onClick={() => {
               reference.abort();
               const chamberNumber = session.chamberNumber + 1;
@@ -327,7 +342,10 @@ export function Resonance(props: ArcadeGameProps) {
         </aside>
       </div>
 
-      <ResonanceResultPanel result={session.result} />
+      <ResonanceResultPanel
+        result={session.phase === "tracking" ? session.achievement : session.result}
+        live={session.phase === "tracking"}
+      />
     </div>
   );
 }

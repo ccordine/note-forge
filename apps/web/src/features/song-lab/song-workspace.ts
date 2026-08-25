@@ -1,7 +1,7 @@
 export type SongWorkspaceStage = "configure" | "practice" | "review";
 export type PracticePass = "shadow" | "understand" | "mutate";
 export type SongMarkerKind = "breath" | "phrase";
-export type RecordingStatus = "idle" | "opening" | "active";
+export type RecordingStatus = "idle" | "opening" | "active" | "finalizing";
 
 export interface SongMarker {
   readonly time: number;
@@ -87,6 +87,8 @@ export type SongWorkspaceAction =
   | { readonly type: "marker-added"; readonly marker: SongMarker; readonly maximum: number }
   | { readonly type: "recording-starting" }
   | { readonly type: "recording-started" }
+  | { readonly type: "recording-degraded"; readonly message: string }
+  | { readonly type: "recording-finalizing" }
   | { readonly type: "recording-stopped" }
   | { readonly type: "recording-failed"; readonly message: string }
   | { readonly type: "take-added"; readonly take: VoiceTake; readonly maximum: number }
@@ -181,6 +183,14 @@ export function reduceSongWorkspace(
       return freezeState({ ...state, recordingStatus: "opening", recordError: "" });
     case "recording-started":
       return freezeState({ ...state, recordingStatus: "active" });
+    case "recording-degraded":
+      return freezeState({
+        ...state,
+        recordingStatus: "active",
+        recordError: action.message,
+      });
+    case "recording-finalizing":
+      return freezeState({ ...state, recordingStatus: "finalizing" });
     case "recording-stopped":
       return freezeState({ ...state, recordingStatus: "idle" });
     case "recording-failed":

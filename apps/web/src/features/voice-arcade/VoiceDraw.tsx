@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -134,11 +133,13 @@ function groupRenderedStrokes(segments: readonly VoiceDrawSegment[]): readonly R
 }
 
 function stateDescription(state: Readonly<VoiceDrawState>): string {
+  if (state.phase === "idle") return "Drawing is ready. Press Start drawing when you want the voice cursor to move.";
+  if (state.phase === "complete") return "Drawing is finished. Live pitch telemetry remains available without moving the cursor.";
   if (state.activeDirection !== null && state.activeMidi !== null) {
     return `${noteLabel(state.activeMidi)} moves ${state.activeDirection}.`;
   }
-  if (state.stopReason === "unmapped") return "Cursor stationary: the current note is outside this direction bank.";
-  if (state.stopReason === "uncertain") return "Cursor stationary: pitch evidence is uncertain.";
+  if (state.stationaryReason === "unmapped") return "Cursor stationary: the current note is outside this direction bank.";
+  if (state.stationaryReason === "uncertain") return "Cursor stationary: pitch evidence is uncertain.";
   return "Cursor stationary: silence or no voiced pitch.";
 }
 
@@ -161,12 +162,11 @@ export function VoiceDraw({
   );
   const drawState = realtime.state;
   const completedTraceSegmentsRef = useRef<readonly VoiceDrawSegment[] | null>(null);
-  const configurationKeyRef = useRef(`${difficulty}:${voiceRange.lowMidi}:${voiceRange.highMidi}:${voiceRange.baselineMidi}`);
 
   const input = useAudioInput({
     diagnostics: {
       flow: "voice-arcade",
-      phase: `draw-${mode}`,
+      phase: `draw-${mode}-${drawState.phase}`,
     },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
@@ -180,15 +180,16 @@ export function VoiceDraw({
     [drawState.segments],
   );
   const selectedTracePath = useMemo(() => tracePath(targetId), [targetId]);
-  const visibleTraceResult = traceResult?.segments === drawState.segments
+  const visibleTraceResult = drawState.phase === "complete"
+    && traceResult?.segments === drawState.segments
     ? traceResult.score
     : null;
   const liveCents = drawState.activeCentsFromNearest;
   const directionStatus = drawState.activeDirection !== null && drawState.activeMidi !== null
     ? `${noteLabel(drawState.activeMidi)} ${DIRECTION_GLYPHS[drawState.activeDirection]} · ${drawState.activeHeldSeconds.toFixed(2)} s`
-    : drawState.stopReason === "unmapped"
+    : drawState.stationaryReason === "unmapped"
       ? "Stationary · unmapped note"
-      : drawState.stopReason === "uncertain"
+      : drawState.stationaryReason === "uncertain"
         ? "Stationary · uncertain"
         : "Stationary · silence";
   let guideTitle = "Free canvas";
@@ -196,23 +197,12 @@ export function VoiceDraw({
   else if (mode === "puzzle") guideTitle = "Drawing prompt";
 
   const resetConfiguration = useCallback(() => {
-    realtime.dispatch({
-      type: "reset",
-      options: {
-        voiceRange,
-        speedNormalizedPerSecond: speedForDifficulty(difficulty),
-      },
-    });
+    // Changing a drawing option may clear that option's canvas/result, but it
+    // is not Start/Finish authority. Preserve the user-owned live phase.
+    realtime.dispatch({ type: "clean" });
     setTraceResult(null);
     completedTraceSegmentsRef.current = null;
-  }, [difficulty, realtime.dispatch, voiceRange]);
-
-  useEffect(() => {
-    const key = `${difficulty}:${voiceRange.lowMidi}:${voiceRange.highMidi}:${voiceRange.baselineMidi}`;
-    if (configurationKeyRef.current === key) return;
-    configurationKeyRef.current = key;
-    resetConfiguration();
-  }, [difficulty, resetConfiguration, voiceRange.baselineMidi, voiceRange.highMidi, voiceRange.lowMidi]);
+  }, [realtime.dispatch]);
 
   const configureStyle = useCallback((changes: Partial<VoiceDrawBrushStyle>) => {
     realtime.dispatch({ type: "configure", changes });
@@ -221,24 +211,18 @@ export function VoiceDraw({
   const chooseMode = useCallback((nextMode: VoiceDrawMode) => {
     if (nextMode === mode) return;
     setMode(nextMode);
-    realtime.dispatch({ type: "clean" });
-    setTraceResult(null);
-    completedTraceSegmentsRef.current = null;
-  }, [mode, realtime.dispatch]);
+    resetConfiguration();
+  }, [mode, resetConfiguration]);
 
   const chooseTraceTarget = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
     setTargetId(event.target.value as VoiceDrawTraceTargetId);
-    realtime.dispatch({ type: "clean" });
-    setTraceResult(null);
-    completedTraceSegmentsRef.current = null;
-  }, [realtime.dispatch]);
+    resetConfiguration();
+  }, [resetConfiguration]);
 
   const choosePuzzlePrompt = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
     setPuzzleId(event.target.value);
-    realtime.dispatch({ type: "clean" });
-    setTraceResult(null);
-    completedTraceSegmentsRef.current = null;
-  }, [realtime.dispatch]);
+    resetConfiguration();
+  }, [resetConfiguration]);
 
   const clearDrawing = useCallback(() => {
     realtime.dispatch({ type: "clear" });
@@ -256,11 +240,18 @@ export function VoiceDraw({
     completedTraceSegmentsRef.current = null;
   }, [realtime.dispatch]);
 
-  const finishTrace = useCallback(() => {
-    realtime.dispatch({ type: "finish-trace" });
+  const startDrawing = useCallback(() => {
+    realtime.dispatch({ type: "start" });
+    setTraceResult(null);
+    completedTraceSegmentsRef.current = null;
+  }, [realtime.dispatch]);
+
+  const finishDrawing = useCallback(() => {
+    realtime.dispatch({ type: "finish" });
     const current = realtime.getCurrent();
     if (
-      current.segments.length === 0
+      mode !== "trace"
+      || current.segments.length === 0
       || completedTraceSegmentsRef.current === current.segments
     ) return;
     completedTraceSegmentsRef.current = current.segments;
@@ -287,13 +278,22 @@ export function VoiceDraw({
         totalDistance: current.totalDistance,
       },
     });
-  }, [curriculumStage, difficulty, onComplete, realtime.dispatch, realtime.getCurrent, targetId]);
+  }, [curriculumStage, difficulty, mode, onComplete, realtime.dispatch, realtime.getCurrent, targetId]);
+  const drawingAction = drawState.phase === "drawing" ? finishDrawing : startDrawing;
+  let drawingActionLabel = "Start drawing";
+  if (drawState.phase === "drawing") {
+    drawingActionLabel = mode === "trace" ? "Finish trace" : "Finish drawing";
+  } else if (drawState.phase === "complete") {
+    drawingActionLabel = "Start drawing again";
+  }
 
   return (
     <section
       className="voice-draw"
       data-voice-draw
+      data-live-lifetime="user-owned"
       data-draw-mode={mode}
+      data-draw-phase={drawState.phase}
       data-input-state={input.state}
       data-end-sample={drawState.lastAuthority?.endSample ?? ""}
       data-capture-epoch={drawState.lastAuthority?.captureEpoch ?? ""}
@@ -305,6 +305,7 @@ export function VoiceDraw({
       data-cursor-x={drawState.cursor.x}
       data-cursor-y={drawState.cursor.y}
       data-segment-count={drawState.segments.length}
+      data-retired-segment-count={drawState.retiredSegmentCount}
       data-observed-frame-count={drawState.observedFrameCount}
     >
       <header className="voice-draw-header">
@@ -406,6 +407,13 @@ export function VoiceDraw({
           <section className="voice-draw-guide-card">
             <h2>{guideTitle}</h2>
             <p className="voice-draw-mode-brief">{DRAW_MODES.find((candidate) => candidate.id === mode)?.detail}</p>
+            <ActionButton
+              className="voice-draw-finish primary"
+              type="button"
+              onClick={drawingAction}
+            >
+              {drawingActionLabel}
+            </ActionButton>
             {mode === "trace" && (
               <>
                 <label>
@@ -414,7 +422,6 @@ export function VoiceDraw({
                     {VOICE_DRAW_TRACE_TARGETS.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
                   </select>
                 </label>
-                <ActionButton className="voice-draw-finish" type="button" disabled={drawState.segments.length === 0 || visibleTraceResult !== null} onClick={finishTrace}>{visibleTraceResult ? "Trace recorded" : "Finish trace"}</ActionButton>
                 {visibleTraceResult && (
                   <div className="voice-draw-score-card" aria-live="polite">
                     <strong>{visibleTraceResult.grade}</strong>

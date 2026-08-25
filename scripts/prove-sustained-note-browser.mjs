@@ -223,18 +223,40 @@ async function main() {
     assert(rangeLoopMounted.count === 1 && rangeLoopMounted.target === "C3",
       `Range Loop did not mount exactly one C3 tuner: ${JSON.stringify(rangeLoopMounted)}.`);
 
+    await delay(500);
+    const rangeLoopReady = await evaluate(session, `(() => ({
+      phase: document.querySelector('[data-range-loop-phase]')?.getAttribute('data-range-loop-phase') || null,
+      heldSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
+      detected: document.querySelector('[data-note-input]')?.getAttribute('data-detected-note') || null,
+    }))()`);
+    assert(rangeLoopReady.phase === "idle" && rangeLoopReady.heldSeconds === 0,
+      `Range Loop scored before its visible Start command: ${JSON.stringify(rangeLoopReady)}.`);
+    const rangeLoopStarted = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.includes('Start Range Loop'));
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(rangeLoopStarted, "Range Loop's explicit Start control was unavailable.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-range-loop-phase]')?.getAttribute('data-range-loop-phase') === 'tracking'",
+      "Range Loop entering tracking from its visible Start command",
+      5_000,
+    );
+
     await waitForBrowser(
       session,
       `(() => {
         const detected = document.querySelector('[data-note-input]')?.getAttribute('data-detected-note');
-        const hold = Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow'));
+        const hold = Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds'));
         return detected === 'C3' && hold >= 0.6 && hold < 2.2;
       })()`,
       "quiet C3 establishing sample-timed dwell before reference playback",
       25_000,
     );
     const referenceBefore = await evaluate(session, `(() => ({
-      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
       sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
     }))()`);
     const audioBeforeReference = await browserProofSnapshot(session);
@@ -246,7 +268,7 @@ async function main() {
     assert(referenceClicked, "Range Loop's real short-reference control was unavailable.");
     await delay(900);
     const referenceAfter = await evaluate(session, `(() => ({
-      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
       sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
       inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
     }))()`);
@@ -275,30 +297,71 @@ async function main() {
       session,
       `(() => {
         const target = document.querySelector('.nf-voice-target strong')?.textContent?.trim();
-        const hold = Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow'));
+        const hold = Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds'));
         const result = document.querySelector('.range-result-next b')?.textContent || '';
-        return target === 'C3' && hold === 3 && result.includes('C3 held for 3.00 seconds');
+        return target === 'C3' && hold >= 3 && result.includes('C3 earned');
       })()`,
-      "Range Loop crediting three seconds of quiet C3 sample time",
+      "Range Loop crossing three seconds without capping live quiet C3 sample time",
       8_000,
     );
     const rangeLoopResult = await evaluate(session, `(() => ({
       target: document.querySelector('.nf-voice-target strong')?.textContent?.trim() || null,
       detected: document.querySelector('[data-note-input]')?.getAttribute('data-detected-note') || null,
-      holdSeconds: Number(document.querySelector('.nf-voice-hold__track')?.getAttribute('aria-valuenow')),
+      holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
       result: document.querySelector('.range-result-next b')?.textContent?.trim() || null,
       inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
       noteInputCount: document.querySelectorAll('[data-note-input]').length,
       sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
     }))()`);
-    const rangeLoopProof = await browserProofSnapshot(session);
     assert(rangeLoopResult.target === "C3"
       && rangeLoopResult.detected === "C3"
-      && rangeLoopResult.holdSeconds === 3
+      && rangeLoopResult.holdSeconds >= 3
       && rangeLoopResult.inputState === "running"
       && rangeLoopResult.noteInputCount === 1
       && rangeLoopResult.sameTuner === true,
-    `Range Loop did not render the completed quiet C3 hold on the live stream: ${JSON.stringify(rangeLoopResult)}.`);
+    `Range Loop did not render the achieved quiet C3 hold on the live stream: ${JSON.stringify(rangeLoopResult)}.`);
+
+    await delay(500);
+    const uncappedRangeLoop = await evaluate(session, `(() => ({
+      holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+      inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
+    }))()`);
+    assert(uncappedRangeLoop.holdSeconds > rangeLoopResult.holdSeconds
+      && uncappedRangeLoop.sameTuner === true
+      && uncappedRangeLoop.inputState === "running",
+    `Range Loop capped or replaced the live dwell after achievement: ${JSON.stringify({ rangeLoopResult, uncappedRangeLoop })}.`);
+
+    const rangeLoopFinished = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.includes('Finish Range Loop'));
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(rangeLoopFinished, "Range Loop's explicit Finish control was unavailable.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-range-loop-phase]')?.getAttribute('data-range-loop-phase') === 'complete'",
+      "Range Loop honoring its visible Finish command",
+      5_000,
+    );
+    const finishBoundary = await evaluate(session, `(() => ({
+      heldSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+    }))()`);
+    const proofBeforeFinishedTelemetry = await browserProofSnapshot(session);
+    await delay(500);
+    const afterFinishBoundary = await evaluate(session, `(() => ({
+      heldSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
+      detected: document.querySelector('[data-note-input]')?.getAttribute('data-detected-note') || null,
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+    }))()`);
+    const rangeLoopProof = await browserProofSnapshot(session);
+    assert(afterFinishBoundary.heldSeconds === finishBoundary.heldSeconds
+      && afterFinishBoundary.detected === "C3"
+      && afterFinishBoundary.sameTuner === true
+      && rangeLoopProof.workletSampleMessages > proofBeforeFinishedTelemetry.workletSampleMessages,
+    `Range Loop Finish did not freeze only feature scoring while shared telemetry continued: ${JSON.stringify({ finishBoundary, afterFinishBoundary })}.`);
     assert(rangeLoopProof.getUserMediaCalls === sustainEndProof.getUserMediaCalls
       && rangeLoopProof.streams === sustainEndProof.streams
       && rangeLoopProof.tracks === sustainEndProof.tracks
@@ -425,7 +488,7 @@ async function main() {
       console.log(`  ${proof.label}: detector ${proof.seconds.toFixed(3)}s/${proof.frames} uninterrupted frames, max error ${proof.maximumCents.toFixed(2)}c, median ${proof.medianRmsDbfs.toFixed(1)} dBFS; UI ${rendered.seconds.toFixed(3)}s, hold ${rendered.maximumHeldSeconds.toFixed(3)}s`);
     }
     console.log(`  detector budget: max ${Math.max(...processingMs).toFixed(3)}ms < ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms hop`);
-    console.log(`  Range Loop: one stable tuner retained identity across wrong-note/silence/reference/success, one 0.5s reference oscillator produced no persistent replacement, and quiet C3 reached exactly ${rangeLoopResult.holdSeconds.toFixed(1)}s without a stream/worklet reset`);
+    console.log(`  Range Loop: idle evidence earned 0.00s until visible Start; one stable tuner retained identity across wrong-note/silence/reference/achievement; quiet C3 continued from ${rangeLoopResult.holdSeconds.toFixed(2)}s to ${uncappedRangeLoop.holdSeconds.toFixed(2)}s beyond the old threshold; visible Finish froze only feature dwell while PCM and live C3 telemetry continued`);
     console.log(`  requested sustain: ${SUSTAINED_NOTE_SECONDS.toFixed(1)}s per note; accepted uninterrupted minimum ${MINIMUM_CONTINUOUS_SECONDS.toFixed(1)}s`);
   } catch (error) {
     const context = [

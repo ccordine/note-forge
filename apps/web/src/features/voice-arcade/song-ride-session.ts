@@ -58,11 +58,13 @@ export type SongRidePhase =
   | "analyzing"
   | "ready"
   | "playing"
-  | "paused"
   | "result";
+
+export type SongPlaybackState = "stopped" | "playing" | "paused" | "ended";
 
 export interface SongRideSession {
   readonly phase: SongRidePhase;
+  readonly playbackState: SongPlaybackState;
   readonly track: LoadedSongTrack | null;
   readonly analysis: SongLaneAnalysis | null;
   readonly status: string;
@@ -80,14 +82,15 @@ export type SongRideAction =
   | Readonly<{ type: "analysis-ready"; track: LoadedSongTrack; analysis: SongLaneAnalysis; status: string }>
   | Readonly<{ type: "analysis-failed"; error: string }>
   | Readonly<{ type: "run-started" }>
-  | Readonly<{ type: "run-resumed" }>
-  | Readonly<{ type: "run-paused"; status: string }>
+  | Readonly<{ type: "playback-resumed" }>
+  | Readonly<{ type: "playback-paused"; status: string }>
   | Readonly<{
       type: "run-progress";
       currentTime: number;
       hud: SongHud;
       liveObservation: Readonly<PitchObservation> | null;
     }>
+  | Readonly<{ type: "track-completed"; result: SongRideResult; status: string }>
   | Readonly<{ type: "run-finished"; result: SongRideResult; status: string }>
   | Readonly<{ type: "ready-error"; error: string }>
   | Readonly<{ type: "session-error"; error: string }>
@@ -104,6 +107,7 @@ export const EMPTY_SONG_HUD: SongHud = Object.freeze({
 
 export const INITIAL_SONG_RIDE_SESSION: SongRideSession = Object.freeze({
   phase: "upload",
+  playbackState: "stopped",
   track: null,
   analysis: null,
   status: "Choose a local audio file to generate a playable pitch challenge.",
@@ -120,12 +124,20 @@ export function reduceSongRideSession(
 ): SongRideSession {
   switch (action.type) {
     case "analysis-started":
-      return { ...state, phase: "analyzing", status: action.status, error: "", result: null };
+      return {
+        ...state,
+        phase: "analyzing",
+        playbackState: "stopped",
+        status: action.status,
+        error: "",
+        result: null,
+      };
     case "analysis-status":
       return { ...state, status: action.status };
     case "analysis-ready":
       return {
         phase: "ready",
+        playbackState: "stopped",
         track: action.track,
         analysis: action.analysis,
         status: action.status,
@@ -139,6 +151,7 @@ export function reduceSongRideSession(
       return {
         ...state,
         phase: state.analysis ? "ready" : "upload",
+        playbackState: "stopped",
         status: "Nothing was uploaded; processing stayed in this browser tab.",
         error: action.error,
       };
@@ -146,6 +159,7 @@ export function reduceSongRideSession(
       return {
         ...state,
         phase: "playing",
+        playbackState: "playing",
         status: "Rail live. Meet each block at the playhead; silent gaps are breathing space.",
         error: "",
         currentTime: 0,
@@ -153,10 +167,10 @@ export function reduceSongRideSession(
         hud: EMPTY_SONG_HUD,
         result: null,
       };
-    case "run-resumed":
-      return { ...state, phase: "playing", status: "Rail live. Your voice is the controller.", error: "" };
-    case "run-paused":
-      return { ...state, phase: "paused", status: action.status };
+    case "playback-resumed":
+      return { ...state, playbackState: "playing", status: "Track playing. Your voice remains the live controller.", error: "" };
+    case "playback-paused":
+      return { ...state, playbackState: "paused", status: action.status };
     case "run-progress":
       return {
         ...state,
@@ -164,17 +178,27 @@ export function reduceSongRideSession(
         liveObservation: action.liveObservation,
         hud: action.hud,
       };
+    case "track-completed":
+      return {
+        ...state,
+        playbackState: "ended",
+        currentTime: action.result.playedSeconds,
+        hud: action.result,
+        result: action.result,
+        status: action.status,
+      };
     case "run-finished":
       return {
         ...state,
         phase: "result",
+        playbackState: "stopped",
         currentTime: action.result.playedSeconds,
         hud: action.result,
         result: action.result,
         status: action.status,
       };
     case "ready-error":
-      return { ...state, phase: "ready", error: action.error };
+      return { ...state, phase: "ready", playbackState: "stopped", error: action.error };
     case "session-error":
       return { ...state, error: action.error };
     case "clear-track":

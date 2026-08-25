@@ -19,9 +19,11 @@ export interface SongRideController {
   readonly loadFile: (file: File) => Promise<void>;
   readonly clearTrack: () => void;
   readonly start: () => Promise<void>;
-  readonly pause: () => void;
-  readonly resume: () => Promise<void>;
-  readonly finish: (completed: boolean) => void;
+  readonly replay: () => Promise<void>;
+  readonly pausePlayback: () => void;
+  readonly resumePlayback: () => Promise<void>;
+  readonly completeTrack: () => void;
+  readonly finish: () => void;
   readonly syncProgress: () => void;
 }
 
@@ -60,13 +62,8 @@ export function useSongRide({
   const input = useAudioInput({ onFrame: runtime.observe });
 
   useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") runtime.pauseHidden();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       runtime.dispose();
-      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [runtime]);
 
@@ -77,8 +74,10 @@ export function useSongRide({
     loadFile: runtime.loadFile,
     clearTrack: runtime.clearTrack,
     start: runtime.start,
-    pause: runtime.pause,
-    resume: runtime.resume,
+    replay: runtime.replay,
+    pausePlayback: runtime.pausePlayback,
+    resumePlayback: runtime.resumePlayback,
+    completeTrack: runtime.completeTrack,
     finish: runtime.finish,
     syncProgress: runtime.syncProgress,
   });

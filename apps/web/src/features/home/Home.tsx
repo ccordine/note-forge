@@ -119,7 +119,7 @@ export function Home() {
           <h1>HEAR IT.<br /><span>KNOW IT.</span><br />SING IT.</h1>
           <p>Forge one shared coordinate system between sound, body, name, and harmonic purpose.</p>
           <div className="hero-actions">
-            <RouteLink className="action-button primary" route={{ surface: "practice", activity: "pitch-match", mode: "cold" }}><Icon name="mic" size={18} /> Start cold attacks</RouteLink>
+            <RouteLink className="action-button primary" route={{ surface: "practice", activity: "pitch-match", mode: "cold" }}><Icon name="mic" size={18} /> Open cold attacks</RouteLink>
             <PlayButton label={`Hear ${noteLabel(selectedMidi)}`} onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(selectedMidi, centsOffset), timbre }), "Home reference tone")} />
           </div>
         </div>

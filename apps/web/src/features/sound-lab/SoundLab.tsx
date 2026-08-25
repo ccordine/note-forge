@@ -80,6 +80,7 @@ export function SoundLab() {
   const [droneState, setDroneState] = useState<"off" | "starting" | "on">("off");
   const [playbackError, setPlaybackError] = useState("");
   const drone = useRef(new Drone());
+  const droneLifetime = useRef(0);
 
   const scalePreset = SCALE_PRESETS[scaleId] ?? SCALE_PRESETS.major;
   const chordPreset = CHORD_PRESETS[chordQuality] ?? CHORD_PRESETS.major;
@@ -107,29 +108,40 @@ export function SoundLab() {
   };
 
   useEffect(() => {
-    if (!droneEnabled) {
+    const lifetime = ++droneLifetime.current;
+    return () => {
+      queueMicrotask(() => {
+        if (droneLifetime.current === lifetime) drone.current.stop();
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (droneEnabled) {
+      drone.current.update(continuousMidiToHz(48 + tonicPitchClass), timbre);
+    }
+  }, [droneEnabled, timbre, tonicPitchClass]);
+
+  const toggleDrone = () => {
+    if (droneEnabled) {
       drone.current.stop();
+      setDroneEnabled(false);
       setDroneState("off");
       return;
     }
-    let active = true;
+    setDroneEnabled(true);
     setDroneState("starting");
     setPlaybackError("");
-    drone.current.start(continuousMidiToHz(48 + tonicPitchClass), timbre)
-      .then(() => {
-        if (active) setDroneState("on");
+    void drone.current.start(continuousMidiToHz(48 + tonicPitchClass), timbre)
+      .then((started) => {
+        if (started) setDroneState("on");
       })
       .catch((error) => {
-        if (!active) return;
         setDroneEnabled(false);
         setDroneState("off");
         setPlaybackError(error instanceof Error ? error.message : "The tonic drone could not start.");
       });
-    return () => {
-      active = false;
-      drone.current.stop();
-    };
-  }, [droneEnabled, timbre, tonicPitchClass]);
+  };
 
   const setPitch = (slot: "first" | "second", midi: number, cents: number) => {
     const normalized = splitMidiPitch(midi + cents / 100);
@@ -164,9 +176,8 @@ export function SoundLab() {
     }
     playSafely(playFrequencies(frequencies, mode === "chord" ? "simultaneous" : playbackMode, { timbre, duration: 1.15 }), "Sound Lab playback");
   };
-  let droneActionLabel = "Tonic drone";
-  if (droneState === "starting") droneActionLabel = "Starting drone…";
-  else if (droneEnabled) droneActionLabel = "Stop drone";
+  let droneActionLabel = "Start drone";
+  if (droneState === "starting" || droneEnabled) droneActionLabel = "Stop drone";
   let playLabel = "Play note";
   if (mode === "dyad") playLabel = "Hear relationship";
   if (mode === "chord") playLabel = `Play ${pitchClassLabel(tonicPitchClass)} ${chordPreset.label}`;
@@ -181,7 +192,7 @@ export function SoundLab() {
     <div className="page sound-lab-page">
       <div className="lab-intro">
         <div><Eyebrow>Phenomenon before verdict</Eyebrow><h1>Place sound in context.</h1><p>Manipulate pitch continuously, then reveal what the relationship is doing—never whether it is “allowed.”</p></div>
-        <div className="intro-actions"><Switch label="Hide labels" checked={labelsHidden} onChange={setLabelsHidden} /><ActionButton className={droneEnabled ? "active coral" : ""} onClick={() => setDroneEnabled((enabled) => !enabled)}><span className="status-dot" /> {droneActionLabel}</ActionButton></div>
+        <div className="intro-actions"><Switch label="Hide labels" checked={labelsHidden} onChange={setLabelsHidden} /><ActionButton className={droneEnabled ? "active coral" : ""} onClick={toggleDrone}><span className="status-dot" /> {droneActionLabel}</ActionButton></div>
       </div>
 
       {playbackError && <div className="error-banner"><strong>Playback needs attention.</strong><span>{playbackError}</span></div>}

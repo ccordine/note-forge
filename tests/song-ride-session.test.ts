@@ -139,7 +139,7 @@ describe("Song Ride sample-coordinate scoring", () => {
 });
 
 describe("Song Ride workflow reducer", () => {
-  it("shows one current stage and preserves progress through pause/resume", () => {
+  it("keeps playback pause inside the still-live playing stage", () => {
     const track = { name: "test.wav", sizeBytes: 10, url: "blob:test" };
     const chart = analysis();
     const ready = reduceSongRideSession(INITIAL_SONG_RIDE_SESSION, {
@@ -155,9 +155,10 @@ describe("Song Ride workflow reducer", () => {
       liveObservation: null,
       hud: { ...playing.hud, score: 75 },
     });
-    const paused = reduceSongRideSession(progressed, { type: "run-paused", status: "paused" });
-    const resumed = reduceSongRideSession(paused, { type: "run-resumed" });
-    expect(resumed).toMatchObject({ phase: "playing", currentTime: 0.42 });
+    const paused = reduceSongRideSession(progressed, { type: "playback-paused", status: "paused" });
+    expect(paused).toMatchObject({ phase: "playing", playbackState: "paused", currentTime: 0.42 });
+    const resumed = reduceSongRideSession(paused, { type: "playback-resumed" });
+    expect(resumed).toMatchObject({ phase: "playing", playbackState: "playing", currentTime: 0.42 });
     expect(resumed.hud.score).toBe(75);
   });
 });

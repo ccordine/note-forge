@@ -43,7 +43,9 @@ function createLiveSongView(
   props: Pick<ArcadeGameProps, "difficulty" | "voiceRange">,
 ): LiveSongView {
   const { analysis, currentTime } = session;
-  const activeLane = analysis ? songLaneAtTime(analysis.lanes, currentTime) : null;
+  const activeLane = analysis && session.playbackState !== "ended"
+    ? songLaneAtTime(analysis.lanes, currentTime)
+    : null;
   const activeIndex = activeLane && analysis ? analysis.lanes.indexOf(activeLane) : -1;
   const nextLane = analysis
     ? activeIndex >= 0
@@ -113,7 +115,7 @@ function SongRideHud({ controller, onExit }: {
   readonly onExit: () => void;
 }) {
   const { session, input } = controller;
-  const running = session.phase === "playing" || session.phase === "paused";
+  const running = session.phase === "playing";
   return (
     <>
       <div className="arcade-game-hud song-ride-hud">
@@ -123,7 +125,7 @@ function SongRideHud({ controller, onExit }: {
         <div><span>IN LANE</span><strong>{session.hud.accuracyPercent.toFixed(0)}%</strong></div>
         <ActionButton
           className={running ? "coral" : ""}
-          onClick={running ? () => controller.finish(false) : onExit}
+          onClick={running ? controller.finish : onExit}
         >
           <Icon name={running ? "pause" : "arrow"} size={16} />
           {running ? "Stop & grade" : "Exit game"}
@@ -247,11 +249,29 @@ function PlayStage({ controller, view, feedback, voiceRange }: {
   readonly voiceRange: ArcadeGameProps["voiceRange"];
 }) {
   const { session } = controller;
-  const paused = session.phase === "paused";
+  const paused = session.playbackState === "paused";
+  const ended = session.playbackState === "ended";
   const voice = liveVoiceCopy(view, feedback);
   const nextLabel = upcomingLaneLabel(view, feedback);
+  let playbackLabel = "Pause track";
+  let playbackIcon: "pause" | "play" | "loop" = "pause";
+  let playbackAction: () => void = controller.pausePlayback;
+  if (paused) {
+    playbackLabel = "Continue track";
+    playbackIcon = "play";
+    playbackAction = () => { void controller.resumePlayback(); };
+  }
+  if (ended) {
+    playbackLabel = "Replay track";
+    playbackIcon = "loop";
+    playbackAction = () => { void controller.replay(); };
+  }
   return (
-    <div className={`song-ride-stage ${paused ? "paused" : ""}`}>
+    <div
+      className={`song-ride-stage playback-${session.playbackState}`}
+      data-live-lifetime="user-owned"
+      data-song-playback={session.playbackState}
+    >
       <div className="song-ride-readout">
         <div><span>NOW</span><strong>{view.activeLane ? noteLabel(view.activeLane.targetMidi) : "BREATHE"}</strong><small>{view.activeLane ? `±${view.activeLane.toleranceCents}¢ lane` : "next target incoming"}</small></div>
         <div className={view.voiceLocked ? "locked" : ""}><span>YOUR VOICE</span><strong>{voice.label}</strong><small>{voice.detail}</small></div>
@@ -279,10 +299,16 @@ function PlayStage({ controller, view, feedback, voiceRange }: {
         ><i />{feedback.showLiveNote && <b>{view.liveMidi === null ? "VOICE" : noteLabel(view.liveMidi)}</b>}</span>
       </div>
       <div className="song-transport">
-        <button type="button" onClick={paused ? () => { void controller.resume(); } : controller.pause}><Icon name={paused ? "play" : "pause"} size={18} /> {paused ? "Resume" : "Pause"}</button>
+        <button type="button" onClick={playbackAction}><Icon name={playbackIcon} size={18} /> {playbackLabel}</button>
         <div><span>{formatSongTime(session.currentTime)}</span><div className="song-progress-track" role="progressbar" aria-label="Song progress" aria-valuemin={0} aria-valuemax={Math.max(1, session.analysis?.durationSeconds ?? 1)} aria-valuenow={session.currentTime}><i style={{ width: `${view.progressPercent}%` }} /></div><span>−{formatSongTime(view.remainingSeconds)}</span></div>
-        <button type="button" className="coral" onClick={() => controller.finish(false)}>Stop & grade</button>
+        <button type="button" className="coral" onClick={controller.finish}>Stop & grade</button>
       </div>
+      {ended && session.result && (
+        <div className="song-ride-status song-track-achievement" role="status">
+          <span><b>Track complete · {session.result.grade}</b> {session.result.score}/100. Replay is separate; your live voice control is still active.</span>
+          <b>{session.result.hitLanes}/{session.result.attemptedLanes} lanes earned</b>
+        </div>
+      )}
       <div className="song-ride-status" role="status" aria-live="polite"><span>{session.status}</span><b>{view.activeLane ? `${session.hud.hitLanes}/${session.hud.attemptedLanes} lanes earned` : "Breathe · stay ready"}</b></div>
       {session.error && <div className="error-banner" role="alert">{session.error}</div>}
     </div>
@@ -311,7 +337,7 @@ function ResultStage({ controller, onExit }: {
         <div className="arcade-result-actions">
           <ActionButton onClick={onExit}>Back to cabinet</ActionButton>
           <ActionButton onClick={controller.clearTrack}>Choose another track</ActionButton>
-          <ActionButton className="primary" onClick={() => { void controller.start(); }}>Replay rail <Icon name="arrow" size={16} /></ActionButton>
+          <ActionButton className="primary" onClick={() => { void controller.start(); }}>Start rail again <Icon name="arrow" size={16} /></ActionButton>
         </div>
       </div>
     </Panel>
@@ -330,13 +356,13 @@ export function SongRide(props: ArcadeGameProps) {
         src={track?.url}
         preload="auto"
         onTimeUpdate={controller.syncProgress}
-        onEnded={() => controller.finish(true)}
+        onEnded={controller.completeTrack}
       />
       <SongRideHud controller={controller} onExit={props.onExit} />
       {phase === "upload" && <UploadStage controller={controller} stageLabel={curriculum.stageLabel} stageSummary={curriculum.stageSummary} voiceRange={props.voiceRange} />}
       {phase === "analyzing" && <AnalysisStage status={status} />}
       {phase === "ready" && <ReadyStage controller={controller} feedback={curriculum.feedback} />}
-      {(phase === "playing" || phase === "paused") && <PlayStage controller={controller} view={view} feedback={curriculum.feedback} voiceRange={props.voiceRange} />}
+      {phase === "playing" && <PlayStage controller={controller} view={view} feedback={curriculum.feedback} voiceRange={props.voiceRange} />}
       {phase === "result" && <ResultStage controller={controller} onExit={props.onExit} />}
     </section>
   );

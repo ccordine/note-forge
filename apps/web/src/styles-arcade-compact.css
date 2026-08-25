@@ -94,16 +94,6 @@
     display: none;
   }
 
-  .pong-pause-overlay > div {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .pong-pause-overlay .action-button {
-    width: 100%;
-  }
-
   .song-file-meta {
     grid-template-columns: auto minmax(0, 1fr);
   }

@@ -139,6 +139,27 @@ async function readyRuntime(runtime: SongRideRuntime): Promise<FakeAudioElement>
 }
 
 describe("external Song Ride runtime", () => {
+  it("enters the user-started live run before browser media readiness resolves", async () => {
+    const { runtime } = createRuntime();
+    await runtime.loadFile(new File([new Uint8Array([1])], "voice.wav", { type: "audio/wav" }));
+    let releasePlayback: () => void = () => {};
+    const playbackReady = new Promise<void>((resolve) => {
+      releasePlayback = resolve;
+    });
+    const audio = new FakeAudioElement();
+    audio.play.mockImplementation(async () => {
+      await playbackReady;
+      audio.paused = false;
+    });
+    runtime.attachAudio(audio as unknown as HTMLAudioElement);
+
+    const pendingStart = runtime.start();
+    expect(runtime.getCurrent()).toMatchObject({ phase: "playing", playbackState: "playing" });
+    releasePlayback();
+    await pendingStart;
+    runtime.dispose();
+  });
+
   it("reduces all PCM observations immediately and coalesces React presentation", async () => {
     const { presentation, runtime } = createRuntime();
     const audio = await readyRuntime(runtime);
@@ -218,8 +239,8 @@ describe("external Song Ride runtime", () => {
       audio.currentTime = index * 0.02;
       runtime.observe(observation(index));
     }
-    runtime.finish(false);
-    runtime.finish(false);
+    runtime.finish();
+    runtime.finish();
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
       mode: "song",
@@ -228,5 +249,75 @@ describe("external Song Ride runtime", () => {
     runtime.dispose();
     expect(audio.pause).toHaveBeenCalled();
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:voice.wav");
+  });
+
+  it("keeps live telemetry advancing after track completion until the user explicitly stops", async () => {
+    const { onComplete, runtime } = createRuntime();
+    const audio = await readyRuntime(runtime);
+    for (let index = 0; index < 51; index += 1) {
+      audio.currentTime = index * 0.02;
+      runtime.observe(observation(index));
+    }
+    audio.currentTime = ANALYSIS.durationSeconds;
+    audio.paused = true;
+    runtime.completeTrack();
+    const completed = runtime.getCurrent();
+    expect(completed).toMatchObject({
+      phase: "playing",
+      playbackState: "ended",
+      currentTime: 1,
+    });
+    expect(completed.result).not.toBeNull();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    runtime.observe(observation(51, null));
+    runtime.observe(observation(52));
+    const stillLive = runtime.getCurrent();
+    expect(stillLive).toMatchObject({ phase: "playing", playbackState: "ended" });
+    expect(stillLive.liveObservation?.endSample).toBe(observation(52).endSample);
+    expect(stillLive.result).toBe(completed.result);
+    runtime.completeTrack();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    runtime.finish();
+    expect(runtime.getCurrent().phase).toBe("result");
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
+
+  it("keeps the user-owned vocal surface live while track playback is explicitly paused", async () => {
+    const { runtime } = createRuntime();
+    const audio = await readyRuntime(runtime);
+    audio.currentTime = 0.4;
+    runtime.observe(observation(0));
+    runtime.pausePlayback();
+    expect(runtime.getCurrent()).toMatchObject({ phase: "playing", playbackState: "paused" });
+
+    runtime.observe(observation(1));
+    expect(runtime.getCurrent()).toMatchObject({
+      phase: "playing",
+      playbackState: "paused",
+      currentTime: 0.4,
+    });
+    expect(runtime.getCurrent().liveObservation?.endSample).toBe(observation(1).endSample);
+    runtime.dispose();
+  });
+
+  it("keeps telemetry live when the browser pauses media without a feature state transition", async () => {
+    const { runtime } = createRuntime();
+    const audio = await readyRuntime(runtime);
+    audio.currentTime = 0.24;
+    runtime.observe(observation(0));
+    audio.paused = true;
+
+    runtime.observe(observation(1));
+    runtime.observe(observation(2, null));
+    expect(runtime.getCurrent()).toMatchObject({
+      phase: "playing",
+      playbackState: "playing",
+      currentTime: 0.24,
+    });
+    expect(runtime.getCurrent().liveObservation?.endSample).toBe(observation(2).endSample);
+    runtime.dispose();
   });
 });

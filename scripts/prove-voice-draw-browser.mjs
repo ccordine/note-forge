@@ -613,6 +613,7 @@ async function main() {
           const snapshot = {
             at: performance.now(),
             inputState: root.getAttribute('data-input-state'),
+            drawPhase: root.getAttribute('data-draw-phase'),
             endSample: numberAttribute(root, 'data-end-sample'),
             captureEpoch: numberAttribute(root, 'data-capture-epoch'),
             continuityEpoch: numberAttribute(root, 'data-continuity-epoch'),
@@ -641,6 +642,7 @@ async function main() {
           attributes: true,
           attributeFilter: [
             'data-input-state',
+            'data-draw-phase',
             'data-end-sample',
             'data-capture-epoch',
             'data-continuity-epoch',
@@ -694,6 +696,18 @@ async function main() {
       "Voice Draw's running shared input",
       8_000,
     );
+    const startClicked = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('[data-voice-draw] button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Start drawing');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(startClicked, "Voice Draw did not expose a user-owned Start drawing control.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-voice-draw]')?.getAttribute('data-draw-phase') === 'drawing'",
+      "Voice Draw's explicitly started drawing phase",
+    );
 
     await waitForBrowser(
       session,
@@ -718,6 +732,48 @@ async function main() {
       "C3 up, D3 right, E3 down, and F-sharp3 left followed by silence",
       12_000,
     );
+    const beforeFinish = await evaluate(session, `(() => {
+      const root = document.querySelector('[data-voice-draw]');
+      return {
+        cursorX: Number(root?.getAttribute('data-cursor-x')),
+        cursorY: Number(root?.getAttribute('data-cursor-y')),
+        segmentCount: Number(root?.getAttribute('data-segment-count')),
+        observedFrameCount: Number(root?.getAttribute('data-observed-frame-count')),
+      };
+    })()`);
+    const finishClicked = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('[data-voice-draw] button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Finish drawing');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert(finishClicked, "Voice Draw did not expose a user-owned Finish drawing control.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-voice-draw]')?.getAttribute('data-draw-phase') === 'complete'",
+      "Voice Draw's explicitly finished phase",
+    );
+    await waitForBrowser(
+      session,
+      `Number(document.querySelector('[data-voice-draw]')?.getAttribute('data-observed-frame-count'))
+        > ${beforeFinish.observedFrameCount + 4}`,
+      "continued authoritative observations after explicit Finish",
+    );
+    const afterFinish = await evaluate(session, `(() => {
+      const root = document.querySelector('[data-voice-draw]');
+      return {
+        cursorX: Number(root?.getAttribute('data-cursor-x')),
+        cursorY: Number(root?.getAttribute('data-cursor-y')),
+        segmentCount: Number(root?.getAttribute('data-segment-count')),
+        observedFrameCount: Number(root?.getAttribute('data-observed-frame-count')),
+      };
+    })()`);
+    assert(afterFinish.observedFrameCount > beforeFinish.observedFrameCount,
+      "Voice Draw stopped consuming telemetry after explicit Finish.");
+    assert(afterFinish.cursorX === beforeFinish.cursorX
+      && afterFinish.cursorY === beforeFinish.cursorY
+      && afterFinish.segmentCount === beforeFinish.segmentCount,
+    `Voice Draw mutated the finished artifact after explicit Finish: ${JSON.stringify({ beforeFinish, afterFinish })}`);
     // Let production's one-second diagnostic batch timer flush the final
     // voiced evidence while the generated microphone remains in its long tail.
     await delay(1_100);

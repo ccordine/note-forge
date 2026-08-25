@@ -5,7 +5,6 @@ import { scoreSustainedNote, type NoteTarget, type PitchFrame } from "../src";
 const target: NoteTarget = {
   midi: 60,
   centsOffset: 0,
-  durationMs: 1_000,
   timbre: "sine",
   amplitude: 0.5,
 };

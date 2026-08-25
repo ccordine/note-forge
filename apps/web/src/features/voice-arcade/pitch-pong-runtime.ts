@@ -92,18 +92,6 @@ export class PitchPongRuntime {
     this.store.dispatch({ type: "cancel" });
   };
 
-  readonly pause = (message = "Match paused. Your paddle and ball are frozen."): void => {
-    if (this.store.getCurrent().phase !== "playing") return;
-    this.abortActive();
-    this.store.dispatch({ type: "pause", message });
-  };
-
-  readonly resume = (): void => {
-    if (this.store.getCurrent().phase !== "paused") return;
-    this.replaceScope();
-    this.store.dispatch({ type: "resume" });
-  };
-
   readonly finish = (): void => {
     this.abortActive();
     this.store.dispatch({

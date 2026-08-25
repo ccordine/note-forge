@@ -91,6 +91,8 @@ export const PITCH_TUNNEL_INSTRUMENTATION_SOURCE = `(() => {
       at: performance.now(),
       laneId: knownLanes.get(lane),
       workflowStep: lane.getAttribute('data-workflow-step'),
+      traceLifetime: lane.getAttribute('data-trace-lifetime'),
+      achievementReached: lane.getAttribute('data-achievement-reached') === 'true',
       inputState: lane.getAttribute('data-input-state'),
       observationKind: lane.getAttribute('data-observation-kind') || null,
       observedFrameCount: numberAttribute(lane, 'data-observed-frame-count'),
@@ -134,7 +136,8 @@ export const PITCH_TUNNEL_INSTRUMENTATION_SOURCE = `(() => {
     characterData: true,
     attributes: true,
     attributeFilter: [
-      'class', 'data-workflow-step', 'data-input-state', 'data-observation-kind',
+      'class', 'data-workflow-step', 'data-trace-lifetime',
+      'data-achievement-reached', 'data-input-state', 'data-observation-kind',
       'data-observed-frame-count', 'data-sample-rate', 'data-start-sample',
       'data-end-sample', 'data-processed-sample-count', 'data-worklet-process-count',
       'data-capture-epoch', 'data-continuity-epoch', 'data-graph-generation',

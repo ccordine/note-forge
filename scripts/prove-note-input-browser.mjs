@@ -198,7 +198,7 @@ async function main() {
       button?.click();
       return Boolean(button && !button.disabled);
     })()`);
-    assert(attemptClicked, "Pitch Mirror's real Begin 4 s trace control was not clickable.");
+    assert(attemptClicked, "Pitch Mirror's real Start trace control was not clickable.");
     await waitForBrowser(
       session,
       "document.querySelector('.mirror-stage.active .stage-status > span')?.textContent?.trim() === 'MEASURING LIVE STREAM'",
@@ -210,15 +210,26 @@ async function main() {
       "detector frames during the Pitch Mirror trace",
     );
     const promptStartProof = await browserProofSnapshot(session);
-    const promptSamples = await collectRenderedNotes(session, 800);
+    const promptSamples = await collectRenderedNotes(session, 5_200);
     const promptEndProof = await browserProofSnapshot(session);
+    const liveTraceAfterFormerCutoff = await evaluate(session, `(() => {
+      const stage = document.querySelector('[data-workflow-step="tracking"][data-trace-lifetime="user-owned"]');
+      const elapsed = Number.parseFloat(stage?.querySelector('.stage-status > b')?.textContent || 'NaN');
+      return { active: Boolean(stage), elapsed };
+    })()`);
+    assert(liveTraceAfterFormerCutoff.active && liveTraceAfterFormerCutoff.elapsed > 4,
+      `Pitch Mirror stopped at its former cutoff: ${JSON.stringify(liveTraceAfterFormerCutoff)}.`);
     const promptContinuity = renderedFrameContinuity(promptSamples, "Pitch Mirror live trace");
     assert(promptContinuity.lastCount - promptContinuity.firstCount >= 6,
       `Pitch Mirror's trace frame count advanced only ${promptContinuity.firstCount}->${promptContinuity.lastCount}.`);
     assert(promptContinuity.lastTime > promptContinuity.firstTime,
       `Pitch Mirror's detector time did not advance during the trace (${promptContinuity.firstTime}->${promptContinuity.lastTime}).`);
-    assert(promptSamples.every((sample) => sample.note && sample.inputState === "running"),
-      `A rendered note disappeared during Pitch Mirror's live trace: ${JSON.stringify(promptSamples)}`);
+    assert(promptSamples.every((sample) => sample.inputState === "running"),
+      `Voice input stopped during Pitch Mirror's live trace: ${JSON.stringify(promptSamples)}`);
+    assert(promptSamples.some((sample) => sample.note === null),
+      "The extended live trace never exercised ordinary unvoiced evidence.");
+    assert(promptSamples.some((sample) => sample.note !== null),
+      "The extended live trace never exercised voiced evidence.");
     assert(promptSamples.some((sample) => sample.note === noteLabel(LOWEST_SUPPORTED_MIDI)),
       `Pitch Mirror's live trace never rendered the opening ${noteLabel(LOWEST_SUPPORTED_MIDI)}.`);
     const finishClicked = await evaluate(session, `(() => {
@@ -620,10 +631,14 @@ async function main() {
       }
     }
 
-    const renderedBefore = uniqueExpectedRenderedNotes(beforeNavigationSamples);
+    // The former four-second cutoff proof now covers part of the same pitch
+    // sweep. Treat the entire continuously mounted Pitch Mirror interval as
+    // one UI observation sequence.
+    const pitchMirrorSamples = [...promptSamples, ...beforeNavigationSamples];
+    const renderedBefore = uniqueExpectedRenderedNotes(pitchMirrorSamples);
     const renderedAfter = uniqueExpectedRenderedNotes(afterNavigationSamples);
     const renderedAll = new Set([...renderedBefore, ...renderedAfter]);
-    const transitionsBefore = expectedRenderedTransitions(beforeNavigationSamples);
+    const transitionsBefore = expectedRenderedTransitions(pitchMirrorSamples);
     const transitionsAfter = expectedRenderedTransitions(afterNavigationSamples);
     const missingRenderedRange = EXPECTED_NOTES
       .map(({ label }) => label)

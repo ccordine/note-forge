@@ -432,53 +432,6 @@
   pointer-events: none;
 }
 
-.pong-pause-overlay {
-  position: absolute;
-  z-index: 10;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  color: var(--text);
-  background: rgba(7, 10, 8, .87);
-  backdrop-filter: blur(8px);
-  text-align: center;
-}
-
-.pong-pause-overlay strong {
-  color: var(--blue);
-  font: 30px var(--mono);
-}
-
-.pong-pause-overlay h2 {
-  margin: 10px 0 5px;
-  font-size: 34px;
-}
-
-.pong-pause-overlay p {
-  max-width: 520px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.6;
-}
-
-.pong-pause-overlay > div {
-  display: flex;
-  gap: 8px;
-  margin-top: 19px;
-}
-
-.pong-pause-overlay span {
-  max-width: 480px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.6;
-}
-
 .pong-live-footer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(240px, .55fr);
@@ -538,4 +491,3 @@
   background: linear-gradient(90deg, var(--blue), var(--lime));
   box-shadow: 0 0 12px rgba(99, 215, 255, .48);
 }
-

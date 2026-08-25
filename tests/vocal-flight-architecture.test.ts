@@ -37,6 +37,15 @@ describe("Vocal Flight architecture boundary", () => {
     expect(canvas).not.toMatch(/\badvanceVocalFlight\b|\breduceVocalFlight\b|\bonFrame\b/u);
   });
 
+  it("keeps course achievement separate from the whole-session Finish score", () => {
+    const session = readFileSync(join(FEATURE_ROOT, "vocal-flight-session.ts"), "utf8");
+    expect(session).toContain("readonly achievementResult: VocalFlightScoreResult | null");
+    expect(session).toContain("const scoring = advanceVocalFlightScore(state.scoring");
+    expect(session).toContain("result: summarizeVocalFlightScore(scoring)");
+    expect(session).not.toContain("achievementAlreadyLatched");
+    expect(session).not.toContain("result: state.result ??");
+  });
+
   it("is one registry entry whose removal requires no shell or route branch", () => {
     const registry = readFileSync(
       join(process.cwd(), "apps/web/src/features/voice-arcade/arcade-registry.tsx"),

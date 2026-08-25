@@ -11,6 +11,9 @@ import {
   scorePatternObservation,
 } from "../apps/web/src/features/voice-arcade/pattern-challenge-controller";
 
+const WINDOW_SIZE = 4_096;
+const HOP_SIZE = 960;
+
 function step(overrides: Partial<ChallengeStep> = {}): ChallengeStep {
   return {
     id: "ddr-1",
@@ -166,4 +169,61 @@ describe("Pattern Challenge sample-authoritative scoring", () => {
     game = reducePatternChallenge(game, { type: "next-round" });
     expect(game).toMatchObject({ phase: "setup", round: 2, session: null, result: null });
   });
+
+  it("recycles target progression and whole-session scoring for an hour until explicit Stop", () => {
+    let game = createPatternChallengeController({
+      difficulty: "easy",
+      lowMidi: 60,
+      highMidi: 60,
+      baselineMidi: 60,
+    });
+    game = reducePatternChallenge(game, { type: "select-mode", mode: "ddr" });
+    game = reducePatternChallenge(game, { type: "prepare", seed: "user-owned-lifetime" });
+    game = reducePatternChallenge(game, { type: "begin" });
+
+    for (let index = 0; index <= 180_000; index += 1) {
+      game = reducePatternChallenge(game, {
+        type: "observation",
+        observation: observation(WINDOW_SIZE + HOP_SIZE * index, {
+          voiced: false,
+          midiFloat: null,
+          observationKind: "unvoiced",
+          reason: "no-periodic-candidate",
+        }),
+      });
+    }
+
+    expect(game).toMatchObject({ phase: "playing", result: null });
+    expect(game.session?.status).not.toBe("complete");
+    expect(game.achievementCount).toBeGreaterThan(100);
+    expect(game.scoreAggregate.totalSteps).toBe(game.achievementCount * 6);
+    expect(game.scoreAggregate.missedSteps).toBe(game.scoreAggregate.totalSteps);
+    expect(game.elapsedSeconds).toBeCloseTo(3_600, 8);
+    const elapsedAfterPhrase = game.elapsedSeconds;
+    const aggregateAfterHour = game.scoreAggregate;
+    game = reducePatternChallenge(game, {
+      type: "observation",
+      observation: observation(WINDOW_SIZE + HOP_SIZE * 180_001, { midiFloat: 60 }),
+    });
+    expect(game.phase).toBe("playing");
+    expect(game.liveMidi).toBe(60);
+    expect(game.elapsedSeconds).toBeGreaterThan(elapsedAfterPhrase);
+    expect(game.clock?.lastEndSample).toBe(WINDOW_SIZE + HOP_SIZE * 180_001);
+    expect(game.result).toBeNull();
+    expect(game.scoreAggregate).toBe(aggregateAfterHour);
+    const stillLive = game;
+    expect(reducePatternChallenge(game, { type: "change-loadout" })).toBe(stillLive);
+    expect(reducePatternChallenge(game, { type: "next-round" })).toBe(stillLive);
+
+    game = reducePatternChallenge(game, { type: "stop" });
+    expect(game.phase).toBe("result");
+    expect(game.result?.totalSteps).toBeGreaterThan(game.achievementCount * 6);
+    expect(game.result?.missedSteps).toBeGreaterThanOrEqual(game.scoreAggregate.missedSteps);
+    const completed = game;
+    game = reducePatternChallenge(game, {
+      type: "observation",
+      observation: observation(WINDOW_SIZE + HOP_SIZE * 180_002, { midiFloat: 60 }),
+    });
+    expect(game).toBe(completed);
+  }, 15_000);
 });

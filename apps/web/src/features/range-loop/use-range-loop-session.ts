@@ -43,6 +43,9 @@ import {
   hydrateRangeLoopState,
   markRangeLoopTargetPassed,
   rangeLoopTargetSequence,
+  createRangeLoopLiveState,
+  reduceRangeLoopLiveState,
+  type RangeLoopLivePhase,
   type RangeLoopOrder,
   type StoredRangeLoopState,
 } from "./range-loop-session";
@@ -56,6 +59,7 @@ export interface RangeLoopSession {
   readonly family: RangeFamilyDefinition;
   readonly noteSet: FamilyNoteSet;
   readonly order: RangeLoopOrder;
+  readonly phase: RangeLoopLivePhase;
   readonly holdSeconds: number;
   readonly toleranceCents: number;
   readonly targetMidi: number;
@@ -63,7 +67,7 @@ export interface RangeLoopSession {
   readonly passedMidis: ReadonlySet<number>;
   readonly followingMidi: number;
   readonly dwell: RangeDwellState;
-  readonly completed: boolean;
+  readonly achievementReached: boolean;
   readonly holding: boolean;
   readonly hydrated: boolean;
   readonly persistenceState: RangeLoopPersistenceState;
@@ -71,6 +75,8 @@ export interface RangeLoopSession {
   readonly profileLowMidi: number | null;
   readonly profileHighMidi: number | null;
   readonly hearReference: () => void;
+  readonly start: () => void;
+  readonly finish: () => void;
   readonly resetHold: () => void;
   readonly advanceTarget: () => void;
   readonly changeFamily: (familyId: RangeFamilyId) => void;
@@ -114,6 +120,10 @@ export function useRangeLoopSession(): RangeLoopSession {
     persistenceRef.current = new SettingsPersistence([STORAGE_KEY, VOCAL_PROFILE_STORAGE_KEY]);
   }
   const persistence = persistenceRef.current;
+  const liveSession = useRealtimeSession(
+    reduceRangeLoopLiveState,
+    createRangeLoopLiveState,
+  );
   const dwellSession = useRealtimeSession(
     reduceRangeDwell,
     () => createDwell(DEFAULT_BASELINE_MIDI, initialToleranceCents, 3),
@@ -125,14 +135,21 @@ export function useRangeLoopSession(): RangeLoopSession {
   const input = useAudioInput({
     diagnostics: {
       flow: "range-loop",
-      phase: dwell.status === "complete" ? "complete" : "tracking",
+      phase: liveSession.state.phase,
       targetMidi,
       toleranceCents: activeToleranceCents,
       stableMs: dwell.heldSeconds * 1_000,
       requiredHoldMs: holdSeconds * 1_000,
       resetReason: null,
     },
-    onFrame: (observation) => dwellSession.observe({ type: "observation", observation }),
+    // Persistence chooses the authoritative target/configuration. Observations
+    // received before that one-time hydration remain available in the shared
+    // AudioKernel, but must not accrue against a disposable default dwell.
+    onFrame: (observation) => {
+      if (hydrated && liveSession.getCurrent().phase === "tracking") {
+        dwellSession.observe({ type: "observation", observation });
+      }
+    },
   });
 
   const replaceDwell = useCallback((next: RangeDwellState) => {
@@ -218,14 +235,14 @@ export function useRangeLoopSession(): RangeLoopSession {
   ]);
 
   useEffect(() => {
-    if (dwell.status !== "complete") return;
+    if (!dwell.achievementReached) return;
     setProgress((current) => markRangeLoopTargetPassed(
       current,
       activeFamilyId,
       noteSet,
       targetMidi,
     ));
-  }, [activeFamilyId, dwell.status, noteSet, targetMidi]);
+  }, [activeFamilyId, dwell.achievementReached, noteSet, targetMidi]);
 
   const sequence = useMemo(
     () => rangeLoopTargetSequence(activeFamilyId, noteSet, order),
@@ -239,8 +256,8 @@ export function useRangeLoopSession(): RangeLoopSession {
   const targetIndex = Math.max(0, sequence.indexOf(targetMidi));
   const followingMidi = sequence[(targetIndex + 1) % sequence.length] ?? targetMidi;
   const profileBounds = usableRangeBounds(profile);
-  const completed = dwell.status === "complete";
-  const holding = input.state === "running" && dwell.currentInTolerance === true && !completed;
+  const achievementReached = dwell.achievementReached;
+  const holding = input.state === "running" && dwell.currentInTolerance === true;
 
   const hearReference = () => {
     effects.playReference(`Reference ${noteLabel(targetMidi)}`, () => playTone({
@@ -251,6 +268,16 @@ export function useRangeLoopSession(): RangeLoopSession {
       release: 0.08,
       timbre,
     }));
+  };
+
+  const start = () => {
+    replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds));
+    liveSession.dispatch({ type: "start" });
+  };
+
+  const finish = () => {
+    effects.abort();
+    liveSession.dispatch({ type: "finish" });
   };
 
   const changeFamily = (nextFamily: RangeFamilyId) => {
@@ -319,6 +346,7 @@ export function useRangeLoopSession(): RangeLoopSession {
     family,
     noteSet,
     order,
+    phase: liveSession.state.phase,
     holdSeconds,
     toleranceCents: activeToleranceCents,
     targetMidi,
@@ -326,7 +354,7 @@ export function useRangeLoopSession(): RangeLoopSession {
     passedMidis,
     followingMidi,
     dwell,
-    completed,
+    achievementReached,
     holding,
     hydrated,
     persistenceState,
@@ -334,6 +362,8 @@ export function useRangeLoopSession(): RangeLoopSession {
     profileLowMidi: profileBounds.lowMidi,
     profileHighMidi: profileBounds.highMidi,
     hearReference,
+    start,
+    finish,
     resetHold: () => replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds)),
     advanceTarget,
     changeFamily,

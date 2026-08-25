@@ -76,6 +76,7 @@ export class SongRideRuntime {
   private audio: HTMLAudioElement | null = null;
   private objectUrl: string | null = null;
   private activeScope: AbortController | null = null;
+  private outcomeReported = false;
   private disposed = false;
 
   constructor(
@@ -106,16 +107,21 @@ export class SongRideRuntime {
     if (this.disposed) return;
     const session = this.store.getCurrent();
     const audio = this.audio;
-    if (session.phase !== "playing" || session.analysis === null || audio === null || audio.paused) return;
-    const currentTime = Math.min(audio.currentTime, session.analysis.durationSeconds);
-    const lane = songLaneAtTime(session.analysis.lanes, currentTime);
-    observeSongLane(this.scoreRuntime, lane, observation);
-    settleSongThrough(this.scoreRuntime, session.analysis, currentTime);
+    if (session.phase !== "playing" || session.analysis === null || audio === null) return;
+    const playbackAdvancing = session.playbackState === "playing" && !audio.paused;
+    const currentTime = playbackAdvancing
+      ? Math.min(audio.currentTime, session.analysis.durationSeconds)
+      : session.currentTime;
+    const lane = playbackAdvancing ? songLaneAtTime(session.analysis.lanes, currentTime) : null;
+    if (playbackAdvancing) {
+      observeSongLane(this.scoreRuntime, lane, observation);
+      settleSongThrough(this.scoreRuntime, session.analysis, currentTime);
+    }
     this.store.observe({
       type: "run-progress",
       currentTime,
       liveObservation: observation,
-      hud: songHud(this.scoreRuntime, lane),
+      hud: playbackAdvancing ? songHud(this.scoreRuntime, lane) : session.hud,
     });
   };
 
@@ -124,7 +130,11 @@ export class SongRideRuntime {
     if (this.disposed) return;
     const session = this.store.getCurrent();
     const audio = this.audio;
-    if (session.phase !== "playing" || session.analysis === null || audio === null) return;
+    if (session.phase !== "playing"
+      || session.playbackState !== "playing"
+      || session.analysis === null
+      || audio === null
+      || audio.paused) return;
     const currentTime = Math.min(audio.currentTime, session.analysis.durationSeconds);
     settleSongThrough(this.scoreRuntime, session.analysis, currentTime);
     this.store.observe({
@@ -200,51 +210,35 @@ export class SongRideRuntime {
 
   readonly start = async (): Promise<void> => {
     const session = this.store.getCurrent();
-    const audio = this.audio;
-    if (this.disposed || session.analysis === null || session.track === null || audio === null) return;
-    if (session.phase === "playing" || session.phase === "analyzing") return;
-    const signal = this.replaceScope();
-    this.resetScore();
-    audio.pause();
-    audio.currentTime = 0;
-    try {
-      await audio.play();
-      if (signal.aborted || this.disposed) {
-        audio.pause();
-        return;
-      }
-      this.store.dispatch({ type: "run-started" });
-    } catch (error) {
-      if (signal.aborted || this.disposed) return;
-      this.store.dispatch({
-        type: "ready-error",
-        error: error instanceof Error ? error.message : "Playback could not start.",
-      });
-    }
+    if (session.phase !== "ready" && session.phase !== "result") return;
+    await this.playFromBeginning();
   };
 
-  readonly pause = (): void => {
-    if (this.store.getCurrent().phase !== "playing") return;
-    this.abortActive();
-    this.audio?.pause();
-    this.scoreRuntime.authority = null;
-    this.store.dispatch({ type: "run-paused", status: "Paused. Your score and position are preserved." });
+  readonly replay = async (): Promise<void> => {
+    const session = this.store.getCurrent();
+    if (session.phase !== "playing" || session.playbackState !== "ended") return;
+    await this.playFromBeginning();
   };
 
-  readonly pauseHidden = (): void => {
-    if (this.store.getCurrent().phase !== "playing") return;
+  readonly pausePlayback = (): void => {
+    const session = this.store.getCurrent();
+    if (session.phase !== "playing" || session.playbackState !== "playing") return;
     this.abortActive();
     this.audio?.pause();
     this.scoreRuntime.authority = null;
     this.store.dispatch({
-      type: "run-paused",
-      status: "Playback paused while the page was hidden. Continuous input remains app-owned.",
+      type: "playback-paused",
+      status: "Track paused. Live voice telemetry remains active until you stop.",
     });
   };
 
-  readonly resume = async (): Promise<void> => {
+  readonly resumePlayback = async (): Promise<void> => {
     const audio = this.audio;
-    if (this.disposed || this.store.getCurrent().phase !== "paused" || audio === null) return;
+    const session = this.store.getCurrent();
+    if (this.disposed
+      || session.phase !== "playing"
+      || session.playbackState !== "paused"
+      || audio === null) return;
     const signal = this.replaceScope();
     this.scoreRuntime.authority = null;
     try {
@@ -253,31 +247,94 @@ export class SongRideRuntime {
         audio.pause();
         return;
       }
-      this.store.dispatch({ type: "run-resumed" });
+      this.store.dispatch({ type: "playback-resumed" });
       this.syncProgress();
     } catch (error) {
       if (signal.aborted || this.disposed) return;
       this.store.dispatch({
-        type: "run-paused",
-        status: error instanceof Error ? error.message : "Playback could not resume.",
+        type: "playback-paused",
+        status: error instanceof Error ? error.message : "Track playback could not continue.",
       });
     }
   };
 
-  readonly finish = (completed: boolean): void => {
+  readonly completeTrack = (): void => {
     const session = this.store.getCurrent();
-    if (this.disposed || session.analysis === null || session.phase === "result") return;
+    if (this.disposed
+      || session.phase !== "playing"
+      || session.playbackState === "ended"
+      || session.analysis === null) return;
+    this.scoreRuntime.authority = null;
+    const result = finishSongRide(
+      this.scoreRuntime,
+      session.analysis,
+      session.analysis.durationSeconds,
+      true,
+    );
+    this.store.dispatch({
+      type: "track-completed",
+      result,
+      status: `${result.hitLanes} of ${result.attemptedLanes} target lanes earned. The live rail remains active until you stop.`,
+    });
+    this.reportOutcome(result, session.analysis);
+  };
+
+  readonly finish = (): void => {
+    const session = this.store.getCurrent();
+    if (this.disposed || session.analysis === null || session.phase !== "playing") return;
     this.abortActive();
     this.audio?.pause();
-    const playedSeconds = completed
-      ? session.analysis.durationSeconds
-      : Math.max(0, Math.min(this.audio?.currentTime ?? session.currentTime, session.analysis.durationSeconds));
-    const result = finishSongRide(this.scoreRuntime, session.analysis, playedSeconds, completed);
+    const playedSeconds = Math.max(
+      0,
+      Math.min(this.audio?.currentTime ?? session.currentTime, session.analysis.durationSeconds),
+    );
+    const completed = session.playbackState === "ended"
+      || playedSeconds >= session.analysis.durationSeconds;
+    const result = completed && session.result !== null
+      ? session.result
+      : finishSongRide(this.scoreRuntime, session.analysis, playedSeconds, completed);
     this.store.dispatch({
       type: "run-finished",
       result,
       status: stoppedStatus(completed, result.hitLanes, result.attemptedLanes, result.playedSeconds),
     });
+    this.reportOutcome(result, session.analysis);
+  };
+
+  private async playFromBeginning(): Promise<void> {
+    const session = this.store.getCurrent();
+    const audio = this.audio;
+    if (this.disposed || session.analysis === null || session.track === null || audio === null) return;
+    const signal = this.replaceScope();
+    this.resetScore();
+    this.outcomeReported = false;
+    audio.pause();
+    audio.currentTime = 0;
+    // The visible Start/Replay command owns the run transition synchronously.
+    // Browser media permission/readiness may affect playback, never whether the
+    // user's live vocal session has started.
+    this.store.dispatch({ type: "run-started" });
+    try {
+      await audio.play();
+      if (signal.aborted || this.disposed) {
+        audio.pause();
+        return;
+      }
+    } catch (error) {
+      if (signal.aborted || this.disposed) return;
+      this.store.dispatch({
+        type: "playback-paused",
+        status: error instanceof Error ? error.message : "Playback could not start. The live rail remains under your Stop control.",
+      });
+    }
+  }
+
+  private reportOutcome(
+    result: Readonly<ReturnType<typeof finishSongRide>>,
+    analysis: Readonly<NonNullable<SongRideSession["analysis"]>>,
+  ): void {
+    if (this.outcomeReported) return;
+    this.outcomeReported = true;
     this.onComplete({
       mode: "song",
       curriculumStage: this.spec.curriculumStage,
@@ -291,13 +348,13 @@ export class SongRideRuntime {
       details: {
         completionPercent: result.completionPercent,
         voicedCoveragePercent: result.voicedCoveragePercent,
-        targetLanes: session.analysis.lanes.length,
+        targetLanes: analysis.lanes.length,
         attemptedLanes: result.attemptedLanes,
         hitLanes: result.hitLanes,
-        transposeSemitones: session.analysis.transposeSemitones,
+        transposeSemitones: analysis.transposeSemitones,
       },
     });
-  };
+  }
 
   dispose(): void {
     if (this.disposed) return;

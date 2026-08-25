@@ -97,11 +97,12 @@ function trackingSession() {
     highMidi: 55,
     baselineMidi: TARGET_MIDI,
   });
-  return reduceResonanceSession(idle, {
+  const installed = reduceResonanceSession(idle, {
     type: "install",
     chamberNumber: 1,
     generated: GENERATED,
   });
+  return reduceResonanceSession(installed, { type: "start" });
 }
 
 describe("Resonance PCM-to-session integration (not browser proof)", () => {

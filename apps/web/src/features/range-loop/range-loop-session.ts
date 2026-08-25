@@ -17,6 +17,37 @@ import {
 } from "./profile";
 
 export type RangeLoopOrder = "ascending" | "descending";
+export type RangeLoopLivePhase = "idle" | "tracking" | "complete";
+
+export interface RangeLoopLiveState {
+  readonly phase: RangeLoopLivePhase;
+}
+
+export type RangeLoopLiveAction =
+  | Readonly<{ type: "start" }>
+  | Readonly<{ type: "finish" }>;
+
+/** A restored target is configuration, never authority to begin scoring. */
+export function createRangeLoopLiveState(): RangeLoopLiveState {
+  return Object.freeze({ phase: "idle" });
+}
+
+/** Only the two visible lifetime controls can cross a live-session boundary. */
+export function reduceRangeLoopLiveState(
+  state: Readonly<RangeLoopLiveState>,
+  action: Readonly<RangeLoopLiveAction>,
+): RangeLoopLiveState {
+  switch (action.type) {
+    case "start":
+      return state.phase === "tracking"
+        ? state as RangeLoopLiveState
+        : Object.freeze({ phase: "tracking" });
+    case "finish":
+      return state.phase === "tracking"
+        ? Object.freeze({ phase: "complete" })
+        : state as RangeLoopLiveState;
+  }
+}
 
 export interface StoredRangeLoopState {
   readonly activeFamilyId?: unknown;

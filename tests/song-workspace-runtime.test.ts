@@ -10,8 +10,10 @@ import {
   type SongPlaybackRequest,
   type SongWorkspaceEnvironment,
 } from "../apps/web/src/features/song-lab/song-workspace-runtime";
-
-type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
+import type {
+  LocalRecordingChunkSession,
+  LocalRecordingChunkStore,
+} from "../apps/web/src/audio/local-recording-store";
 
 interface Deferred<Value> {
   readonly promise: Promise<Value>;
@@ -61,10 +63,51 @@ class FakeRecorder {
   }
 
   emitData(value: string): void {
+    this.emitBlob(new Blob([value], { type: this.mimeType }));
+  }
+
+  emitBlob(data: Blob): void {
     this.ondataavailable?.call(this as unknown as MediaRecorder, {
-      data: new Blob([value], { type: this.mimeType }),
+      data,
     } as BlobEvent);
   }
+}
+
+class FakeRecordingChunkSession implements LocalRecordingChunkSession {
+  readonly chunks: Blob[] = [];
+  discarded = false;
+  finalized = false;
+
+  constructor(private readonly appendFailure: Error | null = null) {}
+
+  readonly append = async (chunk: Blob): Promise<void> => {
+    if (this.appendFailure) throw this.appendFailure;
+    this.chunks.push(chunk);
+  };
+
+  readonly finalize = async (mimeType: string): Promise<Blob> => {
+    this.finalized = true;
+    const blob = new Blob(this.chunks, { type: mimeType });
+    this.chunks.length = 0;
+    return blob;
+  };
+
+  readonly discard = async (): Promise<void> => {
+    this.discarded = true;
+    this.chunks.length = 0;
+  };
+}
+
+class FakeRecordingChunkStore implements LocalRecordingChunkStore {
+  readonly sessions: FakeRecordingChunkSession[] = [];
+
+  constructor(private readonly appendFailure: Error | null = null) {}
+
+  readonly create = async (): Promise<LocalRecordingChunkSession> => {
+    const session = new FakeRecordingChunkSession(this.appendFailure);
+    this.sessions.push(session);
+    return session;
+  };
 }
 
 function audioElement(playResult: Promise<void> = Promise.resolve()): HTMLAudioElement {
@@ -83,22 +126,14 @@ function playback(element: HTMLAudioElement | null = null): SongPlaybackRequest 
 function createHarness(overrides: Partial<SongWorkspaceEnvironment> = {}) {
   let state: SongWorkspaceState = INITIAL_SONG_WORKSPACE;
   const actions: SongWorkspaceAction[] = [];
-  const callbacks = new Map<TimerHandle, () => void>();
   const revoked: string[] = [];
-  let timerSequence = 0;
   let urlSequence = 0;
+  const defaultRecordingStore = new FakeRecordingChunkStore();
   const environment: SongWorkspaceEnvironment = {
     decodeAudio: async () => decodedAudio(),
     createObjectURL: () => `blob:managed-${++urlSequence}`,
     revokeObjectURL: (url) => revoked.push(url),
-    schedule: (callback) => {
-      const handle = ++timerSequence as unknown as TimerHandle;
-      callbacks.set(handle, callback);
-      return handle;
-    },
-    cancelSchedule: (handle) => {
-      callbacks.delete(handle);
-    },
+    recordingStore: defaultRecordingStore,
     createId: () => `take-${urlSequence}`,
     now: () => new Date("2026-08-24T12:00:00.000Z"),
     ...overrides,
@@ -111,7 +146,7 @@ function createHarness(overrides: Partial<SongWorkspaceEnvironment> = {}) {
   return {
     runtime,
     actions,
-    callbacks,
+    recordingStore: environment.recordingStore,
     revoked,
     state: () => state,
   };
@@ -159,18 +194,21 @@ describe("SongWorkspaceRuntime", () => {
     expect(harness.actions.some((action) => action.type === "song-loaded")).toBe(false);
   });
 
-  it("stops and detaches an active recorder synchronously on route unmount", () => {
+  it("stops, detaches, and discards durable chunks on explicit route leave", async () => {
     const harness = createHarness();
     const recorder = new FakeRecorder();
-    harness.runtime.startRecording({
+    await harness.runtime.startRecording({
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
       takes: [],
     });
+    recorder.emitData("temporary voice data");
+    await vi.waitFor(() => expect(
+      (harness.recordingStore as FakeRecordingChunkStore).sessions[0]?.chunks,
+    ).toHaveLength(1));
     const staleStop = recorder.onstop;
 
-    expect(harness.callbacks.size).toBe(1);
     expect(harness.runtime.recordingActive).toBe(true);
     harness.runtime.dispose();
 
@@ -178,34 +216,77 @@ describe("SongWorkspaceRuntime", () => {
     expect(recorder.ondataavailable).toBeNull();
     expect(recorder.onstop).toBeNull();
     expect(recorder.onerror).toBeNull();
-    expect(harness.callbacks.size).toBe(0);
     expect(harness.runtime.recordingActive).toBe(false);
+    await vi.waitFor(() => expect(
+      (harness.recordingStore as FakeRecordingChunkStore).sessions[0]?.discarded,
+    ).toBe(true));
     staleStop?.call(recorder as unknown as MediaRecorder, new Event("late-stop"));
     expect(harness.actions.some((action) => action.type === "take-added")).toBe(false);
   });
 
-  it("uses one bounded timer and discards a take that reaches the local limit", () => {
+  it("keeps recording indefinitely until the user explicitly presses Stop", async () => {
     const harness = createHarness();
     const recorder = new FakeRecorder();
-    harness.runtime.startRecording({
+    await harness.runtime.startRecording({
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
       takes: [],
     });
-    expect(harness.callbacks.size).toBe(1);
+    for (let index = 0; index < 400; index += 1) recorder.emitData(`chunk-${index}`);
+    await vi.waitFor(() => expect(
+      (harness.recordingStore as FakeRecordingChunkStore).sessions[0]?.chunks,
+    ).toHaveLength(400));
 
-    const limit = [...harness.callbacks.values()][0]!;
-    limit();
-
-    expect(recorder.stopCalls).toBe(1);
-    expect(harness.callbacks.size).toBe(0);
-    expect(harness.state().recordingStatus).toBe("idle");
-    expect(harness.state().recordError).toMatch(/recording limit/i);
+    expect(recorder.stopCalls).toBe(0);
+    expect(harness.state().recordingStatus).toBe("active");
+    expect(harness.state().recordError).toBe("");
     expect(harness.state().takes).toHaveLength(0);
+
+    harness.runtime.stopRecording();
+    expect(recorder.stopCalls).toBe(1);
+    await vi.waitFor(() => expect(harness.state().takes).toHaveLength(1));
+    expect(harness.state().recordingStatus).toBe("idle");
+    expect((harness.recordingStore as FakeRecordingChunkStore).sessions[0]?.finalized).toBe(true);
   });
 
-  it("tears down a recorder that partially activates before start throws", () => {
+  it("reports durable-storage failure without stealing the user's Stop authority", async () => {
+    const recordingStore = new FakeRecordingChunkStore(new DOMException(
+      "Local recording quota exhausted.",
+      "QuotaExceededError",
+    ));
+    const harness = createHarness({ recordingStore });
+    const recorder = new FakeRecorder();
+    await harness.runtime.startRecording({
+      ...playback(),
+      inputRunning: true,
+      createRecorder: () => recorder as unknown as MediaRecorder,
+      takes: [],
+    });
+
+    recorder.emitData("cannot persist");
+    await vi.waitFor(() => expect(harness.state().recordError).toContain(
+      "Local recording quota exhausted",
+    ));
+
+    expect(recorder.stopCalls).toBe(0);
+    expect(harness.runtime.recordingActive).toBe(true);
+    expect(harness.state().recordingStatus).toBe("active");
+    expect(harness.state().recordError).toContain("remains live until you press Stop");
+    expect(harness.state().takes).toHaveLength(0);
+    expect(recordingStore.sessions[0]?.discarded).toBe(false);
+
+    recorder.emitData("also discarded without growing memory");
+    await Promise.resolve();
+    expect(recorder.stopCalls).toBe(0);
+
+    harness.runtime.stopRecording();
+    expect(recorder.stopCalls).toBe(1);
+    await vi.waitFor(() => expect(harness.state().recordingStatus).toBe("idle"));
+    expect(recordingStore.sessions[0]?.discarded).toBe(true);
+  });
+
+  it("tears down a recorder that partially activates before start throws", async () => {
     const harness = createHarness();
     const recorder = new FakeRecorder();
     recorder.start = () => {
@@ -214,7 +295,7 @@ describe("SongWorkspaceRuntime", () => {
       throw new Error("encoder initialization failed");
     };
 
-    harness.runtime.startRecording({
+    await harness.runtime.startRecording({
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
@@ -237,7 +318,7 @@ describe("SongWorkspaceRuntime", () => {
     const firstUrl = harness.state().audioUrl!;
 
     const recorder = new FakeRecorder();
-    harness.runtime.startRecording({
+    await harness.runtime.startRecording({
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
@@ -245,6 +326,7 @@ describe("SongWorkspaceRuntime", () => {
     });
     recorder.emitData("voice data");
     harness.runtime.stopRecording();
+    await vi.waitFor(() => expect(harness.state().takes).toHaveLength(1));
     const takeUrl = harness.state().takes[0]!.url;
     harness.runtime.clearTakes(harness.state().takes);
     expect(harness.revoked).toEqual([takeUrl]);

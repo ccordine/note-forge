@@ -132,7 +132,7 @@ export function VocalFlightLoadout({
       <footer>
         <ActionButton data-flight-action="exit" onClick={onExit}>Exit game</ActionButton>
         <ActionButton data-flight-action="recalibrate" onClick={onRecalibrate}>Recalibrate</ActionButton>
-        <ActionButton data-flight-action="start-flight" className="primary" disabled={!launchable} onClick={onLaunch}>Launch flight</ActionButton>
+        <ActionButton data-flight-action="start-flight" className="primary" disabled={!launchable} onClick={onLaunch}>Start flight</ActionButton>
       </footer>
     </section>
   );

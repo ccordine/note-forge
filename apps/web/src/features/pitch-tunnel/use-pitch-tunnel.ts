@@ -29,6 +29,7 @@ export const PITCH_TUNNEL_PRESENTATION_POLICY = Object.freeze({
   ) => (
     previous.currentObservationKind !== next.currentObservationKind
     || previous.status !== next.status
+    || previous.achievementReached !== next.achievementReached
     || previous.checkpoint?.index !== next.checkpoint?.index
     || authorityChanged(previous, next)
     || (action.type === "observation" && action.observation.discontinuity)
@@ -40,6 +41,7 @@ export interface PitchTunnelSession {
   readonly state: PitchTunnelState;
   readonly metrics: Readonly<PitchTunnelMetrics>;
   readonly anchorCurrentPitch: () => void;
+  readonly finish: () => void;
   readonly reset: () => void;
 }
 
@@ -74,6 +76,7 @@ export function usePitchTunnel(): PitchTunnelSession {
     state,
     metrics: pitchTunnelMetrics(state),
     anchorCurrentPitch: () => realtime.dispatch({ type: "start" }),
+    finish: () => realtime.dispatch({ type: "finish" }),
     reset: () => realtime.dispatch({ type: "reset" }),
   };
 }

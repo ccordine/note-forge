@@ -301,7 +301,7 @@ describe("Resonance fixed-step room physics", () => {
     expect(result.state.elapsedSeconds).toBeCloseTo(0.2, 12);
   });
 
-  it("detects a win when the complete ball enters the goal and then freezes", () => {
+  it("latches a win while deterministic field physics continues until the session ends", () => {
     const shortLevel: ResonanceLevelDefinition = {
       ...BASE_LEVEL,
       id: "goal-proof",
@@ -318,9 +318,12 @@ describe("Resonance fixed-step room physics", () => {
     }
     expect(state.status).toBe("won");
     expect(wonThisAdvance).toBe(true);
-    const frozen = advanceResonanceGame(state, voice(64), 0.2);
-    expect(frozen.state).toBe(state);
-    expect(frozen.simulatedSteps).toBe(0);
+    const continued = advanceResonanceGame(state, voice(64), 0.2);
+    expect(continued.state.status).toBe("won");
+    expect(continued.state.fixedStepCount).toBeGreaterThan(state.fixedStepCount);
+    expect(continued.state.elapsedSeconds).toBeGreaterThan(state.elapsedSeconds);
+    expect(continued.simulatedSteps).toBeGreaterThan(0);
+    expect(continued.wonThisAdvance).toBe(false);
   });
 });
 

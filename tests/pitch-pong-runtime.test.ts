@@ -119,10 +119,10 @@ async function enterPlaying(runtime: PitchPongRuntime, delay: ManualDelayClock):
   expect(runtime.getCurrent().phase).toBe("playing");
 }
 
-function createRuntime(onComplete = vi.fn()) {
+function createRuntime(onComplete = vi.fn(), spec = SPEC) {
   const presentation = new ManualPresentationScheduler();
   const delay = new ManualDelayClock();
-  const runtime = new PitchPongRuntime(SPEC, onComplete, {
+  const runtime = new PitchPongRuntime(spec, onComplete, {
     maximumPresentationHz: 30,
     presentationScheduler: presentation,
     delayClock: delay,
@@ -190,24 +190,39 @@ describe("sample-authoritative Pitch Pong runtime", () => {
     runtime.dispose();
   });
 
-  it("breaks sample authority across pause/resume and ignores offscreen observations", async () => {
-    const { delay, runtime } = createRuntime();
+  it("keeps the live court and authoritative observations running after a winning score", async () => {
+    const endlessSpec = Object.freeze({
+      ...SPEC,
+      pongConfig: Object.freeze({ ...SPEC.pongConfig, winningScore: 1 }),
+    });
+    const { delay, runtime } = createRuntime(vi.fn(), endlessSpec);
     await enterPlaying(runtime, delay);
-    runtime.observe(pitchObservation(0));
-    runtime.observe(pitchObservation(1));
-    const beforePause = runtime.getCurrent();
+    let index = 0;
+    while (runtime.getCurrent().achievementCount === 0 && index < 2_000) {
+      runtime.observe(pitchObservation(index));
+      index += 1;
+    }
+    const won = runtime.getCurrent();
+    expect(won).toMatchObject({
+      phase: "playing",
+      achievementCount: 1,
+      game: { status: "playing", playerScore: 0, opponentScore: 0 },
+    });
+    expect(won.latestAchievement).not.toBeNull();
+    expect(won.result).toBeNull();
 
-    runtime.pause();
-    runtime.observe(pitchObservation(2));
-    expect(runtime.getCurrent().stats.observedFrames).toBe(beforePause.stats.observedFrames);
-    expect(runtime.getCurrent().game.elapsedSeconds).toBe(beforePause.game.elapsedSeconds);
+    const observationsAtWin = won.stats.observedFrames;
+    const elapsedAtWin = won.stats.activeSampleSeconds;
+    for (let offset = 0; offset < 51; offset += 1) {
+      runtime.observe(pitchObservation(index + offset));
+    }
+    expect(runtime.getCurrent()).toMatchObject({ phase: "playing", achievementCount: 1 });
+    expect(runtime.getCurrent().stats.observedFrames).toBe(observationsAtWin + 51);
+    expect(runtime.getCurrent().stats.activeSampleSeconds - elapsedAtWin).toBeCloseTo(1.02, 12);
+    expect(runtime.getCurrent().game.elapsedSeconds).toBeGreaterThan(0);
 
-    runtime.resume();
-    runtime.observe(pitchObservation(3));
-    expect(runtime.getCurrent().game.elapsedSeconds).toBe(beforePause.game.elapsedSeconds);
-    runtime.observe(pitchObservation(4));
-    expect(runtime.getCurrent().game.elapsedSeconds - beforePause.game.elapsedSeconds)
-      .toBeCloseTo(0.02, 12);
+    runtime.finish();
+    expect(runtime.getCurrent()).toMatchObject({ phase: "result", achievementCount: 1 });
     runtime.dispose();
   });
 

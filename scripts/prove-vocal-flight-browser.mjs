@@ -335,11 +335,11 @@ async function main() {
       && /CENTER RETURNS\s*3/u.test(calibrated.summary),
     `The real calibration did not establish the asymmetric two-axis surface: ${JSON.stringify(calibrated)}`);
     await clickVisible(session, ".vocal-flight-mode-grid button", "Free Flight");
-    await clickVisible(session, ".vocal-flight-loadout footer .primary", "Launch flight");
+    await clickVisible(session, '[data-flight-action="start-flight"]', "Start flight");
     await waitForBrowser(
       session,
       "document.querySelector('[data-vocal-flight]')?.getAttribute('data-phase') === 'flying'",
-      "Free Flight launch",
+      "Free Flight explicit Start",
       3_000,
     );
     const flightLayouts = await proveResponsiveState(session, "flying");
@@ -378,6 +378,54 @@ async function main() {
     const derived = assertDerivedSignals(detectorFrames);
     const authority = assertExactAuthority(preRoute.native, preRoute.feature, detectorFrames);
     const controls = assertControlBehavior(preRoute.feature.publications, detectorFrames);
+
+    const beforeExplicitFinish = await evaluate(session, `(() => {
+      const root = document.querySelector('[data-vocal-flight]');
+      return {
+        phase: root?.getAttribute('data-phase') || null,
+        observedFrames: Number(root?.getAttribute('data-observed-frames')),
+        simulatedFrames: Number(root?.getAttribute('data-simulated-frames')),
+        elapsedSeconds: Number(root?.getAttribute('data-flight-elapsed-seconds')),
+        distance: Number(root?.getAttribute('data-flight-distance')),
+        native: window.__noteforgeNoteInputProof.snapshot(),
+      };
+    })()`);
+    await clickVisible(session, '[data-flight-action="finish-flight"]', "Finish flight");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-vocal-flight]')?.getAttribute('data-phase') === 'complete'",
+      "Vocal Flight explicit Finish",
+      3_000,
+    );
+    const finishBoundary = await evaluate(session, `(() => {
+      const root = document.querySelector('[data-vocal-flight]');
+      return {
+        observedFrames: Number(root?.getAttribute('data-observed-frames')),
+        simulatedFrames: Number(root?.getAttribute('data-simulated-frames')),
+        elapsedSeconds: Number(root?.getAttribute('data-flight-elapsed-seconds')),
+        distance: Number(root?.getAttribute('data-flight-distance')),
+      };
+    })()`);
+    await delay(500);
+    const afterExplicitFinish = await evaluate(session, `(() => {
+      const root = document.querySelector('[data-vocal-flight]');
+      return {
+        phase: root?.getAttribute('data-phase') || null,
+        observedFrames: Number(root?.getAttribute('data-observed-frames')),
+        simulatedFrames: Number(root?.getAttribute('data-simulated-frames')),
+        elapsedSeconds: Number(root?.getAttribute('data-flight-elapsed-seconds')),
+        distance: Number(root?.getAttribute('data-flight-distance')),
+        native: window.__noteforgeNoteInputProof.snapshot(),
+      };
+    })()`);
+    assert(beforeExplicitFinish.phase === "flying"
+      && afterExplicitFinish.phase === "complete"
+      && afterExplicitFinish.observedFrames > finishBoundary.observedFrames
+      && afterExplicitFinish.native.workletSampleMessages > beforeExplicitFinish.native.workletSampleMessages
+      && afterExplicitFinish.simulatedFrames === finishBoundary.simulatedFrames
+      && afterExplicitFinish.elapsedSeconds === finishBoundary.elapsedSeconds
+      && afterExplicitFinish.distance === finishBoundary.distance,
+    `Explicit Finish did not freeze only flight simulation while shared telemetry continued: ${JSON.stringify({ beforeExplicitFinish, finishBoundary, afterExplicitFinish })}`);
 
     await clickVisible(session, ".arcade-game-topbar a", "Back to cabinet");
     await waitForBrowser(session, "location.hash === '#/arcade' && !document.querySelector('[data-vocal-flight]')", "cabinet exit");
@@ -418,6 +466,12 @@ async function main() {
         trackStops: afterRoute.native.trackStopCalls.length,
       },
       derived, authority, controls,
+      explicitLifetime: {
+        observedFramesBeforeFinish: beforeExplicitFinish.observedFrames,
+        observedFramesAfterFinish: afterExplicitFinish.observedFrames,
+        simulatedFramesAtFinish: finishBoundary.simulatedFrames,
+        simulatedFramesAfterFinish: afterExplicitFinish.simulatedFrames,
+      },
       presentation: { renderFramesAdvanced: renderAfter - renderBefore },
       responsive: { calibration: calibrationLayouts, flying: flightLayouts },
     }, null, 2));

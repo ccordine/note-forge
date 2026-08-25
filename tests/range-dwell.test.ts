@@ -95,24 +95,26 @@ describe("sample-authoritative range dwell", () => {
     const initial = controller(0.04);
     const first = updateRangeDwell(initial, observation(WINDOW_SIZE));
     const second = updateRangeDwell(first, observation(WINDOW_SIZE + HOP_SIZE));
-    const complete = updateRangeDwell(second, observation(WINDOW_SIZE + HOP_SIZE * 2));
+    const achieved = updateRangeDwell(second, observation(WINDOW_SIZE + HOP_SIZE * 2));
 
-    expect(initial).toMatchObject({ status: "tracking", heldSamples: 0, heldSeconds: 0 });
-    expect(first).toMatchObject({ status: "tracking", heldSamples: 0, heldSeconds: 0 });
+    expect(initial).toMatchObject({ achievementReached: false, heldSamples: 0, heldSeconds: 0 });
+    expect(first).toMatchObject({ achievementReached: false, heldSamples: 0, heldSeconds: 0 });
     expect(second).toMatchObject({
-      status: "tracking",
+      achievementReached: false,
       heldSamples: HOP_SIZE,
       heldSeconds: 0.02,
       progress: 0.5,
     });
-    expect(complete).toMatchObject({
-      status: "complete",
+    expect(achieved).toMatchObject({
+      achievementReached: true,
       heldSamples: HOP_SIZE * 2,
       heldSeconds: 0.04,
+      peakHeldSamples: HOP_SIZE * 2,
+      peakHeldSeconds: 0.04,
       progress: 1,
     });
-    expect(Object.isFrozen(complete)).toBe(true);
-    expect(Object.isFrozen(complete.lastAuthority)).toBe(true);
+    expect(Object.isFrozen(achieved)).toBe(true);
+    expect(Object.isFrozen(achieved.lastAuthority)).toBe(true);
   });
 
   it("freezes accumulated dwell across silence and uncertainty without backfilling either gap", () => {
@@ -175,7 +177,6 @@ describe("sample-authoritative range dwell", () => {
       confidence: 0.95,
     }));
     expect(state).toMatchObject({
-      status: "tracking",
       heldSamples: 0,
       heldSeconds: 0,
       progress: 0,
@@ -265,24 +266,71 @@ describe("sample-authoritative range dwell", () => {
     });
   });
 
-  it("latches completion while continuing to report later observations", () => {
+  it("latches achievement while wrong pitch resets current dwell and preserves its exact peak", () => {
     let state = feed(controller(0.02), [
       observation(WINDOW_SIZE),
       observation(WINDOW_SIZE + HOP_SIZE),
     ]);
-    expect(state.status).toBe("complete");
+    expect(state).toMatchObject({
+      achievementReached: true,
+      heldSamples: HOP_SIZE,
+      heldSeconds: 0.02,
+      peakHeldSamples: HOP_SIZE,
+      peakHeldSeconds: 0.02,
+    });
 
     state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 2, {
       midiFloat: 57,
     }));
     expect(state).toMatchObject({
-      status: "complete",
-      heldSamples: HOP_SIZE,
-      heldSeconds: 0.02,
-      progress: 1,
+      achievementReached: true,
+      heldSamples: 0,
+      heldSeconds: 0,
+      peakHeldSamples: HOP_SIZE,
+      peakHeldSeconds: 0.02,
+      progress: 0,
       currentMidiFloat: 57,
       currentInTolerance: false,
     });
+  });
+
+  it("keeps exact dwell growing for an hour beyond the milestone without becoming terminal", () => {
+    const hourFrameCount = Math.round(60 * 60 / (HOP_SIZE / SAMPLE_RATE));
+    let state = controller(3);
+    for (let index = 0; index <= hourFrameCount; index += 1) {
+      state = updateRangeDwell(
+        state,
+        observation(WINDOW_SIZE + HOP_SIZE * index),
+      );
+    }
+
+    expect(state.achievementReached).toBe(true);
+    expect(state.observedFrameCount).toBe(hourFrameCount + 1);
+    expect(state.heldSamples).toBe(HOP_SIZE * hourFrameCount);
+    expect(state.heldSeconds).toBeCloseTo(3_600, 7);
+    expect(state.peakHeldSamples).toBe(state.heldSamples);
+    expect(state.peakHeldSeconds).toBeCloseTo(3_600, 7);
+    expect(state.progress).toBe(1);
+
+    state = updateRangeDwell(state, observation(
+      WINDOW_SIZE + HOP_SIZE * (hourFrameCount + 1),
+      { kind: "unvoiced" },
+    ));
+    expect(state.heldSeconds).toBeCloseTo(3_600, 7);
+    expect(state.observedFrameCount).toBe(hourFrameCount + 2);
+
+    state = updateRangeDwell(state, observation(
+      WINDOW_SIZE + HOP_SIZE * (hourFrameCount + 2),
+      { midiFloat: 61 },
+    ));
+    expect(state).toMatchObject({
+      achievementReached: true,
+      heldSamples: 0,
+      heldSeconds: 0,
+      peakHeldSamples: HOP_SIZE * hourFrameCount,
+      observedFrameCount: hourFrameCount + 3,
+    });
+    expect(state.peakHeldSeconds).toBeCloseTo(3_600, 7);
   });
 
   it("uses canonical confidence and hop-derived interval defaults", () => {

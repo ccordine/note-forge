@@ -46,20 +46,8 @@ export function usePitchPongRuntime({
   const input = useAudioInput({ onFrame: runtime.observe });
 
   useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        runtime.pause("Auto-paused because this tab was hidden. Nothing advanced offscreen.");
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") runtime.pause();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    window.addEventListener("keydown", handleKeyDown);
     return () => {
       runtime.dispose();
-      document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("keydown", handleKeyDown);
     };
   }, [runtime]);
 
@@ -93,15 +81,15 @@ export function usePitchPongRuntime({
     curriculum: spec.curriculum,
     endActiveRound: runtime.finish,
     input,
+    achievementCount: state.achievementCount,
+    latestAchievement: state.latestAchievement,
     maximumRally: state.stats.maximumRally,
     maximumRallyPercent: clamp(state.stats.maximumRally / 10 * 100, 0, 100),
-    pauseGame: runtime.pause,
     phase: state.phase,
     preset: getDifficultyPreset(difficulty),
     rangeLabels,
     resetToSetup: runtime.reset,
     result: state.result,
-    resumeGame: runtime.resume,
     scoreFlash: state.scoreFlash,
     startRound: runtime.start,
     status: state.status,

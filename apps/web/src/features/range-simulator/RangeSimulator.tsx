@@ -56,6 +56,7 @@ function taskLabel(direction: ProbeDirection, kind: string): string {
 
 function progressLabel(state: Readonly<RangeSimulatorControllerState>): string {
   if (state.status === "complete") return "REVIEW";
+  if (state.session.phase === "complete") return "MAP READY";
   if (state.session.phase === "baseline") {
     const probe = currentRangeSimulatorProbe(state.session);
     const index = probe ? state.session.baselineCandidates.indexOf(probe.midi) + 1 : 0;
@@ -111,7 +112,7 @@ function StartAction({ workspace }: { workspace: Readonly<RangeSimulatorWorkspac
         </Select>
       </div>
       <ActionButton className="primary wide" disabled={!workspace.hydrated} onClick={workspace.begin}>
-        <Icon name="arrow" size={17} /> {hasProgress ? "Continue assessment" : "Begin assessment"}
+        <Icon name="arrow" size={17} /> {hasProgress ? "Start saved assessment" : "Start assessment"}
       </ActionButton>
     </div>
   );
@@ -132,12 +133,12 @@ function TrackingAction({ workspace }: { workspace: Readonly<RangeSimulatorWorks
     <div className="range-sim-action range-sim-track">
       <div>
         <Eyebrow>Current action</Eyebrow>
-        <h3>Occupy the target lane for {state.dwell.requiredHoldSeconds.toFixed(1)} seconds.</h3>
-        <p>Silence or uncertain evidence freezes earned time. A reliable different pitch resets only this target’s dwell.</p>
+        <h3>Reach {state.dwell.requiredHoldSeconds.toFixed(1)} seconds, then continue for as long as you choose.</h3>
+        <p>Silence or uncertain evidence pauses current time. A reliable different pitch starts a new current hold while preserving the exact peak.</p>
       </div>
       <div className="range-sim-hold-number">
         <strong>{state.dwell.heldSeconds.toFixed(2)}</strong>
-        <span>/ {state.dwell.requiredHoldSeconds.toFixed(1)} sec in range</span>
+        <span>sec current · {state.dwell.peakHeldSeconds.toFixed(2)} sec peak</span>
       </div>
       <div className="range-sim-safe-exits">
         <span>Do not force the note.</span>
@@ -171,13 +172,13 @@ function RatingOption({
 function RatingAction({ workspace }: { workspace: Readonly<RangeSimulatorWorkspace> }) {
   const { state } = workspace;
   const probe = currentRangeSimulatorProbe(state.session)!;
-  const holdComplete = state.dwell.status === "complete";
+  const holdAchievement = state.dwell.achievementReached;
   return (
     <div className="range-sim-action range-sim-rate">
       <div><Eyebrow>Pitch evidence recorded</Eyebrow><h3>How did {noteLabel(probe.midi)} feel?</h3><p>The detector confirms location; your rating reports comfort and repeatability.</p></div>
       <div className="range-rating-grid">
         {RATING_VALUES.map((value) => (
-          <RatingOption key={value} value={value} selected={state.rating === value} disabled={!holdComplete && value < 4} onChoose={workspace.chooseRating} />
+          <RatingOption key={value} value={value} selected={state.rating === value} disabled={!holdAchievement && value < 4} onChoose={workspace.chooseRating} />
         ))}
       </div>
       {probe.direction !== "center" && (
@@ -190,6 +191,31 @@ function RatingAction({ workspace }: { workspace: Readonly<RangeSimulatorWorkspa
         <ActionButton onClick={workspace.retry}>Try this target again</ActionButton>
         <ActionButton className="primary" disabled={state.rating === null} onClick={workspace.saveRating}>Save rating &amp; next <Icon name="arrow" size={15} /></ActionButton>
       </div>
+    </div>
+  );
+}
+
+function AchievementAction({
+  workspace,
+  summary,
+}: {
+  workspace: Readonly<RangeSimulatorWorkspace>;
+  summary: Readonly<RangeSimulatorSummary>;
+}) {
+  const baselineConfirmed = summary.baselineMidi !== null && summary.usableMidis.includes(summary.baselineMidi);
+  return (
+    <div className="range-sim-action range-sim-result" data-live-achievement="range-map">
+      <div>
+        <Eyebrow>Map ready · live session continues</Eyebrow>
+        <h3>{baselineConfirmed ? "Today’s range map is recorded." : "No usable boundary was claimed."}</h3>
+        <p>{workspace.state.notice}</p>
+      </div>
+      <dl className="range-sim-summary-grid">
+        <div><dt>Working home</dt><dd>{summary.baselineMidi === null ? "Not established" : noteLabel(summary.baselineMidi)}</dd></div>
+        <div><dt>Easy · ratings 1–2</dt><dd>{formatBounds(summary.easyBounds)}</dd></div>
+        <div><dt>Usable · ratings 1–3</dt><dd>{formatBounds(summary.usableBounds)}</dd></div>
+      </dl>
+      <p>Keep using the live tuner for as long as you want. Only Finish today ends this assessment.</p>
     </div>
   );
 }
@@ -238,6 +264,7 @@ function CurrentAction({
   const { state } = workspace;
   if (state.status === "complete") return <ResultAction workspace={workspace} summary={summary} />;
   if (state.status === "idle") return <StartAction workspace={workspace} />;
+  if (state.session.phase === "complete") return <AchievementAction workspace={workspace} summary={summary} />;
   if (canRateRangeProbe(state)) return <RatingAction workspace={workspace} />;
   return <TrackingAction workspace={workspace} />;
 }
@@ -248,16 +275,17 @@ export function RangeSimulator() {
   const targetMidi = activeRangeSimulatorTarget(state);
   const probe = currentRangeSimulatorProbe(state.session);
   const summary = useMemo(() => summarizeRangeSimulatorSession(state.session), [state.session]);
-  const holdStatus = state.dwell.status === "complete"
-    ? "complete"
-    : state.dwell.currentInTolerance === true
-      ? "holding"
-      : "waiting";
-  let noteInputPhase: "idle" | "listening" | "complete" = "idle";
-  if (state.status === "tracking") noteInputPhase = "listening";
-  if (state.status === "complete" || state.dwell.status === "complete") {
-    noteInputPhase = "complete";
-  }
+  const holdStatus = state.dwell.currentInTolerance === true ? "holding" : "waiting";
+  const noteInputPhase: "idle" | "listening" | "complete" = state.status === "tracking"
+    ? "listening"
+    : state.status;
+  let shellEyebrow = "Assessment review";
+  if (probe) shellEyebrow = taskLabel(probe.direction, probe.kind);
+  if (!probe && state.status === "tracking") shellEyebrow = "Map achieved · live tuner";
+  const shellTitle = state.status === "complete" ? "Today’s map" : `Current pitch · ${noteLabel(targetMidi)}`;
+  const shellDetail = state.status === "complete"
+    ? `${state.session.ratedProbeCount} ratings retained.`
+    : `${continuousMidiToHz(targetMidi).toFixed(2)} Hz · ±${workspace.toleranceCents}¢ lane`;
   return (
     <div className="page range-simulator-page">
       <div className="lab-intro range-sim-intro">
@@ -265,9 +293,9 @@ export function RangeSimulator() {
         <div className="range-sim-status"><span>{progressLabel(state)}</span><strong>{state.status.toUpperCase()}</strong><small>{preparationLabel(state.session.preparation)} · no raw audio saved</small></div>
       </div>
 
-      <Panel className="range-sim-shell" aria-labelledby="range-sim-target-title">
+      <Panel className="range-sim-shell" aria-labelledby="range-sim-target-title" data-live-lifetime="user-owned">
         <header className="range-sim-shell-header">
-          <div><Eyebrow>{probe ? taskLabel(probe.direction, probe.kind) : "Assessment review"}</Eyebrow><h2 id="range-sim-target-title">{state.status === "complete" ? "Today’s map" : `Current target · ${noteLabel(targetMidi)}`}</h2><p>{state.status === "complete" ? `${state.session.ratedProbeCount} ratings retained.` : `${continuousMidiToHz(targetMidi).toFixed(2)} Hz · ±${workspace.toleranceCents}¢ lane`}</p></div>
+          <div><Eyebrow>{shellEyebrow}</Eyebrow><h2 id="range-sim-target-title">{shellTitle}</h2><p>{shellDetail}</p></div>
           <div className="range-sim-toolbar">
             <PersistenceBadge workspace={workspace} />
             <ActionButton onClick={workspace.hearReference}><Icon name="play" size={15} /> Hear {noteLabel(targetMidi)}</ActionButton>
@@ -284,6 +312,7 @@ export function RangeSimulator() {
             toleranceCents={workspace.toleranceCents}
             phase={noteInputPhase}
             hold={{ heldSeconds: state.dwell.heldSeconds, requiredSeconds: state.dwell.requiredHoldSeconds, status: holdStatus }}
+            holdMode="occupancy"
             diagnosticsFlow="range-simulator"
           />
         </div>

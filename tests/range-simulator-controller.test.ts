@@ -5,7 +5,11 @@ import {
   createRangeSimulatorController,
   reduceRangeSimulatorController,
 } from "../apps/web/src/features/range-simulator/controller";
-import { currentRangeSimulatorProbe } from "../apps/web/src/features/range-simulator/model";
+import {
+  RANGE_SIMULATOR_MAX_RATED_PROBES,
+  currentRangeSimulatorProbe,
+  rateRangeSimulatorProbe,
+} from "../apps/web/src/features/range-simulator/model";
 
 const SAMPLE_RATE = 48_000;
 const WINDOW_SIZE = 4_096;
@@ -110,7 +114,7 @@ describe("Range Simulator sample-coordinate controller", () => {
     for (let index = 0; index <= 75; index += 1) {
       state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(index) });
     }
-    expect(state.dwell.status).toBe("complete");
+    expect(state.dwell.achievementReached).toBe(true);
     expect(state.dwell.heldSamples).toBe(HOP_SIZE * 75);
     expect(canRateRangeProbe(state)).toBe(true);
 
@@ -122,7 +126,11 @@ describe("Range Simulator sample-coordinate controller", () => {
     });
     expect(state.session.ratedProbeCount).toBe(1);
     expect(currentRangeSimulatorProbe(state.session)?.midi).toBe(46);
-    expect(state.dwell).toMatchObject({ targetMidi: 46, heldSamples: 0, status: "tracking" });
+    expect(state.dwell).toMatchObject({
+      targetMidi: 46,
+      achievementReached: false,
+      heldSamples: 0,
+    });
     expect(state.persistenceRevision).toBe(1);
   });
 
@@ -133,5 +141,150 @@ describe("Range Simulator sample-coordinate controller", () => {
     state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 5 });
     expect(state.rating).toBe(5);
     expect(canRateRangeProbe(state)).toBe(true);
+  });
+
+  it("keeps the live controller authoritative after the probe queue is exhausted until explicit Finish", () => {
+    let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
+    for (let ratingIndex = 0; ratingIndex < 5; ratingIndex += 1) {
+      state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 5 });
+      state = reduceRangeSimulatorController(state, {
+        type: "save-rating",
+        ratedAt: `2026-08-24T12:00:0${ratingIndex + 1}.000Z`,
+        toleranceCents: 20,
+      });
+    }
+
+    expect(state).toMatchObject({ status: "tracking", session: { phase: "complete", completionStatus: "no-usable-baseline" } });
+    expect(canRateRangeProbe(state)).toBe(false);
+    expect(state.notice).toContain("live pitch surface remains active");
+
+    state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(100) });
+    state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(101, { midiFloat: 49 }) });
+    expect(state).toMatchObject({
+      status: "tracking",
+      dwell: {
+        observedFrameCount: 2,
+        currentMidiFloat: 49,
+        lastAuthority: { endSample: WINDOW_SIZE + HOP_SIZE * 101 },
+      },
+    });
+    const stillLive = state;
+    state = reduceRangeSimulatorController(state, {
+      type: "fresh",
+      anchorMidi: 52,
+      preparation: "warmed",
+      startedAt: "2026-08-24T12:00:30.000Z",
+      toleranceCents: 20,
+    });
+    expect(state).toBe(stillLive);
+
+    state = reduceRangeSimulatorController(state, {
+      type: "finish",
+      stoppedAt: "2026-08-24T12:01:00.000Z",
+    });
+    expect(state).toMatchObject({
+      status: "complete",
+      session: { completionStatus: "stopped" },
+    });
+  });
+
+  it("reloads a persisted queue achievement idle until explicit Continue, then requires explicit Finish", () => {
+    let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
+    for (let ratingIndex = 0; ratingIndex < 5; ratingIndex += 1) {
+      state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 5 });
+      state = reduceRangeSimulatorController(state, {
+        type: "save-rating",
+        ratedAt: `2026-08-24T12:00:0${ratingIndex + 1}.000Z`,
+        toleranceCents: 20,
+      });
+    }
+    const achievedSession = state.session;
+    const freshController = controller();
+    let reloaded = reduceRangeSimulatorController(freshController, {
+      type: "hydrate",
+      session: achievedSession,
+      profile: state.profile,
+      toleranceCents: 20,
+    });
+    expect(reloaded).toMatchObject({
+      status: "idle",
+      session: { phase: "complete", completionStatus: "no-usable-baseline" },
+    });
+    expect(reloaded.notice).toContain("Press Start saved assessment");
+    reloaded = reduceRangeSimulatorController(reloaded, {
+      type: "observation",
+      observation: observation(100),
+    });
+    expect(reloaded.dwell.observedFrameCount).toBe(0);
+
+    reloaded = reduceRangeSimulatorController(reloaded, {
+      type: "begin",
+      toleranceCents: 20,
+    });
+    expect(reloaded.status).toBe("tracking");
+    reloaded = reduceRangeSimulatorController(reloaded, {
+      type: "observation",
+      observation: observation(100),
+    });
+    expect(reloaded.dwell.observedFrameCount).toBe(1);
+
+    const explicitlyFinished = reduceRangeSimulatorController(reloaded, {
+      type: "finish",
+      stoppedAt: "2026-08-24T12:01:00.000Z",
+    });
+    expect(explicitlyFinished.session.completionStatus).toBe("stopped");
+    const finishedReload = reduceRangeSimulatorController(freshController, {
+      type: "hydrate",
+      session: explicitlyFinished.session,
+      profile: explicitlyFinished.profile,
+      toleranceCents: 20,
+    });
+    expect(finishedReload.status).toBe("complete");
+  });
+
+  it("records the probe-cap achievement without giving the cap Stop authority", () => {
+    let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
+    let session = state.session;
+    while (session.ratedProbeCount < RANGE_SIMULATOR_MAX_RATED_PROBES - 1) {
+      const probe = currentRangeSimulatorProbe(session);
+      if (!probe) throw new Error("Probe-cap fixture exhausted its queue early.");
+      session = rateRangeSimulatorProbe(session, {
+        taskId: probe.id,
+        rating: 3,
+        ratedAt: new Date(Date.parse(STARTED_AT) + (session.ratedProbeCount + 1) * 1_000).toISOString(),
+      });
+    }
+    state = {
+      ...state,
+      session,
+      dwell: {
+        ...state.dwell,
+        achievementReached: true,
+        heldSamples: Math.round(state.dwell.requiredHoldSeconds * SAMPLE_RATE),
+        heldSeconds: state.dwell.requiredHoldSeconds,
+        peakHeldSamples: Math.round(state.dwell.requiredHoldSeconds * SAMPLE_RATE),
+        peakHeldSeconds: state.dwell.requiredHoldSeconds,
+        progress: 1,
+      },
+    };
+    state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 3 });
+    state = reduceRangeSimulatorController(state, {
+      type: "save-rating",
+      ratedAt: new Date(Date.parse(STARTED_AT) + RANGE_SIMULATOR_MAX_RATED_PROBES * 1_000).toISOString(),
+      toleranceCents: 20,
+    });
+
+    expect(state).toMatchObject({
+      status: "tracking",
+      session: {
+        phase: "complete",
+        completionStatus: "probe-cap",
+        ratedProbeCount: RANGE_SIMULATOR_MAX_RATED_PROBES,
+      },
+    });
+    const priorCount = state.dwell.observedFrameCount;
+    state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(200) });
+    expect(state.status).toBe("tracking");
+    expect(state.dwell.observedFrameCount).toBe(priorCount + 1);
   });
 });

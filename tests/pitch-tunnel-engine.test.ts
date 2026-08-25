@@ -4,6 +4,7 @@ import {
   PITCH_TUNNEL_CHECKPOINT_OFFSETS,
   PITCH_TUNNEL_DEFAULTS,
   createPitchTunnel,
+  finishPitchTunnel,
   observePitchTunnel,
   pitchTunnelMetrics,
   reducePitchTunnel,
@@ -218,8 +219,9 @@ describe("Pitch Tunnel sample-time engine", () => {
 
   it("completes all nine checkpoints from exact sample-time dwell", () => {
     let state = anchored();
-    while (state.status === "tracking") state = finishCurrentCheckpoint(state);
-    expect(state.status).toBe("complete");
+    while (!state.achievementReached) state = finishCurrentCheckpoint(state);
+    expect(state.status).toBe("tracking");
+    expect(state.achievementReached).toBe(true);
     expect(state.completedCheckpoints.map(({ targetOffsetCents }) => targetOffsetCents))
       .toEqual([0, 25, 50, 75, 100, 75, 50, 25, 0]);
     expect(state.completedCheckpoints).toHaveLength(9);
@@ -356,7 +358,8 @@ describe("Pitch Tunnel sample-time engine", () => {
     expect(state.correctedCheckpointCount).toBe(1);
     state = observeNext(state, ANCHOR_MIDI + 0.25);
     state = observeNext(state, ANCHOR_MIDI + 0.25);
-    expect(state.status).toBe("complete");
+    expect(state.status).toBe("tracking");
+    expect(state.achievementReached).toBe(true);
     expect(pitchTunnelMetrics(state).meanCorrectionLatencySeconds).toBeCloseTo(0.02, 12);
   });
 
@@ -383,31 +386,47 @@ describe("Pitch Tunnel sample-time engine", () => {
     expect(state.correctedCheckpointCount).toBe(1);
   });
 
-  it("latches scoring at completion while exact live telemetry and authority continue", () => {
+  it("latches the authored achievement while full trace scoring continues until user Finish", () => {
     let state = anchored({ checkpointOffsetsCents: [0], requiredInLaneSeconds: 0.02 });
     state = observeNext(state, ANCHOR_MIDI);
-    expect(state.status).toBe("complete");
+    expect(state.status).toBe("tracking");
+    expect(state.achievementReached).toBe(true);
     const result = state.completedCheckpoints;
-    const totals = state.totals;
+    const totalsAtAchievement = state.totals;
     const elapsedSeconds = state.elapsedSeconds;
     const frameCount = state.observedFrameCount;
 
     state = observeNext(state, null, { kind: "unvoiced" });
     expect(state).toMatchObject({
-      status: "complete",
+      status: "tracking",
+      achievementReached: true,
       currentObservationKind: "unvoiced",
       currentMidiFloat: null,
       observedFrameCount: frameCount + 1,
     });
     expect(state.completedCheckpoints).toBe(result);
-    expect(state.totals).toBe(totals);
-    expect(state.elapsedSeconds).toBe(elapsedSeconds);
+    expect(state.totals).toBe(totalsAtAchievement);
+    expect(state.elapsedSeconds).toBeGreaterThan(elapsedSeconds);
+    expect(state.trackingLossSeconds).toBeGreaterThan(0);
 
+    state = observeNext(state, ANCHOR_MIDI + 0.5);
     state = observeNext(state, ANCHOR_MIDI + 0.5);
     expect(state.currentMidiFloat).toBeCloseTo(ANCHOR_MIDI + 0.5, 12);
     expect(state.lastAuthority).toBe(state.latestCandidate?.authority);
     expect(state.completedCheckpoints).toBe(result);
-    expect(pitchTunnelMetrics(state).elapsedSeconds).toBe(elapsedSeconds);
+    expect(state.totals).not.toBe(totalsAtAchievement);
+    expect(state.totals.trackedSeconds).toBeGreaterThan(totalsAtAchievement.trackedSeconds);
+    expect(pitchTunnelMetrics(state).elapsedSeconds).toBeGreaterThan(elapsedSeconds);
+
+    state = finishPitchTunnel(state);
+    expect(state.status).toBe("complete");
+    const explicitlyFinished = state;
+    state = observeNext(state, ANCHOR_MIDI - 0.5);
+    expect(state.status).toBe("complete");
+    expect(state.currentMidiFloat).toBeCloseTo(ANCHOR_MIDI - 0.5, 12);
+    expect(state.completedCheckpoints).toBe(explicitlyFinished.completedCheckpoints);
+    expect(state.totals).toBe(explicitlyFinished.totals);
+    expect(state.elapsedSeconds).toBe(explicitlyFinished.elapsedSeconds);
   });
 
   it("is cadence-independent at exact 20 ms capture hops", () => {
@@ -423,7 +442,8 @@ describe("Pitch Tunnel sample-time engine", () => {
         { sampleRate: 44_100 },
       ));
     }
-    expect(state.status).toBe("complete");
+    expect(state.status).toBe("tracking");
+    expect(state.achievementReached).toBe(true);
     expect(state.completedCheckpoints[0]?.timeInLaneSeconds).toBeCloseTo(1, 12);
     expect(state.elapsedSeconds).toBeCloseTo(1, 12);
   });

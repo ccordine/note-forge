@@ -13,6 +13,10 @@ const runtime = readFileSync(
   new URL("../apps/web/src/features/song-lab/song-workspace-runtime.ts", import.meta.url),
   "utf8",
 );
+const recordingStore = readFileSync(
+  new URL("../apps/web/src/audio/local-recording-store.ts", import.meta.url),
+  "utf8",
+);
 
 describe("Song Lab architecture", () => {
   it("uses one bounded stage surface instead of stacking the whole workflow", () => {
@@ -49,5 +53,24 @@ describe("Song Lab architecture", () => {
     expect(hook + runtime).not.toMatch(/\bmounted\b|\b\w*Generation\b|generationRef/);
     expect(hook).not.toMatch(/setTimeout|clearTimeout|MediaRecorder/);
     expect(runtime).not.toMatch(/input\.(?:enable|disable)|getUserMedia|AudioContext/);
+  });
+
+  it("makes every live take user-owned and streams chunks to durable local storage", () => {
+    expect(runtime).toContain("recordingStore.create");
+    expect(runtime).toContain("active.storage.append(data)");
+    expect(runtime).toContain("active.storage.finalize");
+    expect(recordingStore).toContain("indexedDB");
+    expect(recordingStore).toContain("IDBTransaction");
+    expect(runtime).not.toMatch(
+      /MAX_LOCAL_AUDIO_(?:DURATION_SECONDS|FILE_BYTES)|recordingLimit|stopAtRecordingLimit/,
+    );
+    expect(runtime).not.toMatch(/\bchunks\s*:\s*Blob\[\]|\.chunks\.push\s*\(/);
+    expect(runtime).not.toMatch(/setTimeout|clearTimeout|\bschedule\s*\(/);
+    const storageFailure = runtime.slice(
+      runtime.indexOf("private failRecordingStorage"),
+      runtime.indexOf("private requestRecorderStop"),
+    );
+    expect(storageFailure).toContain('type: "recording-degraded"');
+    expect(storageFailure).not.toMatch(/requestRecorderStop|recorder\.stop|stopReason/);
   });
 });

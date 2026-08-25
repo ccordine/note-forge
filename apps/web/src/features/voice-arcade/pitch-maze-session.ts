@@ -22,11 +22,11 @@ import type {
 } from "./types";
 
 export const PITCH_MAZE_CAMPAIGN_LEVELS = 5;
+export const PITCH_MAZE_MAX_RETAINED_COMMANDS = 128;
 
 export type PitchMazeSessionPhase =
   | "setup"
   | "playing"
-  | "level-result"
   | "campaign-result";
 
 export type PitchMazeCommandResult = "moved" | "wall";
@@ -34,6 +34,22 @@ export type PitchMazeCommandResult = "moved" | "wall";
 export interface RecordedPitchMazeCommand extends PitchMazeCommandQuality {
   readonly level: number;
   readonly result: PitchMazeCommandResult;
+}
+
+/** Exact aggregate authority; the command array is only a bounded recent window. */
+export interface PitchMazeCommandMetrics {
+  readonly commandCount: number;
+  readonly movedCommandCount: number;
+  readonly blockedCommandCount: number;
+  readonly qualityTotal: number;
+  readonly inBandPercentTotal: number;
+  readonly absoluteAttackErrorTotalCents: number;
+  readonly settleTotalMs: number;
+  readonly spreadTotalCents: number;
+  readonly overshootCount: number;
+  readonly currentQualityCombo: number;
+  readonly bestQualityCombo: number;
+  readonly lastCommand: RecordedPitchMazeCommand | null;
 }
 
 export interface PitchMazeLevelResult {
@@ -68,14 +84,21 @@ export interface PitchMazeSessionState {
   readonly controller: PitchMazeControllerState | null;
   readonly selectedDirection: CardinalDirection;
   readonly commands: readonly RecordedPitchMazeCommand[];
+  readonly currentLevelMetrics: PitchMazeCommandMetrics;
+  readonly campaignMetrics: PitchMazeCommandMetrics;
+  /** Includes every command until explicit Finish, including post-goal play. */
+  readonly observedCommandCount: number;
   readonly levelResults: readonly PitchMazeLevelResult[];
   readonly currentResult: PitchMazeLevelResult | null;
   readonly lastCommandResult: PitchMazeCommandResult | null;
-  readonly levelCommandStart: number;
   readonly levelStartedAtSeconds: number | null;
   readonly campaignStartedAtSeconds: number | null;
+  readonly lastObservedAtSeconds: number | null;
   readonly levelOptimalMoves: number;
   readonly notice: string;
+  /** Exact snapshot when the fifth maze was first cleared; never terminal. */
+  readonly achievementOutcome: ArcadeOutcome | null;
+  /** Whole-session outcome created only by explicit Finish. */
   readonly outcome: ArcadeOutcome | null;
 }
 
@@ -84,13 +107,8 @@ export type PitchMazeSessionAction =
   | { readonly type: "start"; readonly campaign: PitchMazeCampaignSpec }
   | { readonly type: "observation"; readonly observation: PitchObservation }
   | { readonly type: "continue" }
+  | { readonly type: "finish" }
   | { readonly type: "reset" };
-
-function average(values: readonly number[]): number {
-  return values.length === 0
-    ? 0
-    : values.reduce((total, value) => total + value, 0) / values.length;
-}
 
 function gradeFor(score: number): string {
   if (score >= 94) return "S";
@@ -100,54 +118,95 @@ function gradeFor(score: number): string {
   return "D";
 }
 
-function bestQualityCombo(commands: readonly RecordedPitchMazeCommand[]): number {
-  let run = 0;
-  let best = 0;
-  for (const command of commands) {
-    run = command.result === "moved" && command.qualityScore >= 75 ? run + 1 : 0;
-    best = Math.max(best, run);
-  }
-  return best;
+function createCommandMetrics(): PitchMazeCommandMetrics {
+  return Object.freeze({
+    commandCount: 0,
+    movedCommandCount: 0,
+    blockedCommandCount: 0,
+    qualityTotal: 0,
+    inBandPercentTotal: 0,
+    absoluteAttackErrorTotalCents: 0,
+    settleTotalMs: 0,
+    spreadTotalCents: 0,
+    overshootCount: 0,
+    currentQualityCombo: 0,
+    bestQualityCombo: 0,
+    lastCommand: null,
+  });
+}
+
+function recordCommandMetrics(
+  metrics: Readonly<PitchMazeCommandMetrics>,
+  command: Readonly<RecordedPitchMazeCommand>,
+): PitchMazeCommandMetrics {
+  const moved = command.result === "moved";
+  const currentQualityCombo = moved && command.qualityScore >= 75
+    ? metrics.currentQualityCombo + 1
+    : 0;
+  return Object.freeze({
+    commandCount: metrics.commandCount + 1,
+    movedCommandCount: metrics.movedCommandCount + Number(moved),
+    blockedCommandCount: metrics.blockedCommandCount + Number(!moved),
+    qualityTotal: metrics.qualityTotal + command.qualityScore,
+    inBandPercentTotal: metrics.inBandPercentTotal + command.inBandRatio * 100,
+    absoluteAttackErrorTotalCents: metrics.absoluteAttackErrorTotalCents
+      + Math.abs(command.attackErrorCents),
+    settleTotalMs: metrics.settleTotalMs
+      + (command.settleTimeSeconds ?? command.durationSeconds) * 1_000,
+    spreadTotalCents: metrics.spreadTotalCents + command.spreadCents,
+    overshootCount: metrics.overshootCount + command.overshootCount,
+    currentQualityCombo,
+    bestQualityCombo: Math.max(metrics.bestQualityCombo, currentQualityCombo),
+    lastCommand: command,
+  });
+}
+
+function retainRecentCommand(
+  commands: readonly RecordedPitchMazeCommand[],
+  command: Readonly<RecordedPitchMazeCommand>,
+): readonly RecordedPitchMazeCommand[] {
+  const overflow = Math.max(0, commands.length + 1 - PITCH_MAZE_MAX_RETAINED_COMMANDS);
+  return Object.freeze([...commands.slice(overflow), command]);
 }
 
 function summarizeLevel(
   level: Readonly<PitchMazeLevel>,
   levelNumber: number,
   optimalMoves: number,
-  commands: readonly RecordedPitchMazeCommand[],
+  metrics: Readonly<PitchMazeCommandMetrics>,
   durationMs: number,
 ): PitchMazeLevelResult {
-  const blockedCommands = commands.filter((command) => command.result === "wall").length;
+  if (metrics.lastCommand === null) throw new Error("A completed maze requires one command.");
   return Object.freeze({
     level: levelNumber,
     rows: level.config.rows,
     columns: level.config.columns,
     optimalMoves,
     moves: level.moves,
-    commands: commands.length,
-    blockedCommands,
+    commands: metrics.commandCount,
+    blockedCommands: metrics.blockedCommandCount,
     durationMs,
-    averageQuality: average(commands.map((command) => command.qualityScore)),
-    pitchAccuracy: average(commands.map((command) => command.inBandRatio * 100)),
-    navigationEfficiency: commands.length === 0
+    averageQuality: metrics.qualityTotal / metrics.commandCount,
+    pitchAccuracy: metrics.inBandPercentTotal / metrics.commandCount,
+    navigationEfficiency: metrics.commandCount === 0
       ? 0
-      : Math.min(100, optimalMoves / commands.length * 100),
-    lastCommand: commands.at(-1)!,
+      : Math.min(100, optimalMoves / metrics.commandCount * 100),
+    lastCommand: metrics.lastCommand,
   });
 }
 
 function campaignOutcome(
   campaign: Readonly<PitchMazeCampaignSpec>,
-  commands: readonly RecordedPitchMazeCommand[],
+  metrics: Readonly<PitchMazeCommandMetrics>,
   levels: readonly PitchMazeLevelResult[],
   durationMs: number,
 ): ArcadeOutcome {
-  const pitchQuality = average(commands.map((command) => command.qualityScore));
-  const accuracy = average(commands.map((command) => command.inBandRatio * 100));
+  const pitchQuality = metrics.commandCount === 0 ? 0 : metrics.qualityTotal / metrics.commandCount;
+  const accuracy = metrics.commandCount === 0 ? 0 : metrics.inBandPercentTotal / metrics.commandCount;
   const optimalMoves = levels.reduce((total, level) => total + level.optimalMoves, 0);
-  const efficiency = commands.length === 0
+  const efficiency = metrics.commandCount === 0
     ? 0
-    : Math.min(100, optimalMoves / commands.length * 100);
+    : Math.min(100, optimalMoves / metrics.commandCount * 100);
   const score = Math.round(pitchQuality * 0.78 + efficiency * 0.22);
   return Object.freeze({
     mode: "maze",
@@ -157,20 +216,22 @@ function campaignOutcome(
     grade: gradeFor(score),
     xp: Math.round(score * getDifficultyPreset(campaign.difficulty).scoreMultiplier),
     accuracy,
-    bestCombo: bestQualityCombo(commands),
+    bestCombo: metrics.bestQualityCombo,
     durationMs,
     details: {
       pitchQuality,
       navigationEfficiency: efficiency,
-      commands: commands.length,
-      movedCommands: commands.filter((command) => command.result === "moved").length,
-      blockedCommands: commands.filter((command) => command.result === "wall").length,
-      averageAttackErrorCents: average(commands.map((command) => Math.abs(command.attackErrorCents))),
-      averageSettleMs: average(commands.map((command) => (
-        command.settleTimeSeconds ?? command.durationSeconds
-      ) * 1_000)),
-      averageSpreadCents: average(commands.map((command) => command.spreadCents)),
-      overshoots: commands.reduce((total, command) => total + command.overshootCount, 0),
+      commands: metrics.commandCount,
+      movedCommands: metrics.movedCommandCount,
+      blockedCommands: metrics.blockedCommandCount,
+      averageAttackErrorCents: metrics.commandCount === 0
+        ? 0
+        : metrics.absoluteAttackErrorTotalCents / metrics.commandCount,
+      averageSettleMs: metrics.commandCount === 0 ? 0 : metrics.settleTotalMs / metrics.commandCount,
+      averageSpreadCents: metrics.commandCount === 0
+        ? 0
+        : metrics.spreadTotalCents / metrics.commandCount,
+      overshoots: metrics.overshootCount,
       levelsCompleted: levels.length,
     },
   });
@@ -207,7 +268,7 @@ function createLevel(
     selectedDirection: "north",
     currentResult: null,
     lastCommandResult: null,
-    levelCommandStart: state.commands.length,
+    currentLevelMetrics: createCommandMetrics(),
     levelStartedAtSeconds: null,
     levelOptimalMoves: getPitchMazeShortestPathLength(level, level.start, level.goal),
     notice: levelNumber === 1
@@ -229,14 +290,18 @@ export function createPitchMazeSession(
     controller: null,
     selectedDirection: "north",
     commands: Object.freeze([]),
+    currentLevelMetrics: createCommandMetrics(),
+    campaignMetrics: createCommandMetrics(),
+    observedCommandCount: 0,
     levelResults: Object.freeze([]),
     currentResult: null,
     lastCommandResult: null,
-    levelCommandStart: 0,
     levelStartedAtSeconds: null,
     campaignStartedAtSeconds: null,
+    lastObservedAtSeconds: null,
     levelOptimalMoves: 0,
     notice: "Choose a compass mapping, then start a five-maze run.",
+    achievementOutcome: null,
     outcome: null,
   });
 }
@@ -259,6 +324,7 @@ function consumeObservation(
       selectedDirection,
       campaignStartedAtSeconds,
       levelStartedAtSeconds,
+      lastObservedAtSeconds: observation.timeSeconds,
     });
   }
 
@@ -268,7 +334,28 @@ function consumeObservation(
     level: state.levelNumber,
     result: move.moved ? "moved" : "wall",
   });
-  const commands = Object.freeze([...state.commands, recorded]);
+  const commands = retainRecentCommand(state.commands, recorded);
+  const observedCommandCount = state.observedCommandCount + 1;
+  const currentLevelMetrics = recordCommandMetrics(state.currentLevelMetrics, recorded);
+  const campaignMetrics = recordCommandMetrics(state.campaignMetrics, recorded);
+  // A cleared maze is a latched achievement inside the still-live campaign,
+  // but the user's later commands remain part of the whole-session score.
+  if (state.currentResult !== null) {
+    return Object.freeze({
+      ...state,
+      level: move.level,
+      controller: update.state,
+      selectedDirection,
+      commands,
+      currentLevelMetrics,
+      campaignMetrics,
+      observedCommandCount,
+      lastCommandResult: move.moved ? "moved" : "wall",
+      campaignStartedAtSeconds,
+      levelStartedAtSeconds,
+      lastObservedAtSeconds: observation.timeSeconds,
+    });
+  }
   if (!move.levelComplete) {
     return Object.freeze({
       ...state,
@@ -276,44 +363,51 @@ function consumeObservation(
       controller: update.state,
       selectedDirection,
       commands,
+      currentLevelMetrics,
+      campaignMetrics,
+      observedCommandCount,
       lastCommandResult: recorded.result,
       campaignStartedAtSeconds,
       levelStartedAtSeconds,
+      lastObservedAtSeconds: observation.timeSeconds,
       notice: move.reason === "wall"
         ? `${recorded.direction} was detected, but that cell is blocked. Choose another note.`
         : `${recorded.direction} moved one cell · quality ${recorded.qualityScore}.`,
     });
   }
 
-  const levelCommands = commands.slice(state.levelCommandStart);
   const result = summarizeLevel(
     move.level,
     state.levelNumber,
     state.levelOptimalMoves,
-    levelCommands,
+    currentLevelMetrics,
     Math.max(1, Math.round((update.event.command.endedAtSeconds - levelStartedAtSeconds) * 1_000)),
   );
   const levelResults = Object.freeze([...state.levelResults, result]);
   const campaignComplete = state.levelNumber >= PITCH_MAZE_CAMPAIGN_LEVELS;
   return Object.freeze({
     ...state,
-    phase: campaignComplete ? "campaign-result" : "level-result",
+    phase: "playing",
     level: move.level,
     controller: update.state,
     selectedDirection,
     commands,
+    currentLevelMetrics,
+    campaignMetrics,
+    observedCommandCount,
     levelResults,
     currentResult: result,
     lastCommandResult: recorded.result,
     campaignStartedAtSeconds,
     levelStartedAtSeconds,
+    lastObservedAtSeconds: observation.timeSeconds,
     notice: campaignComplete
-      ? "Five mazes cleared. Voice-control evidence is ready."
-      : `Maze ${state.levelNumber} clear. Continue when you are ready.`,
-    outcome: campaignComplete && state.campaign !== null
+      ? "Five mazes cleared. The voice controller remains live until you choose Finish campaign."
+      : `Maze ${state.levelNumber} clear. The controller remains live; continue when you choose.`,
+    achievementOutcome: campaignComplete && state.campaign !== null
       ? campaignOutcome(
           state.campaign,
-          commands,
+          campaignMetrics,
           levelResults,
           Math.max(1, Math.round((update.event.command.endedAtSeconds - campaignStartedAtSeconds) * 1_000)),
         )
@@ -331,16 +425,44 @@ export function reducePitchMazeSession(
         ? Object.freeze({ ...state, mappingMode: action.mappingMode })
         : state as PitchMazeSessionState;
     case "start": {
+      if (state.phase !== "setup") return state as PitchMazeSessionState;
       const clean = createPitchMazeSession(action.campaign.mappingMode);
       return createLevel(clean, action.campaign, 1);
     }
     case "observation":
       return consumeObservation(state, action.observation);
     case "continue":
-      return state.phase === "level-result" && state.campaign !== null
+      return state.phase === "playing"
+        && state.currentResult !== null
+        && state.levelNumber < PITCH_MAZE_CAMPAIGN_LEVELS
+        && state.campaign !== null
         ? createLevel(state, state.campaign, state.levelNumber + 1)
         : state as PitchMazeSessionState;
+    case "finish": {
+      if (state.phase !== "playing" || state.campaign === null) {
+        return state as PitchMazeSessionState;
+      }
+      const durationMs = state.campaignStartedAtSeconds === null
+        || state.lastObservedAtSeconds === null
+        ? 0
+        : Math.max(0, Math.round(
+            (state.lastObservedAtSeconds - state.campaignStartedAtSeconds) * 1_000,
+          ));
+      return Object.freeze({
+        ...state,
+        phase: "campaign-result",
+        outcome: campaignOutcome(
+          state.campaign,
+          state.campaignMetrics,
+          state.levelResults,
+          durationMs,
+        ),
+        notice: "Campaign finished by you. Voice-control evidence is frozen until you start another campaign.",
+      });
+    }
     case "reset":
-      return createPitchMazeSession(state.mappingMode);
+      return state.phase === "campaign-result"
+        ? createPitchMazeSession(state.mappingMode)
+        : state as PitchMazeSessionState;
   }
 }

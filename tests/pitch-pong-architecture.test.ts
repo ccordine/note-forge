@@ -93,9 +93,12 @@ describe("Pitch Pong continuous-input architecture guard", () => {
     expect(PITCH_PONG_SESSION).not.toMatch(/\bset[A-Z]\w*\s*\(|\bdispatch\s*\(/);
   });
 
-  it("preserves the legitimate visibility pause without mutating input ownership", () => {
-    expect(PITCH_PONG_HOOK).toContain('document.addEventListener("visibilitychange"');
-    expect(PITCH_PONG_HOOK).toContain("Auto-paused because this tab was hidden");
-    expect(PITCH_PONG_HOOK).toContain("runtime.pause");
+  it("gives visibility and winning scores no authority to pause or replace the live court", () => {
+    expect(PITCH_PONG_HOOK).not.toMatch(/visibilitychange|runtime\.pause|runtime\.resume/);
+    expect(PITCH_PONG_SESSION).toContain('export type PongPhase = "setup" | "countdown" | "playing" | "result";');
+    expect(PITCH_PONG_SESSION).not.toMatch(/phase:\s*["']paused["']/);
+    expect(PITCH_PONG_SESSION).toContain("latestAchievement = scoreRound(nextGame");
+    expect(PITCH_PONG_SESSION).toContain("The court stays live until you stop.");
+    expect(PITCH_PONG_SOURCE).toContain('data-live-lifetime="user-owned"');
   });
 });

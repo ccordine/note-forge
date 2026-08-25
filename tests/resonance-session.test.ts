@@ -49,6 +49,21 @@ const GENERATED = {
   },
 } as const satisfies GeneratedResonanceLevel;
 
+const SHORT_GENERATED = {
+  definition: {
+    ...SIMPLE_LEVEL,
+    id: "resonance-live-after-goal",
+    goal: { position: { x: 2.9, y: 2.5 }, radius: 0.7 },
+    microphone: { ...SIMPLE_LEVEL.microphone, gain: 36 },
+    resonators: [],
+  },
+  metadata: {
+    ...GENERATED.metadata,
+    seed: "resonance-live-after-goal",
+    targetMidis: [],
+  },
+} as const satisfies GeneratedResonanceLevel;
+
 function observation(
   index: number,
   midiFloat: number | null = TARGET_MIDI,
@@ -97,11 +112,12 @@ function trackingSession() {
     highMidi: 55,
     baselineMidi: TARGET_MIDI,
   });
-  return reduceResonanceSession(idle, {
+  const installed = reduceResonanceSession(idle, {
     type: "install",
     chamberNumber: 1,
     generated: GENERATED,
   });
+  return reduceResonanceSession(installed, { type: "start" });
 }
 
 describe("Resonance continuous observation session", () => {
@@ -188,8 +204,30 @@ describe("Resonance continuous observation session", () => {
     expect(state.game.ball.position).toEqual(beforeBoundary);
   });
 
-  it("ignores duplicate frames and keeps the microphone-independent run model restartable", () => {
-    let state = trackingSession();
+  it("separates chamber installation from explicit Start and Finish commands", () => {
+    const preview = createResonanceSession({
+      seed: "preview",
+      level: 1,
+      difficulty: "easy",
+      lowMidi: 43,
+      highMidi: 55,
+      baselineMidi: TARGET_MIDI,
+    });
+    const installed = reduceResonanceSession(preview, {
+      type: "install",
+      chamberNumber: 2,
+      generated: GENERATED,
+    });
+    expect(installed.phase).toBe("idle");
+    expect(installed.runSerial).toBe(preview.runSerial);
+    expect(reduceResonanceSession(installed, {
+      type: "observation",
+      observation: observation(0),
+    })).toBe(installed);
+
+    let state = reduceResonanceSession(installed, { type: "start" });
+    expect(state.phase).toBe("tracking");
+    expect(state.runSerial).toBe(preview.runSerial + 1);
     state = reduceResonanceSession(state, { type: "observation", observation: observation(0) });
     const duplicate = reduceResonanceSession(state, {
       type: "observation",
@@ -197,10 +235,72 @@ describe("Resonance continuous observation session", () => {
     });
     expect(duplicate).toBe(state);
 
-    const restarted = reduceResonanceSession(state, { type: "restart" });
+    expect(reduceResonanceSession(state, { type: "start" })).toBe(state);
+    const finished = reduceResonanceSession(state, { type: "finish" });
+    expect(finished.phase).toBe("complete");
+    expect(reduceResonanceSession(finished, {
+      type: "observation",
+      observation: observation(1),
+    })).toBe(finished);
+    const restarted = reduceResonanceSession(finished, { type: "start" });
     expect(restarted.phase).toBe("tracking");
     expect(restarted.runSerial).toBe(state.runSerial + 1);
     expect(restarted.controller.authority).toBeNull();
     expect(restarted.game.elapsedSeconds).toBe(0);
   });
+
+  it("keeps physics and whole-session scoring live for an hour after goal capture until explicit Finish", () => {
+    let state = reduceResonanceSession(createResonanceSession({
+      seed: "preview",
+      level: 1,
+      difficulty: "easy",
+      lowMidi: 43,
+      highMidi: 55,
+      baselineMidi: TARGET_MIDI,
+    }), { type: "install", chamberNumber: 1, generated: SHORT_GENERATED });
+    expect(state.phase).toBe("idle");
+    state = reduceResonanceSession(state, { type: "start" });
+    let index = 0;
+    while (state.game.status !== "won" && index < 500) {
+      state = reduceResonanceSession(state, { type: "observation", observation: observation(index) });
+      index += 1;
+    }
+
+    expect(state.game.status).toBe("won");
+    expect(state.phase).toBe("tracking");
+    expect(state.achievement).not.toBeNull();
+    expect(state.result).toBeNull();
+    const achievement = state.achievement;
+    const priorFrames = state.controller.observedFrameCount;
+    const priorSteps = state.game.fixedStepCount;
+    const priorStats = state.stats;
+    for (let offset = 0; offset < 180_000; offset += 1) {
+      state = reduceResonanceSession(state, {
+        type: "observation",
+        observation: observation(index + offset, offset % 2 === 0 ? TARGET_MIDI + 4 : TARGET_MIDI),
+      });
+    }
+    expect(state.phase).toBe("tracking");
+    expect(state.achievement).toBe(achievement);
+    expect(state.result).toBeNull();
+    expect(state.stats).not.toBe(priorStats);
+    expect(state.controller.observedFrameCount).toBe(priorFrames + 180_000);
+    expect(state.stats.observedFrames).toBe(priorStats.observedFrames + 180_000);
+    expect(state.game.fixedStepCount).toBeGreaterThan(priorSteps);
+    expect(state.game.elapsedSeconds).toBeGreaterThan(3_599);
+    expect(state.game.status).toBe("won");
+    expect(reduceResonanceSession(state, { type: "start" })).toBe(state);
+    expect(reduceResonanceSession(state, { type: "install", chamberNumber: 2, generated: GENERATED })).toBe(state);
+
+    state = reduceResonanceSession(state, { type: "finish" });
+    expect(state.phase).toBe("complete");
+    expect(state.result).not.toBe(achievement);
+    expect(state.result?.durationSeconds).toBeGreaterThan(3_599);
+    const completed = state;
+    state = reduceResonanceSession(state, {
+      type: "observation",
+      observation: observation(index + 180_000, TARGET_MIDI),
+    });
+    expect(state).toBe(completed);
+  }, 15_000);
 });

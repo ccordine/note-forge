@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
+  VOICE_DRAW_MAX_RETAINED_SEGMENTS,
   centerVoiceDrawCursor,
   clearVoiceDraw,
   configureVoiceDrawState,
   createVoiceDrawState,
+  finishVoiceDraw,
+  startVoiceDraw,
   undoVoiceDrawStroke,
   updateVoiceDrawFromObservation,
 } from "../apps/web/src/features/voice-arcade/voice-draw-engine";
@@ -84,11 +87,11 @@ function feed(initial: VoiceDrawState, frames: readonly PitchObservation[]): Voi
 }
 
 function engineAtCenter(speed = 1): VoiceDrawState {
-  return createVoiceDrawState({
+  return startVoiceDraw(createVoiceDrawState({
     voiceRange: RANGE,
     speedNormalizedPerSecond: speed,
     maxStepSeconds: 0.2,
-  });
+  }));
 }
 
 function segmentFor(
@@ -123,6 +126,97 @@ function exactTargetSegments(target: Readonly<VoiceDrawTraceTarget>): VoiceDrawS
 }
 
 describe("Voice Draw deterministic engine", () => {
+  it("moves only between explicit Start and Finish commands, even after an hour of input", () => {
+    const right = createVoiceDrawNoteBank(RANGE).mappings[2]!;
+    let state = createVoiceDrawState({
+      voiceRange: RANGE,
+      speedNormalizedPerSecond: 1,
+      maxStepSeconds: 0.2,
+    });
+    const initialCursor = state.cursor;
+
+    state = updateVoiceDrawFromObservation(
+      state,
+      observation(4_800, { nearestMidi: right.midi }),
+    );
+    expect(state.phase).toBe("idle");
+    expect(state.cursor).toBe(initialCursor);
+    expect(state.observedFrameCount).toBe(1);
+
+    state = startVoiceDraw(state);
+    state = feed(state, [
+      observation(5_760, { nearestMidi: right.midi }),
+      observation(6_720, { nearestMidi: right.midi }),
+    ]);
+    expect(state.phase).toBe("drawing");
+    expect(state.cursor.x).toBeGreaterThan(initialCursor.x);
+    const finished = finishVoiceDraw(state);
+    const finishedCursor = finished.cursor;
+    const finishedSegments = finished.segments;
+    const finishedElapsedSeconds = finished.elapsedSeconds;
+
+    state = feed(finished, [
+      observation(172_806_720, { nearestMidi: right.midi }),
+      observation(172_807_680, { nearestMidi: right.midi }),
+    ]);
+    expect(state.phase).toBe("complete");
+    expect(state.cursor).toBe(finishedCursor);
+    expect(state.segments).toBe(finishedSegments);
+    expect(state.elapsedSeconds).toBe(finishedElapsedSeconds);
+    expect(state.observedFrameCount).toBe(finished.observedFrameCount + 2);
+
+    state = startVoiceDraw(state);
+    state = feed(state, [
+      observation(172_808_640, { nearestMidi: right.midi }),
+      observation(172_809_600, { nearestMidi: right.midi }),
+    ]);
+    expect(state.phase).toBe("drawing");
+    expect(state.cursor.x).toBeGreaterThan(finishedCursor.x);
+  });
+
+  it("bounds adversarial alternating direction/style history without ending live drawing", () => {
+    const bank = createVoiceDrawNoteBank(RANGE);
+    const left = bank.mappings.find(({ direction }) => direction === "left")!;
+    const right = bank.mappings.find(({ direction }) => direction === "right")!;
+    let state = engineAtCenter(0.25);
+    let index = 0;
+    state = updateVoiceDrawFromObservation(
+      state,
+      observation(4_800, { nearestMidi: right.midi }),
+    );
+
+    const emittedSegments = VOICE_DRAW_MAX_RETAINED_SEGMENTS + 3_000;
+    for (let command = 0; command < emittedSegments; command += 1) {
+      state = configureVoiceDrawState(state, {
+        style: {
+          color: command % 2 === 0 ? "#fff" : "#0ff",
+          width: command % 3 === 0 ? 0.01 : 0.011,
+          tool: "brush",
+        },
+      });
+      index += 1;
+      const mapping = command % 2 === 0 ? right : left;
+      state = updateVoiceDrawFromObservation(
+        state,
+        observation(4_800 + index * 960, { nearestMidi: mapping.midi }),
+      );
+    }
+
+    expect(state.segments).toHaveLength(VOICE_DRAW_MAX_RETAINED_SEGMENTS);
+    expect(state.retiredSegmentCount).toBe(emittedSegments - VOICE_DRAW_MAX_RETAINED_SEGMENTS);
+    expect(state.observedFrameCount).toBe(emittedSegments + 1);
+    expect(state.movementFrameCount).toBe(emittedSegments);
+    expect(state.lastAuthority?.endSample).toBe(4_800 + emittedSegments * 960);
+    expect(state.activeDirection).toBe("left");
+
+    const continued = updateVoiceDrawFromObservation(
+      state,
+      observation(4_800 + (emittedSegments + 1) * 960, { nearestMidi: right.midi }),
+    );
+    expect(continued.observedFrameCount).toBe(state.observedFrameCount + 1);
+    expect(continued.segments.length).toBeLessThanOrEqual(VOICE_DRAW_MAX_RETAINED_SEGMENTS);
+  });
+
   it("maps eight consecutive chromatic notes clockwise through every direction", () => {
     const bank = createVoiceDrawNoteBank(RANGE);
     expect(bank.mappings.map(({ midi }) => midi)).toEqual(
@@ -131,11 +225,11 @@ describe("Voice Draw deterministic engine", () => {
     expect(bank.mappings.map(({ direction }) => direction)).toEqual(VOICE_DRAW_DIRECTIONS);
 
     for (const mapping of bank.mappings) {
-      const initial = createVoiceDrawState({
+      const initial = startVoiceDraw(createVoiceDrawState({
         voiceRange: RANGE,
         cursor: { x: 0.5, y: 0.5 },
         speedNormalizedPerSecond: 1,
-      });
+      }));
       const moved = feed(initial, [
         observation(4_096, { nearestMidi: mapping.midi }),
         observation(5_056, { nearestMidi: mapping.midi }),
@@ -218,7 +312,7 @@ describe("Voice Draw deterministic engine", () => {
       activeDirection: null,
       activeMidi: null,
       activeHeldSeconds: 0,
-      stopReason: "unvoiced",
+      stationaryReason: "unvoiced",
       motionAnchorSample: null,
     });
     const stoppedX = state.cursor.x;
@@ -238,12 +332,12 @@ describe("Voice Draw deterministic engine", () => {
       observation(4_800, { nearestMidi: bank.baseMidi }),
     );
     state = updateVoiceDrawFromObservation(state, observation(5_760, { kind: "uncertain" }));
-    expect(state).toMatchObject({ activeDirection: null, stopReason: "uncertain" });
+    expect(state).toMatchObject({ activeDirection: null, stationaryReason: "uncertain" });
     state = updateVoiceDrawFromObservation(
       state,
       observation(6_720, { nearestMidi: bank.topMidi + 1 }),
     );
-    expect(state).toMatchObject({ activeDirection: null, stopReason: "unmapped" });
+    expect(state).toMatchObject({ activeDirection: null, stationaryReason: "unmapped" });
   });
 
   it("counts continuous silent observation time without moving or catch-up", () => {
@@ -321,12 +415,12 @@ describe("Voice Draw deterministic engine", () => {
 
   it("draws no catch-up motion across impossible gaps and clamps to canvas bounds", () => {
     const right = createVoiceDrawNoteBank(RANGE).mappings[2]!;
-    let state = createVoiceDrawState({
+    let state = startVoiceDraw(createVoiceDrawState({
       voiceRange: RANGE,
       speedNormalizedPerSecond: 1,
       maxStepSeconds: 0.05,
       cursor: { x: 0.99, y: 0.5 },
-    });
+    }));
     state = feed(state, [
       observation(4_800, { nearestMidi: right.midi }),
       observation(484_800, { nearestMidi: right.midi }),
@@ -344,11 +438,11 @@ describe("Voice Draw deterministic engine", () => {
 
   it("coalesces a long collinear hold into one render segment", () => {
     const right = createVoiceDrawNoteBank(RANGE).mappings[2]!;
-    const state = feed(createVoiceDrawState({
+    const state = feed(startVoiceDraw(createVoiceDrawState({
       voiceRange: RANGE,
       speedNormalizedPerSecond: 0.01,
       maxStepSeconds: 0.1,
-    }), [
+    })), [
       observation(4_800, { nearestMidi: right.midi }),
       ...Array.from({ length: 1_000 }, (_, index) => (
         observation(5_760 + index * 960, { nearestMidi: right.midi })

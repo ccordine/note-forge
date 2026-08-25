@@ -550,7 +550,7 @@ export function updatePitchMazeController(
 
   const dwell = updateRangeDwell(state.dwell, frame);
   const capture = appendCapture(state.capture, activeErrorCents, frame.timeSeconds, state.options);
-  if (dwell.status !== "complete") {
+  if (!dwell.achievementReached) {
     return {
       event: null,
       state: {

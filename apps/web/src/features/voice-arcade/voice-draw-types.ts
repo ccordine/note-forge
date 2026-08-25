@@ -14,7 +14,8 @@ export const VOICE_DRAW_DIRECTIONS = Object.freeze([
 
 export type VoiceDrawDirection = (typeof VOICE_DRAW_DIRECTIONS)[number];
 export type VoiceDrawTool = "brush" | "eraser";
-export type VoiceDrawStopReason = "unvoiced" | "uncertain" | "unmapped" | null;
+export type VoiceDrawPhase = "idle" | "drawing" | "complete";
+export type VoiceDrawStationaryReason = "unvoiced" | "uncertain" | "unmapped" | null;
 export type VoiceDrawTraceTargetId = "square" | "circle" | "star" | "spiral";
 
 export interface VoiceDrawPoint {
@@ -76,8 +77,11 @@ export interface VoiceDrawSampleAuthority {
 }
 
 export interface VoiceDrawState {
+  readonly phase: VoiceDrawPhase;
   readonly cursor: VoiceDrawPoint;
   readonly segments: readonly VoiceDrawSegment[];
+  /** Segments retired from the bounded live vector window during very long sessions. */
+  readonly retiredSegmentCount: number;
   readonly noteBank: VoiceDrawNoteBank;
   readonly speedNormalizedPerSecond: number;
   readonly maxStepSeconds: number;
@@ -87,7 +91,7 @@ export interface VoiceDrawState {
   readonly activeMidi: number | null;
   readonly activeCentsFromNearest: number | null;
   readonly activeHeldSeconds: number;
-  readonly stopReason: VoiceDrawStopReason;
+  readonly stationaryReason: VoiceDrawStationaryReason;
   readonly observedFrameCount: number;
   readonly movementFrameCount: number;
   readonly elapsedSeconds: number;
@@ -137,11 +141,11 @@ export interface VoiceDrawTraceScore {
 
 export type VoiceDrawSessionAction =
   | Readonly<{ type: "observation"; observation: Readonly<PitchObservation> }>
+  | Readonly<{ type: "start" }>
   | Readonly<{ type: "configure"; changes: Partial<VoiceDrawBrushStyle> }>
   | Readonly<{ type: "toggle-pen" }>
   | Readonly<{ type: "clear" }>
   | Readonly<{ type: "center" }>
   | Readonly<{ type: "undo" }>
   | Readonly<{ type: "clean" }>
-  | Readonly<{ type: "finish-trace" }>
-  | Readonly<{ type: "reset"; options: Readonly<CreateVoiceDrawStateOptions> }>;
+  | Readonly<{ type: "finish" }>;

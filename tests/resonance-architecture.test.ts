@@ -110,4 +110,24 @@ describe("Resonance continuous-input architecture guard", () => {
     }
     expect(CSS_SOURCE).not.toMatch(/resonance-(?:tutorial|connecting|combined-lock|microphone-retained)/);
   });
+
+  it("keeps goal achievement nonterminal and gives only Finish lifetime authority", () => {
+    expect(UI_SOURCE).toContain('data-live-lifetime="user-owned"');
+    expect(UI_SOURCE).toContain('data-live-achievement="resonance"');
+    expect(SESSION_SOURCE).toContain("Capturing the goal latches an achievement snapshot");
+    expect(SESSION_SOURCE).toContain("achievement: ResonanceResult | null");
+    expect(SESSION_SOURCE).toContain("result: summarizeResonanceRun(state.game, state.stats)");
+    expect(SESSION_SOURCE).not.toContain("result: state.result ??");
+    expect(SESSION_SOURCE).toContain('case "finish":');
+    expect(SESSION_SOURCE).not.toMatch(/phase:\s*complete\s*\?\s*["']complete["']/);
+    expect(PHYSICS_SOURCE).not.toContain('state.status === "won" || deltaSeconds === 0');
+    expect(UI_SOURCE).toContain('session.phase === "complete" && session.result');
+  });
+
+  it("keeps chamber selection idle until the visible Start command", () => {
+    expect(UI_SOURCE).toContain("Start chamber again");
+    expect(UI_SOURCE).toContain('realtime.dispatch({ type: "start" })');
+    expect(SESSION_SOURCE).toContain('sessionWithGame("idle", state.runSerial');
+    expect(SESSION_SOURCE).not.toContain('type: "restart"');
+  });
 });

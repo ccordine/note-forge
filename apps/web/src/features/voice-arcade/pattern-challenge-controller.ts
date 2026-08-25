@@ -4,6 +4,7 @@ import {
   createChallengeSteps,
   finishChallengeSession,
   generatePitchPattern,
+  gradeChallengeScore,
   summarizeChallenge,
   type ChallengeScoreSummary,
   type ChallengeSessionState,
@@ -32,6 +33,17 @@ interface PatternSampleClock {
   readonly lastEndSample: number;
 }
 
+export interface PatternChallengeScoreAggregate {
+  readonly score: number;
+  readonly maximumScore: number;
+  readonly hitSteps: number;
+  readonly missedSteps: number;
+  readonly totalSteps: number;
+  readonly evaluatedFrames: number;
+  readonly pitchQualityTotal: number;
+  readonly maxCombo: number;
+}
+
 export interface PatternChallengeControllerState {
   readonly options: PatternChallengeControllerOptions;
   readonly phase: PatternChallengePhase;
@@ -40,6 +52,9 @@ export interface PatternChallengeControllerState {
   readonly runSerial: number;
   readonly pattern: readonly PitchPatternStep[];
   readonly session: ChallengeSessionState | null;
+  readonly scoreAggregate: PatternChallengeScoreAggregate;
+  readonly achievementCount: number;
+  readonly achievementResult: ChallengeScoreSummary | null;
   readonly result: ChallengeScoreSummary | null;
   /** Latest authoritative voiced coordinate for the bounded game presentation. */
   readonly liveMidi: number | null;
@@ -58,6 +73,16 @@ export type PatternChallengeAction =
 
 const DEFAULT_MINIMUM_CONFIDENCE = 0.55;
 const EPSILON = 1e-9;
+const EMPTY_SCORE_AGGREGATE: PatternChallengeScoreAggregate = Object.freeze({
+  score: 0,
+  maximumScore: 0,
+  hitSteps: 0,
+  missedSteps: 0,
+  totalSteps: 0,
+  evaluatedFrames: 0,
+  pitchQualityTotal: 0,
+  maxCombo: 0,
+});
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
@@ -283,11 +308,72 @@ export function createPatternChallengeController(
     runSerial: 0,
     pattern: [],
     session: null,
+    scoreAggregate: EMPTY_SCORE_AGGREGATE,
+    achievementCount: 0,
+    achievementResult: null,
     result: null,
     liveMidi: null,
     elapsedSeconds: 0,
     clock: null,
   };
+}
+
+function foldPhraseScore(
+  aggregate: Readonly<PatternChallengeScoreAggregate>,
+  session: Readonly<ChallengeSessionState>,
+): PatternChallengeScoreAggregate {
+  return Object.freeze({
+    score: aggregate.score + session.score,
+    maximumScore: aggregate.maximumScore
+      + session.steps.reduce((total, step) => total + step.maximumPoints, 0),
+    hitSteps: aggregate.hitSteps + session.hitSteps,
+    missedSteps: aggregate.missedSteps + session.missedSteps,
+    totalSteps: aggregate.totalSteps + session.steps.length,
+    evaluatedFrames: aggregate.evaluatedFrames + session.evaluatedFrames,
+    pitchQualityTotal: aggregate.pitchQualityTotal + session.pitchQualityTotal,
+    maxCombo: Math.max(aggregate.maxCombo, session.maxCombo),
+  });
+}
+
+function summarizePatternScore(
+  aggregate: Readonly<PatternChallengeScoreAggregate>,
+): ChallengeScoreSummary {
+  const totalSteps = Math.max(1, aggregate.totalSteps);
+  const completionPercent = aggregate.hitSteps / totalSteps * 100;
+  const accuracyPercent = aggregate.evaluatedFrames === 0
+    ? 0
+    : aggregate.pitchQualityTotal / aggregate.evaluatedFrames * 100;
+  const comboPercent = aggregate.maxCombo / totalSteps * 100;
+  const scorePercent = Math.round(clamp(
+    completionPercent * .65 + accuracyPercent * .25 + comboPercent * .1,
+    0,
+    100,
+  ));
+  return Object.freeze({
+    ...gradeChallengeScore(scorePercent),
+    score: aggregate.score,
+    maximumScore: aggregate.maximumScore,
+    scorePercent,
+    accuracyPercent,
+    completionPercent,
+    hitSteps: aggregate.hitSteps,
+    missedSteps: aggregate.missedSteps,
+    maxCombo: aggregate.maxCombo,
+    totalSteps: aggregate.totalSteps,
+  });
+}
+
+function nextPhraseSession(
+  state: Readonly<PatternChallengeControllerState>,
+  elapsedSeconds: number,
+): ChallengeSessionState {
+  return createChallengeSession(createChallengeSteps(state.pattern, {
+    mode: state.mode,
+    difficulty: state.options.difficulty,
+    startAtSeconds: elapsedSeconds + .001,
+  }), {
+    minimumConfidence: state.options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
+  });
 }
 
 function preparePatternChallenge(
@@ -314,24 +400,29 @@ function preparePatternChallenge(
     session: createChallengeSession(steps, {
       minimumConfidence: state.options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
     }),
+    scoreAggregate: EMPTY_SCORE_AGGREGATE,
+    achievementCount: 0,
+    achievementResult: null,
     result: null,
     elapsedSeconds: 0,
     clock: null,
   };
 }
 
-function completePatternChallenge(
+function finishPatternChallenge(
   state: Readonly<PatternChallengeControllerState>,
   session: Readonly<ChallengeSessionState>,
 ): PatternChallengeControllerState {
   const completed = session.status === "complete"
     ? session as ChallengeSessionState
     : finishChallengeSession(session);
+  const scoreAggregate = foldPhraseScore(state.scoreAggregate, completed);
   return {
     ...state,
     phase: "result",
     session: completed,
-    result: summarizeChallenge(completed),
+    scoreAggregate,
+    result: summarizePatternScore(scoreAggregate),
     clock: null,
   };
 }
@@ -391,10 +482,22 @@ function advancePatternChallenge(
     elapsedSeconds,
     !startsNewSegment,
   );
-  const next = { ...state, session, liveMidi, elapsedSeconds, clock };
-  return session.status === "complete"
-    ? completePatternChallenge(next, session)
-    : next;
+  if (session.status !== "complete") {
+    return { ...state, session, liveMidi, elapsedSeconds, clock };
+  }
+  // A phrase is a repeatable milestone inside one user-owned run. Fold its
+  // exact score into bounded aggregate authority, latch its result, and put
+  // the next authored phrase on the same sample clock. Only Stop is terminal.
+  return {
+    ...state,
+    session: nextPhraseSession(state, elapsedSeconds),
+    scoreAggregate: foldPhraseScore(state.scoreAggregate, session),
+    achievementCount: state.achievementCount + 1,
+    achievementResult: summarizeChallenge(session),
+    liveMidi,
+    elapsedSeconds,
+    clock,
+  };
 }
 
 export function reducePatternChallenge(
@@ -408,17 +511,57 @@ export function reducePatternChallenge(
       return preparePatternChallenge(state, action.seed);
     case "begin":
       return state.phase === "preview" && state.session
-        ? { ...state, phase: "playing", runSerial: state.runSerial + 1, liveMidi: null, elapsedSeconds: 0, clock: null }
+        ? {
+            ...state,
+            phase: "playing",
+            runSerial: state.runSerial + 1,
+            scoreAggregate: EMPTY_SCORE_AGGREGATE,
+            achievementCount: 0,
+            achievementResult: null,
+            result: null,
+            liveMidi: null,
+            elapsedSeconds: 0,
+            clock: null,
+          }
         : state as PatternChallengeControllerState;
     case "observation":
       return advancePatternChallenge(state, action.observation);
     case "stop":
       return state.phase === "playing" && state.session
-        ? completePatternChallenge(state, state.session)
+        ? finishPatternChallenge(state, state.session)
         : state as PatternChallengeControllerState;
     case "change-loadout":
-      return { ...state, phase: "setup", pattern: [], session: null, result: null, liveMidi: null, elapsedSeconds: 0, clock: null };
+      return state.phase === "preview" || state.phase === "result"
+        ? {
+            ...state,
+            phase: "setup",
+            pattern: [],
+            session: null,
+            scoreAggregate: EMPTY_SCORE_AGGREGATE,
+            achievementCount: 0,
+            achievementResult: null,
+            result: null,
+            liveMidi: null,
+            elapsedSeconds: 0,
+            clock: null,
+          }
+        : state as PatternChallengeControllerState;
     case "next-round":
-      return { ...state, phase: "setup", round: state.round + 1, pattern: [], session: null, result: null, liveMidi: null, elapsedSeconds: 0, clock: null };
+      return state.phase === "result"
+        ? {
+            ...state,
+            phase: "setup",
+            round: state.round + 1,
+            pattern: [],
+            session: null,
+            scoreAggregate: EMPTY_SCORE_AGGREGATE,
+            achievementCount: 0,
+            achievementResult: null,
+            result: null,
+            liveMidi: null,
+            elapsedSeconds: 0,
+            clock: null,
+          }
+        : state as PatternChallengeControllerState;
   }
 }

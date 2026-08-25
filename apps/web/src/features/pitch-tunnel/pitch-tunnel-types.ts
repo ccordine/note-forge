@@ -85,6 +85,12 @@ export interface PitchTunnelCheckpointResult {
 
 export interface PitchTunnelState {
   readonly status: PitchTunnelStatus;
+  /**
+   * The authored round trip has been reached, but the user still owns the
+   * live session. Only an explicit `finish` action may change `status` to
+   * `complete`.
+   */
+  readonly achievementReached: boolean;
   readonly options: Readonly<ResolvedPitchTunnelOptions>;
   readonly anchorMidiFloat: number | null;
   readonly elapsedSeconds: number;
@@ -136,6 +142,7 @@ export interface PitchTunnelMetrics {
 export type PitchTunnelAction =
   | { readonly type: "observation"; readonly observation: Readonly<PitchObservation> }
   | { readonly type: "start" }
+  | { readonly type: "finish" }
   | { readonly type: "reset" };
 
 function requireFinite(value: number, label: string): void {

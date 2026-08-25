@@ -24,8 +24,22 @@ function RangeLoopToolbar({ session }: { readonly session: RangeLoopSession }) {
         />
         <small>short reference</small>
       </span>
-      <ActionButton onClick={session.resetHold}>Reset hold</ActionButton>
-      {session.completed && (
+      {session.phase === "tracking" && (
+        <ActionButton onClick={session.resetHold}>Reset hold</ActionButton>
+      )}
+      {session.phase !== "tracking" && (
+        <ActionButton
+          className="primary"
+          disabled={session.input.state !== "running"}
+          onClick={session.start}
+        >
+          Start Range Loop
+        </ActionButton>
+      )}
+      {session.phase === "tracking" && (
+        <ActionButton onClick={session.finish}>Finish Range Loop</ActionButton>
+      )}
+      {session.phase === "tracking" && session.achievementReached && (
         <ActionButton className="primary" onClick={session.advanceTarget}>
           Next target
         </ActionButton>
@@ -66,11 +80,31 @@ function RangeLoopSequence({ session }: { readonly session: RangeLoopSession }) 
 }
 
 export function RangeLoopStage({ session }: { readonly session: RangeLoopSession }) {
+  if (!session.hydrated) {
+    return (
+      <Panel className="range-loop-stage" aria-live="polite">
+        <div className="range-profile-notice">
+          <span>
+            <b>Loading your saved Range Loop target.</b>
+            {" "}Live voice input remains app-owned; no temporary target is scoring.
+          </span>
+        </div>
+      </Panel>
+    );
+  }
   const inputRunning = session.input.state === "running";
-  const phase = session.completed ? "complete" : inputRunning ? "listening" : "idle";
-  const holdStatus = session.completed ? "complete" : session.holding ? "holding" : "waiting";
+  const phase = session.phase === "complete"
+    ? "complete"
+    : session.phase === "tracking" && inputRunning
+      ? "listening"
+      : "idle";
+  const holdStatus = session.holding ? "holding" : "waiting";
   return (
-    <Panel className={`range-loop-stage ${inputRunning ? "active" : ""}`}>
+    <Panel
+      className={`range-loop-stage ${session.phase === "tracking" ? "active" : ""}`}
+      data-live-lifetime="user-owned"
+      data-range-loop-phase={session.phase}
+    >
       <RangeLoopSettings session={session} />
       <RangeLoopToolbar session={session} />
 
@@ -85,17 +119,18 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
           requiredSeconds: session.holdSeconds,
           status: holdStatus,
         }}
+        holdMode="occupancy"
         title={`Range Loop live target ${noteLabel(session.targetMidi)}`}
         diagnosticsFlow="range-loop"
       />
 
       <RangeLoopSequence session={session} />
 
-      {session.completed && (
+      {session.phase === "tracking" && session.achievementReached && (
         <div className="range-result-next" role="status" aria-live="polite">
           <span>
-            <b>{noteLabel(session.targetMidi)} held for {session.dwell.heldSeconds.toFixed(2)} seconds.</b>
-            <small>The detector remains live. Next target is ready in the toolbar.</small>
+            <b>{noteLabel(session.targetMidi)} earned · current {session.dwell.heldSeconds.toFixed(2)} seconds · peak {session.dwell.peakHeldSeconds.toFixed(2)} seconds.</b>
+            <small>Time keeps accumulating while you remain in range. Choose Next target whenever you decide.</small>
           </span>
         </div>
       )}

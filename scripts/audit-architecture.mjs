@@ -3,6 +3,7 @@ import { extname, join, relative, resolve } from "node:path";
 import process from "node:process";
 import ts from "typescript";
 import { printArchitectureReport } from "./audit-support/report.mjs";
+import { auditUserOwnedLiveLifetime } from "./audit-support/user-owned-live-lifetime.mjs";
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 const APPLICATION_ROOT = join(REPOSITORY_ROOT, "apps/web/src");
@@ -12,16 +13,15 @@ const PROGRAM_EXTENSIONS = new Set([".js", ".mjs", ".ts", ".tsx"]);
 const EXECUTABLE_EXTENSIONS = new Set([".go", ...PROGRAM_EXTENSIONS]);
 const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".css"];
 const enforce = process.argv.includes("--enforce");
-
 const REVIEWED_LARGE_SUPPORT_FILES = new Map([
   ["cmd/noteforge-server/server_test.go", "HTTP/security integration matrix"],
   ["scripts/prove-note-input-browser.mjs", "browser assertion/report coordinator; protocol, fixture, instrumentation, and analysis are extracted"],
   ["scripts/prove-voice-draw-browser.mjs", "cabinet browser assertion/report coordinator over shared proof support"],
+  ["scripts/audit-support/user-owned-live-lifetime.mjs", "single AST authority registry and verifier for every user-owned live reducer"],
   ["tests/note-input-engine.test.ts", "exhaustive detector range, timbre, sample-rate, and confounder matrix"],
   ["tests/pitch-diagnostic-transport.test.ts", "exact diagnostic transport schema and sample-identity matrix"],
   ["tests/range-simulator.test.ts", "range-profile migration and full-depth probing matrix"],
 ]);
-
 function isSupportSource(relativePath) {
   return relativePath.startsWith("scripts/")
     || relativePath.startsWith("tests/")
@@ -421,6 +421,7 @@ const unreachableApplicationFiles = records.filter((record) =>
   && !reachable.has(record.path));
 
 const violations = [];
+violations.push(...auditUserOwnedLiveLifetime(records));
 for (const record of records) {
   const extension = extname(record.path);
   const supportSource = isSupportSource(record.relativePath);

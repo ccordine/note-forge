@@ -252,15 +252,15 @@ async function main() {
     );
     const anchorClicked = await evaluate(session, `(() => {
       const button = [...document.querySelectorAll('[data-pitch-tunnel] button')]
-        .find((candidate) => candidate.textContent?.includes('Anchor this pitch'));
+        .find((candidate) => candidate.textContent?.trim() === 'Start trace here');
       button?.click();
       return Boolean(button);
     })()`);
-    assert(anchorClicked, "The real Anchor action was not clickable.");
+    assert(anchorClicked, "The real Start trace here action was not clickable.");
     await waitForBrowser(
       session,
       "document.querySelector('[data-pitch-tunnel-lane]')?.getAttribute('data-workflow-step') === 'tracking'",
-      "the sample-authoritative anchored session",
+      "the explicitly started sample-authoritative session",
       2_000,
     );
     const anchor = await evaluate(session, `(() => {
@@ -275,21 +275,41 @@ async function main() {
     })()`);
     assert(anchor.workflowStep === "tracking"
       && anchor.observedFrameCount === 1 && Math.abs(anchor.liveMidi - ANCHOR_MIDI) <= 0.04,
-    `The real Anchor action did not freeze the exact live C3 authority: ${JSON.stringify(anchor)}`);
+    `The real Start action did not adopt the exact live C3 authority: ${JSON.stringify(anchor)}`);
 
     await waitForBrowser(
       session,
       `(() => {
         const snapshots = window.__noteforgePitchTunnelProof?.snapshot?.().tunnelSnapshots ?? [];
-        const completed = snapshots.findIndex((frame) => frame.workflowStep === 'complete');
-        if (completed < 0) return false;
-        const after = snapshots.slice(completed + 1);
+        const achieved = snapshots.findIndex((frame) => frame.workflowStep === 'tracking'
+          && frame.traceLifetime === 'user-owned'
+          && frame.achievementReached
+          && frame.completedCheckpointCount === ${CHECKPOINT_OFFSETS.length});
+        if (achieved < 0) return false;
+        const after = snapshots.slice(achieved + 1);
         return after.some((frame) => frame.liveMidi !== null && Math.abs(frame.liveMidi - 49) <= 0.08)
-          && after.some((frame) => frame.observationKind === 'unvoiced' && frame.liveMidi === null);
+          && after.some((frame) => frame.observationKind === 'unvoiced' && frame.liveMidi === null)
+          && after.every((frame) => frame.workflowStep === 'tracking');
       })()`,
-      "all nine checkpoints and post-completion live authority",
+      "all nine checkpoints and post-achievement user-owned live authority",
       30_000,
     );
+
+    const finishClicked = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('[data-pitch-tunnel] button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Finish trace');
+      if (!button || button.disabled) return false;
+      button.click();
+      return true;
+    })()`);
+    assert(finishClicked, "The explicit Pitch Tunnel Finish trace action was unavailable.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-pitch-tunnel-lane]')?.getAttribute('data-workflow-step') === 'complete'",
+      "Pitch Tunnel completion after explicit Finish trace",
+      2_000,
+    );
+    await delay(300);
 
     let synchronized = await synchronizedSnapshot(session, anchor);
     assert(!synchronized.synchronizationFailure,
@@ -424,7 +444,9 @@ async function main() {
       const expectedIndex = final ? completion.checkpointIndex : completion.checkpointIndex + 1;
       const expectedOffset = CHECKPOINT_OFFSETS[expectedIndex];
       if (!published
-        || published.workflowStep !== (final ? "complete" : "tracking")
+        || published.workflowStep !== "tracking"
+        || published.traceLifetime !== "user-owned"
+        || published.achievementReached !== final
         || published.checkpointIndex !== expectedIndex
         || published.targetOffsetCents !== expectedOffset
         || (final ? Math.abs(published.checkpointHeldSeconds - 1) > 1e-9
@@ -450,10 +472,17 @@ async function main() {
       `Pitch Tunnel replaced its live lane across workflow states: ${feature.laneElements} lane elements.`);
     assert(snapshots.every((frame) => frame.laneLabel === `±${LANE_HALF_WIDTH_CENTS}¢ TARGET WALLS`),
       `Pitch Tunnel did not retain one ±${LANE_HALF_WIDTH_CENTS}¢ lane.`);
+    const achievementSnapshots = snapshots.filter((frame) => frame.workflowStep === "tracking"
+      && frame.traceLifetime === "user-owned"
+      && frame.achievementReached
+      && frame.completedCheckpointCount === CHECKPOINT_OFFSETS.length);
     const completeSnapshots = snapshots.filter((frame) => frame.workflowStep === "complete");
+    assert(achievementSnapshots.length > 4,
+      "The ninth checkpoint replaced the user-owned trace instead of latching an inline achievement.");
     assert(completeSnapshots.length > 4
-      && completeSnapshots.some((frame) => frame.completedCheckpointCount === CHECKPOINT_OFFSETS.length),
-    "The same instrument did not render completion for all nine checkpoints.");
+      && completeSnapshots.every((frame) => frame.completedCheckpointCount === CHECKPOINT_OFFSETS.length)
+      && completeSnapshots[0].endSample >= achievementSnapshots[0].endSample,
+    "The same instrument reached terminal completion only after explicit Finish trace.");
 
     const silenceFrames = snapshots.filter((frame) => frame.workflowStep === "tracking"
       && frame.targetOffsetCents === 50 && frame.observationKind === "unvoiced");
@@ -474,13 +503,16 @@ async function main() {
         && frame.checkpointHeldSeconds === 0
         && frame.inLaneSeconds >= preWrong.inLaneSeconds),
     `Credible wrong pitch did not reset only current dwell: ${JSON.stringify({ preWrong, wrongFrames })}`);
+    const firstAchievement = achievementSnapshots[0];
     assert(trajectory.resets.some((reset) => reset.checkpointIndex === 3
       && reset.heldBefore > 0.1)
-      && Math.abs(finalSnapshot.inLaneSeconds - trajectory.totalInLaneSeconds) <= 1e-9,
+      && Math.abs(firstAchievement.inLaneSeconds - trajectory.totalInLaneSeconds) <= 1e-9
+      && finalSnapshot.inLaneSeconds > firstAchievement.inLaneSeconds,
     `Wrong-pitch reset erased or fabricated aggregate sample time: ${JSON.stringify({
       resets: trajectory.resets,
+      achievementTotal: firstAchievement.inLaneSeconds,
       renderedTotal: finalSnapshot.inLaneSeconds,
-      expectedTotal: trajectory.totalInLaneSeconds,
+      authoredTrajectoryTotal: trajectory.totalInLaneSeconds,
     })}`);
 
     const firstAnchorDetector = pitchEvents
@@ -507,14 +539,20 @@ async function main() {
       && frameKey(firstVoicedAfterSilence) === frameKey(firstDomAfterSilence),
     `Voiced F0 after silence was not published on its first exact frame: ${JSON.stringify({ firstVoicedAfterSilence, firstDomAfterSilence })}`);
 
-    const completeVoiced = completeSnapshots.find((frame) => frame.liveMidi !== null
+    const achievementVoiced = achievementSnapshots.find((frame) => frame.liveMidi !== null
       && Math.abs(frame.liveMidi - (ANCHOR_MIDI + 1)) <= 0.08);
-    const completeSilence = completeSnapshots.find((frame) => frame.observationKind === "unvoiced"
-      && frame.liveMidi === null && frame.endSample > (completeVoiced?.endSample ?? 0));
-    assert(completeVoiced && completeSilence
-      && completeSilence.observedFrameCount > completeVoiced.observedFrameCount,
-    `Completed instrument stopped following live authority: ${JSON.stringify({ completeVoiced, completeSilence })}`);
-    const finiteMetricSnapshot = completeSnapshots.find((frame) => [
+    const achievementSilence = achievementSnapshots.find((frame) => frame.observationKind === "unvoiced"
+      && frame.liveMidi === null && frame.endSample > (achievementVoiced?.endSample ?? 0));
+    assert(achievementVoiced && achievementSilence
+      && achievementSilence.observedFrameCount > achievementVoiced.observedFrameCount,
+    `Achieving the trajectory stopped the user-owned live authority: ${JSON.stringify({ achievementVoiced, achievementSilence })}`);
+    assert(finalSnapshot.workflowStep === "complete"
+      && finalSnapshot.observedFrameCount > completeSnapshots[0].observedFrameCount
+      && completeSnapshots.every((frame) => (
+        Math.abs(frame.inLaneSeconds - completeSnapshots[0].inLaneSeconds) <= 1e-9
+      )),
+    `The live instrument stopped following observations after explicit Finish: ${JSON.stringify({ firstComplete: completeSnapshots[0], finalSnapshot })}`);
+    const finiteMetricSnapshot = achievementSnapshots.find((frame) => [
       frame.metrics.Distance,
       frame.metrics["Time in lane"],
       frame.metrics.Overshoots,
@@ -522,16 +560,16 @@ async function main() {
       frame.metrics.Stability,
     ].every((value) => metricNumber(value) !== null));
     assert(finiteMetricSnapshot,
-      `Completion did not render finite clinical metrics: ${JSON.stringify(completeSnapshots.map((frame) => frame.metrics))}`);
+      `Achievement did not render finite clinical metrics: ${JSON.stringify(achievementSnapshots.map((frame) => frame.metrics))}`);
     assert(browserErrors.length === 0,
       `Chromium reported browser errors: ${JSON.stringify(browserErrors)}`);
 
     console.log("Pitch Tunnel production browser proof passed.");
     console.log(`  authority: 1 stream · 1 track · 1 source · 1 worklet · ${postAnchorWorkletFrames.length} exact post-anchor observations`);
     console.log(`  presentation: ${snapshots.length} exact DOM publications across ${publicationSeconds.toFixed(2)} sample-seconds · <=30 Hz`);
-    console.log(`  trajectory: ${targetTransitions.slice(0, CHECKPOINT_OFFSETS.length).join(" -> ")} cents · 9 exact 1.00s dwells · ±${LANE_HALF_WIDTH_CENTS}¢ · complete`);
+    console.log(`  trajectory: ${targetTransitions.slice(0, CHECKPOINT_OFFSETS.length).join(" -> ")} cents · 9 exact 1.00s dwells · ±${LANE_HALF_WIDTH_CENTS}¢ · achievement remained tracking`);
     console.log(`  boundaries: silence retained ${silenceFrames[0].checkpointHeldSeconds.toFixed(2)}s dwell · credible wrong reset to 0.00s`);
-    console.log(`  completion: live ${completeVoiced.liveMidi.toFixed(3)} MIDI -> unvoiced at ${completeSilence.endSample} · metrics finite · no playback`);
+    console.log(`  lifetime: achievement stayed live and scoring grew ${firstAchievement.inLaneSeconds.toFixed(2)}s -> ${finalSnapshot.inLaneSeconds.toFixed(2)}s; explicit Finish froze scoring while telemetry continued · no playback`);
   } catch (error) {
     throw new Error([
       error instanceof Error ? error.stack || error.message : String(error),

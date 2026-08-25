@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyLoopProgress } from "../apps/web/src/features/range-loop/progress";
 import {
   completeRangeLoopFamily,
+  createRangeLoopLiveState,
   firstRangeLoopTarget,
   hydrateRangeLoopState,
   isRangeLoopFamily,
@@ -11,9 +12,24 @@ import {
   isRangeLoopTolerance,
   markRangeLoopTargetPassed,
   rangeLoopTargetSequence,
+  reduceRangeLoopLiveState,
 } from "../apps/web/src/features/range-loop/range-loop-session";
 
 describe("Range Loop session projection", () => {
+  it("crosses feature lifetime boundaries only through explicit Start and Finish", () => {
+    const idle = createRangeLoopLiveState();
+    expect(idle.phase).toBe("idle");
+
+    const tracking = reduceRangeLoopLiveState(idle, { type: "start" });
+    expect(tracking.phase).toBe("tracking");
+    expect(reduceRangeLoopLiveState(tracking, { type: "start" })).toBe(tracking);
+
+    const complete = reduceRangeLoopLiveState(tracking, { type: "finish" });
+    expect(complete.phase).toBe("complete");
+    expect(reduceRangeLoopLiveState(complete, { type: "finish" })).toBe(complete);
+    expect(reduceRangeLoopLiveState(complete, { type: "start" }).phase).toBe("tracking");
+  });
+
   it("normalizes stored settings into one complete session snapshot", () => {
     const progress = emptyLoopProgress();
     progress.chromatic.upper.passedMidis = [84, 85];

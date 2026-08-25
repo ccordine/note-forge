@@ -124,25 +124,31 @@ export function createRangeSimulatorController(options: {
 
 export function canRateRangeProbe(state: Readonly<RangeSimulatorControllerState>): boolean {
   return state.status === "tracking"
-    && (state.dwell.status === "complete" || state.rating === 4 || state.rating === 5);
+    && currentRangeSimulatorProbe(state.session) !== null
+    && (state.dwell.achievementReached || state.rating === 4 || state.rating === 5);
 }
 
 function hydrateController(
   action: Extract<RangeSimulatorControllerAction, { type: "hydrate" }>,
 ): RangeSimulatorControllerState {
-  const complete = action.session.phase === "complete";
+  const explicitlyFinished = action.session.completionStatus === "stopped";
+  const achievementReached = action.session.phase === "complete" && !explicitlyFinished;
+  let notice = action.session.ratedProbeCount > 0
+    ? "Saved progress is ready. Continue from the next target when you choose."
+    : "Choose today’s starting area, then begin. Live input remains continuous throughout the check.";
+  if (achievementReached) {
+    notice = `${completionNotice(action.session)} Press Start saved assessment to make the live pitch surface authoritative again.`;
+  }
+  if (explicitlyFinished) notice = completionNotice(action.session);
   return {
-    status: complete ? "complete" : "idle",
+    // Loading persisted achievement/configuration never starts a live session.
+    status: explicitlyFinished ? "complete" : "idle",
     session: action.session,
     profile: action.profile,
     dwell: createDwellForSession(action.session, action.toleranceCents),
     rating: null,
     coordinationChange: false,
-    notice: complete
-      ? completionNotice(action.session)
-      : action.session.ratedProbeCount > 0
-        ? "Saved progress is ready. Continue from the next target when you choose."
-        : "Choose today’s starting area, then begin. Live input remains continuous throughout the check.",
+    notice,
     persistenceRevision: 0,
   };
 }
@@ -159,17 +165,19 @@ function saveCurrentRating(
     coordinationChange: state.coordinationChange,
     ratedAt: action.ratedAt,
   });
-  const complete = nextSession.phase === "complete";
+  const achievementReached = nextSession.phase === "complete";
   return {
     ...state,
-    status: complete ? "complete" : "tracking",
+    // Exhausting the probe queue records an assessment achievement. It is not
+    // authority to end the user-started live workspace.
+    status: "tracking",
     session: nextSession,
-    profile: complete ? projectRangeSimulatorProfile(state.profile, nextSession) : state.profile,
-    dwell: complete ? state.dwell : createDwellForSession(nextSession, action.toleranceCents),
+    profile: achievementReached ? projectRangeSimulatorProfile(state.profile, nextSession) : state.profile,
+    dwell: achievementReached ? state.dwell : createDwellForSession(nextSession, action.toleranceCents),
     rating: null,
     coordinationChange: false,
-    notice: complete
-      ? completionNotice(nextSession)
+    notice: achievementReached
+      ? `${completionNotice(nextSession)} The live pitch surface remains active until you choose Finish today.`
       : nextProbeNotice(state.rating, nextSession),
     persistenceRevision: state.persistenceRevision + 1,
   };
@@ -215,14 +223,14 @@ export function reduceRangeSimulatorController(
       return {
         ...state,
         dwell,
-        notice: dwell.status === "complete"
+        notice: !state.dwell.achievementReached && dwell.achievementReached
           ? "Pitch hold confirmed. Rate comfort and repeatability to advance."
           : state.notice,
       };
     }
     case "select-rating":
       if (state.status !== "tracking") return state as RangeSimulatorControllerState;
-      if (state.dwell.status !== "complete" && action.rating < 4) return state as RangeSimulatorControllerState;
+      if (!state.dwell.achievementReached && action.rating < 4) return state as RangeSimulatorControllerState;
       return { ...state, rating: action.rating };
     case "set-coordination":
       return state.status === "tracking"
@@ -242,6 +250,7 @@ export function reduceRangeSimulatorController(
     case "finish":
       return finishController(state, action.stoppedAt);
     case "fresh": {
+      if (state.status === "tracking") return state as RangeSimulatorControllerState;
       const next = createRangeSimulatorSession({
         anchorMidi: action.anchorMidi,
         preparation: action.preparation,

@@ -5,12 +5,16 @@ import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import {
   createIdleAttemptRunner,
   reduceAttemptRunner,
+  type AttemptScoringProfile,
   type AttemptRunnerState,
   type CompletedAttempt,
 } from "./attempt-runner";
 import { useSessionEffectScope } from "./use-session-effect-scope";
 
 export interface AttemptRunnerOptions<Configuration> {
+  readonly scoringProfile?: (
+    configuration: Readonly<Configuration>,
+  ) => Readonly<AttemptScoringProfile> | null;
   readonly onComplete: (
     attempt: Readonly<CompletedAttempt<Configuration>>,
     signal: AbortSignal,
@@ -21,7 +25,7 @@ export interface AttemptRunnerOptions<Configuration> {
 export interface AttemptRunner<Configuration> {
   readonly state: Readonly<AttemptRunnerState<Configuration>>;
   readonly observe: (observation: Readonly<PitchObservation>) => void;
-  readonly begin: (configuration: Readonly<Configuration>, durationSeconds: number) => void;
+  readonly begin: (configuration: Readonly<Configuration>) => void;
   readonly finish: () => void;
   readonly reset: () => void;
   readonly playReference: (
@@ -63,18 +67,15 @@ export function useAttemptRunner<Configuration>(
     session.observe({ type: "observation", observation });
   }, [session.observe]);
 
-  const begin = useCallback((
-    configuration: Readonly<Configuration>,
-    durationSeconds: number,
-  ) => {
+  const begin = useCallback((configuration: Readonly<Configuration>) => {
     effects.restart();
     session.dispatch({
       type: "begin",
       configuration,
-      durationSeconds,
       startedAt: new Date().toISOString(),
+      scoringProfile: options.scoringProfile?.(configuration),
     });
-  }, [effects.restart, session.dispatch]);
+  }, [effects.restart, options.scoringProfile, session.dispatch]);
 
   const finish = useCallback(() => session.dispatch({ type: "finish" }), [session.dispatch]);
   const reset = useCallback(() => {

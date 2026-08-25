@@ -413,6 +413,22 @@ describe("adaptive probe scheduling", () => {
     expect(stopped.descending).toMatchObject({ status: "incomplete", pendingRetestMidi: null });
   });
 
+  it("records explicit Stop even after the probe queue achievement was already reached", () => {
+    let achieved = createSession();
+    while (achieved.phase !== "complete") achieved = rateCurrent(achieved, 5);
+    expect(achieved.completionStatus).toBe("no-usable-baseline");
+
+    const stopped = stopRangeSimulatorSession(
+      achieved,
+      new Date(Date.parse(achieved.updatedAt) + 1_000).toISOString(),
+    );
+    expect(stopped).toMatchObject({
+      phase: "complete",
+      completionStatus: "stopped",
+    });
+    expect(achieved.completionStatus).toBe("no-usable-baseline");
+  });
+
   it("cancels a pending boundary recheck when the user stops", () => {
     let session = probingSession();
     session = rateCurrent(session, 1);

@@ -41,6 +41,11 @@ const PASS_COPY: Readonly<Record<PracticePass, {
     detail: "Keep the harmonic problem; change the melodic solution.",
   },
 });
+const PASS_ICONS: Readonly<Record<PracticePass, Parameters<typeof Icon>[0]["name"]>> = Object.freeze({
+  shadow: "mirror",
+  understand: "skills",
+  mutate: "spark",
+});
 
 const STAGES: readonly { id: SongWorkspaceStage; label: string; detail: string }[] = Object.freeze([
   { id: "configure", label: "1 · Configure", detail: "Loop and describe one phrase" },
@@ -55,6 +60,21 @@ function formatTime(seconds: number): string {
 }
 
 type Workspace = ReturnType<typeof useSongWorkspace>;
+
+function recordingActionLabel(options: Readonly<{
+  active: boolean;
+  opening: boolean;
+  finalizing: boolean;
+  unavailable: boolean;
+  unsavable: boolean;
+}>): string {
+  if (options.active && options.unsavable) return "Stop unsaved take";
+  if (options.active) return "Stop & review take";
+  if (options.opening) return "Stop opening take";
+  if (options.finalizing) return "Saving take locally…";
+  if (options.unavailable) return "Enable voice in header";
+  return "Start voice take";
+}
 
 function FileButton({
   primary = false,
@@ -212,19 +232,21 @@ function PracticeSong({ workspace }: { workspace: Workspace }) {
   const copy = PASS_COPY[state.practicePass];
   const recordingActive = state.recordingStatus === "active";
   const recordingOpening = state.recordingStatus === "opening";
+  const recordingFinalizing = state.recordingStatus === "finalizing";
   const recordingUnavailable = state.recordingStatus === "idle" && input.state !== "running";
-  let recordingLabel = "Record one take";
-  if (recordingActive) recordingLabel = "Stop & review take";
-  else if (recordingOpening) recordingLabel = "Opening recorder…";
-  else if (recordingUnavailable) recordingLabel = "Enable voice in header";
-  let passIcon: Parameters<typeof Icon>[0]["name"] = "spark";
-  if (state.practicePass === "shadow") passIcon = "mirror";
-  else if (state.practicePass === "understand") passIcon = "skills";
+  const recordingLabel = recordingActionLabel({
+    active: recordingActive,
+    opening: recordingOpening,
+    finalizing: recordingFinalizing,
+    unavailable: recordingUnavailable,
+    unsavable: state.recordError.length > 0,
+  });
+  const passIcon = PASS_ICONS[state.practicePass];
   return (
     <section className="song-current-stage" aria-labelledby="song-practice-title">
       <div className="song-stage-heading">
         <div><Eyebrow>Current step · practice</Eyebrow><h2 id="song-practice-title">Sing against the selected loop.</h2><p>The shared detector remains live; recording is a separate explicit local take.</p></div>
-        <ActionButton disabled={recordingActive || recordingOpening} onClick={() => workspace.setStage("configure")}>Edit phrase</ActionButton>
+        <ActionButton disabled={state.recordingStatus !== "idle"} onClick={() => workspace.setStage("configure")}>Edit phrase</ActionButton>
       </div>
       <NoteInput variant="scope" input={input} title="Live voice coordinate" />
       <Panel className="three-passes">
@@ -238,7 +260,7 @@ function PracticeSong({ workspace }: { workspace: Workspace }) {
         </div>
         <div className="record-strip">
           <div className="headphone-note"><Icon name="headphones" size={20} /><span><b>Use headphones for the backing phrase.</b><small>The microphone stream is never stopped when this take ends.</small></span></div>
-          <ActionButton disabled={recordingOpening || recordingUnavailable} className={recordingActive ? "recording coral" : "primary"} onClick={recordingActive ? workspace.stopRecording : workspace.startRecording}>
+          <ActionButton disabled={recordingFinalizing || recordingUnavailable} className={recordingActive ? "recording coral" : "primary"} onClick={recordingActive || recordingOpening ? workspace.stopRecording : workspace.startRecording}>
             <Icon name="record" size={17} /> {recordingLabel}
           </ActionButton>
         </div>
@@ -253,7 +275,7 @@ function ReviewSong({ workspace }: { workspace: Workspace }) {
   return (
     <section className="song-current-stage" aria-labelledby="song-review-title">
       <div className="song-stage-heading">
-        <div><Eyebrow>Current step · review</Eyebrow><h2 id="song-review-title">Compare the attempts you chose to record.</h2><p>Takes are temporary browser-memory objects and disappear when this workspace closes.</p></div>
+        <div><Eyebrow>Current step · review</Eyebrow><h2 id="song-review-title">Compare the attempts you chose to record.</h2><p>Takes stay local to this browser and disappear when this workspace closes.</p></div>
         <ActionButton className="primary" onClick={() => workspace.setStage("practice")}>Record another take</ActionButton>
       </div>
       <Panel className="takes-panel">

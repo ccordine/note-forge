@@ -85,6 +85,19 @@ describe("non-Arcade live trainer architecture", () => {
     expect(runner).toContain('session.observe({ type: "observation", observation })');
   });
 
+  it("makes automatic live-trace cutoff unrepresentable", () => {
+    expect(runnerModel).not.toMatch(/durationSeconds|deadline|timeout|completeAfter/);
+    expect(runner).not.toMatch(/durationSeconds|deadline|timeout|completeAfter/);
+    expect(runnerModel).toContain('case "finish":');
+    expect(runnerModel).toContain('return { ...state, status: "complete" };');
+    expect(runnerModel).toContain('status: "tracking"');
+    for (const [name, source] of Object.entries(sources)) {
+      expect(source, name).not.toMatch(/Begin \$\{[^}]+\} s trace|TAKE_SECONDS|label="Duration"/);
+      expect(source, name).toContain('data-trace-lifetime="user-owned"');
+      expect(source, name).toContain("Finish trace");
+    }
+  });
+
   it("owns prompt cancellation in one shared abort scope", () => {
     expect(effectScope.match(/new AbortController\s*\(/g)).toHaveLength(1);
     expect(effectScope).not.toMatch(/\bsetTimeout\b|\bsetInterval\b|generation|mounted/);

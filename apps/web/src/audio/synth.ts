@@ -47,6 +47,10 @@ export interface ActiveVoice {
   stop: (releaseSeconds?: number) => void;
 }
 
+interface SustainedVoice extends ActiveVoice {
+  update: (frequencyHz: number, timbre: Timbre, amplitude?: number) => void;
+}
+
 /** Terminate intentionally fire-and-forget playback without hiding failures. */
 export function playSafely(operation: Promise<unknown>, label = "Audio playback"): void {
   void operation.catch((error) => console.error(`${label} failed.`, error));
@@ -313,23 +317,139 @@ export async function playToneSequence(
   };
 }
 
-export class Drone {
-  private voice: ActiveVoice | null = null;
-  private generation = 0;
+/**
+ * Start an oscillator voice with no scheduled end. Only the returned stop
+ * action owns its lifetime; this is intentionally separate from timed prompts.
+ */
+async function playUserOwnedSustainedTone(
+  frequencyHz: number,
+  timbre: Timbre,
+  amplitude: number,
+): Promise<SustainedVoice> {
+  validateFrequency(frequencyHz);
+  validateToneValues({ timbre, amplitude });
+  const context = await ensureAudioReady();
+  const startAt = context.currentTime + 0.012;
+  const attack = Math.min(0.08, envelopeFor(timbre, 1).attack);
+  const output = context.createGain();
+  const compressor = context.createDynamicsCompressor();
+  compressor.threshold.value = -12;
+  compressor.knee.value = 12;
+  compressor.ratio.value = 5;
+  output.connect(compressor).connect(context.destination);
+  output.gain.setValueAtTime(Number.EPSILON, startAt);
+  output.gain.exponentialRampToValueAtTime(amplitude, startAt + attack);
 
-  async start(frequencyHz: number, timbre: Timbre, amplitude = 0.18): Promise<void> {
-    this.stop();
+  const oscillatorCount = Math.max(...Object.values(PARTIALS).map((partials) => partials.length));
+  let activeOscillators = oscillatorCount;
+  const oscillators = Array.from({ length: oscillatorCount }, (_, index) => {
+    const partial = PARTIALS[timbre][index];
+    const oscillator = context.createOscillator();
+    const partialGain = context.createGain();
+    oscillator.type = partial?.type ?? "sine";
+    oscillator.frequency.setValueAtTime(frequencyHz * (partial?.ratio ?? 1), startAt);
+    oscillator.detune.setValueAtTime(partial?.detune ?? 0, startAt);
+    partialGain.gain.value = partial?.gain ?? 0;
+    oscillator.connect(partialGain).connect(output);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      partialGain.disconnect();
+      activeOscillators -= 1;
+      if (activeOscillators === 0) {
+        output.disconnect();
+        compressor.disconnect();
+      }
+    };
+    oscillator.start(startAt);
+    return { oscillator, partialGain };
+  });
+
+  let stopped = false;
+  return {
+    update: (nextFrequencyHz, nextTimbre, nextAmplitude = amplitude) => {
+      validateFrequency(nextFrequencyHz);
+      validateToneValues({ timbre: nextTimbre, amplitude: nextAmplitude });
+      if (stopped) return;
+      const now = context.currentTime;
+      const transitionEnd = now + 0.045;
+      output.gain.cancelScheduledValues(now);
+      output.gain.setValueAtTime(Math.max(Number.EPSILON, output.gain.value), now);
+      output.gain.exponentialRampToValueAtTime(nextAmplitude, transitionEnd);
+      oscillators.forEach(({ oscillator, partialGain }, index) => {
+        const partial = PARTIALS[nextTimbre][index];
+        oscillator.type = partial?.type ?? "sine";
+        oscillator.frequency.cancelScheduledValues(now);
+        oscillator.frequency.setValueAtTime(oscillator.frequency.value, now);
+        oscillator.frequency.exponentialRampToValueAtTime(
+          nextFrequencyHz * (partial?.ratio ?? 1),
+          transitionEnd,
+        );
+        oscillator.detune.cancelScheduledValues(now);
+        oscillator.detune.setValueAtTime(partial?.detune ?? 0, transitionEnd);
+        partialGain.gain.cancelScheduledValues(now);
+        partialGain.gain.setValueAtTime(partialGain.gain.value, now);
+        partialGain.gain.linearRampToValueAtTime(partial?.gain ?? 0, transitionEnd);
+      });
+    },
+    stop: (releaseSeconds = 0.06) => {
+      requireFiniteRange("Stop release", releaseSeconds, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
+      if (stopped) return;
+      stopped = true;
+      const now = context.currentTime;
+      output.gain.cancelScheduledValues(now);
+      output.gain.setValueAtTime(Math.max(Number.EPSILON, output.gain.value), now);
+      output.gain.exponentialRampToValueAtTime(Number.EPSILON, now + releaseSeconds);
+      oscillators.forEach(({ oscillator }) => {
+        try { oscillator.stop(now + releaseSeconds + 0.02); } catch { /* already stopped */ }
+      });
+    },
+  };
+}
+
+export class Drone {
+  private voice: SustainedVoice | null = null;
+  private generation = 0;
+  private desired: Readonly<{ frequencyHz: number; timbre: Timbre; amplitude: number }> | null = null;
+
+  async start(frequencyHz: number, timbre: Timbre, amplitude = 0.18): Promise<boolean> {
+    validateFrequency(frequencyHz);
+    validateToneValues({ timbre, amplitude });
+    this.desired = Object.freeze({ frequencyHz, timbre, amplitude });
+    if (this.voice) {
+      this.voice.update(frequencyHz, timbre, amplitude);
+      return true;
+    }
     const generation = this.generation;
-    const voice = await playTone({ frequencyHz, timbre, amplitude, duration: 3_600, release: 0.12 });
+    const voice = await playUserOwnedSustainedTone(frequencyHz, timbre, amplitude);
     if (generation !== this.generation) {
       voice.stop(0);
-      return;
+      return false;
+    }
+    const desired = this.desired;
+    if (
+      desired
+      && (
+        desired.frequencyHz !== frequencyHz
+        || desired.timbre !== timbre
+        || desired.amplitude !== amplitude
+      )
+    ) {
+      voice.update(desired.frequencyHz, desired.timbre, desired.amplitude);
     }
     this.voice = voice;
+    return true;
+  }
+
+  update(frequencyHz: number, timbre: Timbre, amplitude = 0.18): void {
+    validateFrequency(frequencyHz);
+    validateToneValues({ timbre, amplitude });
+    this.desired = Object.freeze({ frequencyHz, timbre, amplitude });
+    this.voice?.update(frequencyHz, timbre, amplitude);
   }
 
   stop(): void {
     this.generation += 1;
+    this.desired = null;
     this.voice?.stop(0.09);
     this.voice = null;
   }

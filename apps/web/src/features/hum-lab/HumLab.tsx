@@ -2,7 +2,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import "../../styles-hum.css";
 import { useAudioInput } from "@/audio/use-audio-input";
 import { playTone } from "@/audio/synth";
-import type { AttemptRunnerStatus, CompletedAttempt } from "@/features/training-session/attempt-runner";
+import {
+  attemptRecentScoringFrames,
+  type AttemptRunnerStatus,
+  type CompletedAttempt,
+} from "@/features/training-session/attempt-runner";
 import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
 import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
@@ -23,12 +27,13 @@ import {
   type HumTakeConfiguration,
 } from "./hum-analysis";
 
-const MODES: Record<HumMode, { label: string; headline: string; detail: string; duration: number }> = {
-  anchor: { label: "Find anchor", headline: "Find the note inside your natural hum.", detail: "Hum without aiming; the completed sample-timed trace reveals the center.", duration: 4.5 },
-  match: { label: "Target match", headline: "Keep a brief target in memory.", detail: "Play the reference if useful, then begin measuring whenever you choose.", duration: 5 },
-  glide: { label: "Glide", headline: "Slide the hum into the target lane.", detail: "The guide never accompanies you; the landing half of your own trace is scored.", duration: 5.5 },
-  sustain: { label: "Long sustain", headline: "Keep the center while the breath moves.", detail: "A longer trace exposes drift, breaks, and recovery without restarting input.", duration: 8 },
+const MODES: Record<HumMode, { label: string; headline: string; detail: string }> = {
+  anchor: { label: "Find anchor", headline: "Find the note inside your natural hum.", detail: "Hum without aiming; finish when the trace contains the center you want measured." },
+  match: { label: "Target match", headline: "Keep a brief target in memory.", detail: "Play the reference if useful, then measure for as long as you choose." },
+  glide: { label: "Glide", headline: "Slide the hum into the target lane.", detail: "The guide never accompanies you; the landing portion of your own trace is scored." },
+  sustain: { label: "Long sustain", headline: "Keep the center while the breath moves.", detail: "Keep the trace live for as long as you want; finish only when you choose." },
 };
+const TRACE_WINDOW_SECONDS = 8;
 
 const SHAPES: Record<HumShape, { symbol: string; label: string; cue: string }> = {
   m: { symbol: "M", label: "Lips together", cue: "A plain mmm. Let the jaw stay easy; placement is not graded." },
@@ -93,12 +98,18 @@ export function HumLab() {
         ? { discoveredMidi: nextResult.anchor.nearestMidi, centsOffset: nextResult.anchor.cents, humShape: configuration.shape }
         : { midi: configuration.midi, centsOffset: configuration.centsOffset, humShape: configuration.shape, variant: configuration.mode },
       metrics: { ...(nextResult.metrics as Record<string, number | undefined>), continuityRatio: nextResult.continuityRatio },
-      pitchFrames: nextResult.frames,
+      pitchFrames: [...nextResult.frames],
       startedAt: completed.startedAt ?? completedAt,
       completedAt,
     });
   };
   const attempt = useAttemptRunner<HumTakeConfiguration>({
+    scoringProfile: (configuration) => configuration.mode === "anchor" ? null : ({
+      targetMidiFloat: configuration.midi + configuration.centsOffset / 100,
+      toleranceCents: configuration.toleranceCents,
+      minimumConfidence: 0.5,
+      maximumVoicedGapSeconds: 0.24,
+    }),
     onComplete: completeAttempt,
     onCompletionError: () => setSaveError("The measured hum trace could not be saved to local history."),
   });
@@ -114,16 +125,16 @@ export function HumLab() {
   const activeCentsOffset = attemptConfiguration?.centsOffset ?? centsOffset;
   const activeTimbre = attemptConfiguration?.timbre ?? timbre;
   const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
-  const activeDuration = attemptConfiguration?.duration ?? MODES[mode].duration;
+  const liveFrames = attemptRecentScoringFrames(attempt.state);
   const targetMidiFloat = activeMidi + activeCentsOffset / 100;
   const targetFrequency = continuousMidiToHz(activeMidi, activeCentsOffset);
-  const anchorPreview = median(attempt.state.frames.flatMap((frame) => (
+  const anchorPreview = median(liveFrames.flatMap((frame) => (
     frame.voiced && frame.confidence >= 0.55 && frame.midiFloat !== null ? [frame.midiFloat] : []
   )));
   const ribbonTarget = activeMode === "anchor"
     ? result?.anchor?.midiFloat ?? anchorPreview ?? targetMidiFloat
     : targetMidiFloat;
-  const ribbonFrames = result?.frames ?? attempt.state.frames;
+  const ribbonFrames = result?.frames ?? liveFrames;
   const metrics = result?.metrics ?? null;
   const anchor = result?.anchor ?? null;
   const centered = Math.abs(metrics?.medianErrorCents ?? Number.POSITIVE_INFINITY) <= activeToleranceCents;
@@ -144,8 +155,7 @@ export function HumLab() {
   };
   const begin = () => {
     clearTake();
-    const duration = MODES[mode].duration;
-    attempt.begin({ mode, shape, midi: selectedMidi, centsOffset, timbre, toleranceCents, duration }, duration);
+    attempt.begin({ mode, shape, midi: selectedMidi, centsOffset, timbre, toleranceCents });
   };
   const hearTarget = () => attempt.playReference("Hum Lab reference", () => playTone({
     frequencyHz: targetFrequency,
@@ -189,9 +199,7 @@ export function HumLab() {
       ? "The hum center found the lane."
       : "The trace shows where the center settled.";
   }
-  const beginLabel = input.state === "running"
-    ? `Begin ${MODES[mode].duration} s trace`
-    : "Enable voice in header";
+  const beginLabel = input.state === "running" ? "Start trace" : "Enable voice in header";
   const modeOptions = (Object.entries(MODES) as [HumMode, (typeof MODES)[HumMode]][])
     .map(([value, item]) => ({ value, label: item.label }));
   const shapeOptions = Object.entries(SHAPES) as [HumShape, (typeof SHAPES)[HumShape]][];
@@ -223,12 +231,12 @@ export function HumLab() {
     );
   } else if (workflowStatus === "tracking") {
     currentStep = (
-      <Panel className="hum-stage active" data-workflow-step="tracking">
+      <Panel className="hum-stage active" data-workflow-step="tracking" data-trace-lifetime="user-owned">
         <div className="hum-target-row">
           <div className="hum-orb sounding"><small>{orbLabel}</small><strong>{orbNote}</strong><span>{orbDetail}</span><i>m</i><i>m</i><i>m</i></div>
           <div className="hum-stage-copy"><span>{statusText(attempt.state.status, input.state)}</span><strong>{attempt.state.elapsedSeconds.toFixed(2)} s</strong><small>{SHAPES[activeShape].cue}</small></div>
         </div>
-        <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} durationSeconds={activeDuration} />
+        <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
         <div className="stage-actions">
           {activeMode !== "anchor" && <PlayButton label="Hear brief target" onClick={hearTarget} />}
           <ActionButton onClick={attempt.finish}>Finish trace</ActionButton>
@@ -240,7 +248,7 @@ export function HumLab() {
       <div className="mirror-results-grid hum-results" data-workflow-step="complete">
         <Panel className="metrics-panel">
           <div className="panel-heading"><div><Eyebrow>Hum evidence</Eyebrow><h2>{metricsTitle}</h2></div><span className="attempt-badge">measured</span></div>
-          <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} durationSeconds={activeDuration} />
+          <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
           <div className="metrics-grid">
             <Metric label={primaryMetricLabel} value={primaryMetricValue} unit="¢" tone="coral" />
             <Metric label={centerMetricLabel} value={centerMetricValue} unit={centerMetricUnit} tone="lime" />

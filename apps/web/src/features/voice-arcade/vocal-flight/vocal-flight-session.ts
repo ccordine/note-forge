@@ -79,6 +79,9 @@ export interface VocalFlightSessionState {
   readonly flight: VocalFlightState;
   readonly course: VocalFlightCourseState | null;
   readonly scoring: VocalFlightScoreState;
+  /** Exact score snapshot at the authored course milestone; never terminal. */
+  readonly achievementResult: VocalFlightScoreResult | null;
+  /** Whole-session score, created only by the user's explicit Finish action. */
   readonly result: VocalFlightScoreResult | null;
   readonly runId: number;
   readonly completedRunId: number | null;
@@ -215,6 +218,7 @@ export function createVocalFlightSession(
     flight: createVocalFlightState({ config: flightConfig(difficulty) }),
     course: null,
     scoring: createVocalFlightScoreState(),
+    achievementResult: null,
     result: null,
     runId: 0,
     completedRunId: null,
@@ -284,6 +288,7 @@ function launch(state: Readonly<VocalFlightSessionState>): VocalFlightSessionSta
     flight: createVocalFlightState({ config: flightConfig(state.difficulty) }),
     course: definition === null ? null : createVocalFlightCourseState(definition),
     scoring: createVocalFlightScoreState(definition?.parSeconds ?? null),
+    achievementResult: null,
     result: null,
     runId: state.runId + 1,
     completedRunId: null,
@@ -302,11 +307,20 @@ export function desiredVocalFlightControl(
 }> {
   const gate = course?.definition.gates[course.nextGateIndex];
   if (!gate) {
+    // Once the authored gates are crossed, continue the final flight lane until
+    // the user presses Finish. Returning to the world origin here would invent
+    // a different target and corrupt every post-achievement scoring interval.
+    const continuation = course?.lastPassedCenter;
+    const targetX = continuation?.x ?? 0;
+    const targetY = continuation?.y ?? 0;
+    const xError = targetX - flight.position.x;
+    const yError = targetY - flight.position.y;
+    const finalGate = course?.definition.gates[course.definition.gates.length - 1];
     return {
-      pitchAxis: 0,
-      brightnessAxis: 0,
-      pathError: Math.hypot(flight.position.x, flight.position.y),
-      tolerance: 8,
+      pitchAxis: Math.min(1, Math.max(-1, yError / 8)),
+      brightnessAxis: Math.min(1, Math.max(-1, xError / 8)),
+      pathError: Math.hypot(xError, yError),
+      tolerance: finalGate?.radius ?? 8,
     };
   }
   const desired = vocalFlightDesiredPoint(course!, flight.position);
@@ -372,10 +386,13 @@ function observeFlight(
     disturbancePitchTorque: disturbance.pitchTorque,
     disturbanceRollTorque: disturbance.rollTorque,
   }, sampleDelta);
+  // This sample interval was flown toward the gate that was active at its
+  // start. Score that demand before the course reducer advances to the next
+  // gate (or removes the final gate after an achievement).
+  const demand = desiredVocalFlightControl(nextFlight, state.course);
   const nextCourse = state.course === null
     ? null
     : advanceVocalFlightCourse(state.course, state.flight, nextFlight, update.vector, sampleDelta);
-  const demand = desiredVocalFlightControl(nextFlight, nextCourse);
   const scoring = advanceVocalFlightScore(state.scoring, {
     deltaSeconds: sampleDelta,
     control: update.vector,
@@ -386,6 +403,10 @@ function observeFlight(
     desiredBrightnessAxis: demand.brightnessAxis,
     pitchDeltaCents: update.pitchDeltaCents,
   });
+  const courseCompletedNow = state.achievementResult === null && nextCourse?.status === "complete";
+  const achievementResult = courseCompletedNow
+    ? summarizeVocalFlightScore(scoring)
+    : state.achievementResult;
   const next = Object.freeze({
     ...state,
     control: update.state,
@@ -394,10 +415,13 @@ function observeFlight(
     flight: nextFlight,
     course: nextCourse,
     scoring,
+    achievementResult,
     observedFrameCount: state.observedFrameCount + 1,
     simulatedFrameCount: state.simulatedFrameCount + Number(sampleDelta > 0),
   });
-  return nextCourse?.status === "complete" ? finish(next, scoring) : next;
+  // Course completion is an achievement, never authority to end the user's
+  // live flight. Keep simulating and consuming telemetry until Finish.
+  return next;
 }
 
 function selectMode(
@@ -405,7 +429,13 @@ function selectMode(
   mode: VocalFlightGameMode,
 ): VocalFlightSessionState {
   if (!canSelectVocalFlightMode(state, mode)) return state as VocalFlightSessionState;
-  return Object.freeze({ ...state, mode, result: null, completedRunId: null });
+  return Object.freeze({
+    ...state,
+    mode,
+    achievementResult: null,
+    result: null,
+    completedRunId: null,
+  });
 }
 
 function nextTutorialCourseId(state: Readonly<VocalFlightSessionState>): string {
@@ -473,6 +503,7 @@ export function reduceVocalFlightSession(
       phase: "calibration",
       selectedCourseId: nextTutorialCourseId(state),
       unlockedTutorialOrder: nextUnlockedTutorialOrder(state),
+      achievementResult: null,
       result: null,
       completedRunId: null,
     });

@@ -76,12 +76,14 @@ export function useSongWorkspace() {
     dispatch({ type: "time-updated", time: element.currentTime });
   };
 
-  const startRecording = () => runtime.startRecording({
-    ...playbackRequest(),
-    inputRunning: input.state === "running",
-    createRecorder: input.createRecorder,
-    takes: state.takes,
-  });
+  const startRecording = () => {
+    void runtime.startRecording({
+      ...playbackRequest(),
+      inputRunning: input.state === "running",
+      createRecorder: input.createRecorder,
+      takes: state.takes,
+    });
+  };
 
   const act = (action: SongWorkspaceAction) => dispatch(action);
 

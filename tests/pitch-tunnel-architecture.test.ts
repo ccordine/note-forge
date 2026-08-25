@@ -176,6 +176,8 @@ describe("Pitch Tunnel architecture", () => {
       "data-pitch-tunnel",
       "data-pitch-tunnel-lane",
       "data-workflow-step",
+      "data-trace-lifetime",
+      "data-achievement-reached",
       "data-input-state",
       "data-end-sample",
       "data-processed-sample-count",
@@ -215,6 +217,18 @@ describe("Pitch Tunnel architecture", () => {
       ) conditionalAncestors.push(parent);
     }
     expect(conditionalAncestors).toEqual([]);
+  });
+
+  it("keeps trajectory achievement nonterminal and reserves completion for explicit Finish", () => {
+    const engine = sources.find(({ path }) => path.endsWith("pitch-tunnel-engine.ts"))!.text;
+    const types = sources.find(({ path }) => path.endsWith("pitch-tunnel-types.ts"))!.text;
+    const view = sources.find(({ path }) => path.endsWith("PitchTunnel.tsx"))!.text;
+    expect(types).toContain('{ readonly type: "finish" }');
+    expect(types).toContain("achievementReached: boolean");
+    expect(engine.match(/status:\s*"complete"/gu)).toHaveLength(1);
+    expect(engine).toMatch(/function finishPitchTunnel[\s\S]*status:\s*"complete"/u);
+    expect(view).toContain("Finish trace");
+    expect(view).toContain("no automatic cutoff");
   });
 
   it("cannot own capture, playback, wall-clock scoring, or a second detector", () => {

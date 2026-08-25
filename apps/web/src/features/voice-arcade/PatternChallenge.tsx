@@ -247,12 +247,18 @@ function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi }: Playi
   const nextStep = session.steps[session.activeStepIndex + 1];
   const nextLabel = upcomingNoteLabel(nextStep?.targetMidi, feedback.showUpcomingCue);
   const direction = pitchDirection(liveError, feedback.showCents);
+  const phraseAchieved = game.achievementCount > 0;
+  let liveStatusMetric = `${Math.max(0, (activeStep?.windowStartSeconds ?? game.elapsedSeconds) - game.elapsedSeconds).toFixed(1)}s to target`;
+  if (activeStep?.status === "active") liveStatusMetric = `${Math.round(activeStep.progress * 100)}% held`;
+  if (phraseAchieved) {
+    liveStatusMetric = `${game.achievementCount} ${game.achievementCount === 1 ? "phrase" : "phrases"} recorded · current phrase live`;
+  }
 
   return (
-    <div className="echo-run-stage">
+    <div className="echo-run-stage" data-live-lifetime="user-owned" data-phrase-achieved={phraseAchieved ? "true" : "false"}>
       <div className="echo-target-readout echo-target-readout--two">
-        <div><span>NOW</span><strong>{activeStep ? noteLabel(activeStep.targetMidi) : "FINISH"}</strong><small>{activeStep ? `${activeStep.requiredSustainSeconds.toFixed(2)}s hold` : "phrase complete"}</small></div>
-        <div><span>NEXT</span><strong>{nextLabel}</strong><small>{session.hitSteps}/{session.steps.length} hits</small></div>
+        <div><span>NOW</span><strong>{activeStep ? noteLabel(activeStep.targetMidi) : "LIVE"}</strong><small>{activeStep ? `${activeStep.requiredSustainSeconds.toFixed(2)}s hold` : "phrase recorded · input still live"}</small></div>
+        <div><span>NEXT</span><strong>{activeStep ? nextLabel : "YOU DECIDE"}</strong><small>{session.hitSteps}/{session.steps.length} hits</small></div>
       </div>
       <div className="echo-highway" role="img" aria-label={`Moving note highway. Current target ${activeStep ? noteLabel(activeStep.targetMidi) : "complete"}.`}>
         <div className="echo-pitch-grid">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</div>
@@ -280,10 +286,8 @@ function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi }: Playi
         ))}
       </div>
       <div className="arcade-live-status" role="status" aria-live="polite">
-        <span>{direction}</span>
-        <b>{activeStep?.status === "active"
-          ? `${Math.round(activeStep.progress * 100)}% held`
-          : `${Math.max(0, (activeStep?.windowStartSeconds ?? game.elapsedSeconds) - game.elapsedSeconds).toFixed(1)}s to target`}</b>
+        <span>{phraseAchieved ? "The next phrase is live. Keep playing or choose Stop & grade." : direction}</span>
+        <b>{liveStatusMetric}</b>
       </div>
     </div>
   );
@@ -424,7 +428,9 @@ export function PatternChallenge(props: ArcadeGameProps) {
     <section className={`arcade-game-shell echo-run-shell curriculum-${curriculum.stage}`}>
       <div className="arcade-game-hud">
         <div><span>ROUND</span><strong>{game.round.toString().padStart(2, "0")}</strong></div>
-        <div><span>SCORE</span><strong>{game.session?.score.toLocaleString() ?? "0"}</strong></div>
+        <div><span>SCORE</span><strong>{(
+          game.scoreAggregate.score + (game.session?.score ?? 0)
+        ).toLocaleString()}</strong></div>
         <div className="combo"><span>COMBO</span><strong>{game.session?.combo ?? 0}<small>×</small></strong></div>
         <div><span>PITCH QUALITY</span><strong>{game.session ? `${game.session.accuracyPercent.toFixed(0)}%` : "—"}</strong></div>
         <ActionButton className="coral" onClick={hudAction}><Icon name="pause" size={16} /> {hudLabel}</ActionButton>

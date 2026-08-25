@@ -57,7 +57,7 @@ export function VocalFlightHud({
       <div className="vocal-flight-hud-score"><span>CONTROL SCORE</span><strong>{scoreLabel}</strong></div>
       <div className={`vocal-flight-hud-link ${state.vector.active ? "is-active" : ""}`}><span>VOCAL LINK</span><strong>{controlStatus(state, inputState)}</strong></div>
       <div className="vocal-flight-hud-actions">
-        {state.phase === "flying" && <ActionButton data-flight-action="finish-flight" className="coral" onClick={onFinish}>{state.mode === "free-flight" ? "End flight" : "End & grade"}</ActionButton>}
+        {state.phase === "flying" && <ActionButton data-flight-action="finish-flight" className="coral" onClick={onFinish}>{state.mode === "free-flight" ? "Finish flight" : "Finish & grade"}</ActionButton>}
       </div>
     </header>
   );

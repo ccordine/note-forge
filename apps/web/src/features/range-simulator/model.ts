@@ -372,7 +372,6 @@ export function stopRangeSimulatorSession(
   session: Readonly<RangeSimulatorSessionState>,
   stoppedAt: string,
 ): RangeSimulatorSessionState {
-  if (session.phase === "complete") return { ...session };
   const canonicalStoppedAt = canonicalDate(stoppedAt, "Session stop");
   if (Date.parse(canonicalStoppedAt) < Date.parse(session.updatedAt)) {
     throw new RangeError("Session stop cannot be earlier than the current session state.");
@@ -441,7 +440,7 @@ export function normalizeRangeSimulatorSession(
       });
     }
   }
-  if (source.phase === "complete" && source.completionStatus === "stopped" && replayed.phase !== "complete") {
+  if (source.phase === "complete" && source.completionStatus === "stopped") {
     const stoppedAt = typeof source.updatedAt === "string"
       && Number.isFinite(Date.parse(source.updatedAt))
       && Date.parse(source.updatedAt) >= Date.parse(replayed.updatedAt)

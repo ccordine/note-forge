@@ -9,10 +9,10 @@ export function PitchPong(props: ArcadeGameProps) {
   const { curriculumStage, onExit, voiceRange } = props;
   const runtime = usePitchPongRuntime(props);
   const {
-    cancelBeforePlay, controllerCenterMidi, countdown, courtVariables, currentGame,
-    curriculum, endActiveRound, input, maximumRally, maximumRallyPercent, pauseGame,
-    phase, preset, rangeLabels, resetToSetup, result, resumeGame, scoreFlash,
-    startRound, status,
+    achievementCount, cancelBeforePlay, controllerCenterMidi, countdown,
+    courtVariables, currentGame, curriculum, endActiveRound, input,
+    latestAchievement, maximumRally, maximumRallyPercent, phase, preset,
+    rangeLabels, resetToSetup, result, scoreFlash, startRound, status,
   } = runtime;
   const rangeLabelClass = (index: number) => {
     if (index === 0) return "pong-range-label pong-range-high";
@@ -30,8 +30,7 @@ export function PitchPong(props: ArcadeGameProps) {
         <div className="pong-hud-pitch"><NoteInput variant="compact" input={input} compact /></div>
         <div><span>FIRST TO</span><strong>{currentGame.config.winningScore}</strong></div>
         <div className="arcade-game-hud-actions">
-          {phase === "playing" && <ActionButton onClick={() => pauseGame()}><Icon name="pause" size={16} /> Pause</ActionButton>}
-          {(phase === "playing" || phase === "paused") && <ActionButton className="coral" onClick={endActiveRound}>Stop & grade</ActionButton>}
+          {phase === "playing" && <ActionButton className="coral" onClick={endActiveRound}>Stop & grade</ActionButton>}
           {phase === "countdown" && <ActionButton onClick={cancelBeforePlay}>Cancel</ActionButton>}
           {(phase === "setup" || phase === "result") && <ActionButton onClick={onExit}><Icon name="arrow" size={16} /> Exit game</ActionButton>}
         </div>
@@ -75,8 +74,8 @@ export function PitchPong(props: ArcadeGameProps) {
         </Panel>
       )}
 
-      {(phase === "playing" || phase === "paused") && (
-        <div className={`pong-play-stage ${phase === "paused" ? "is-paused" : ""}`}>
+      {phase === "playing" && (
+        <div className="pong-play-stage" data-live-lifetime="user-owned">
           <div
             className={`pong-court ${scoreFlash ? `score-${scoreFlash}` : ""}`}
             style={courtVariables}
@@ -94,22 +93,13 @@ export function PitchPong(props: ArcadeGameProps) {
             <span className="pong-ball" aria-hidden="true" />
             {scoreFlash && <strong className="pong-score-flash" aria-live="polite">{scoreFlash === "player" ? "POINT" : "MISSED"}</strong>}
 
-            {phase === "paused" && (
-              <Panel className="pong-pause-overlay" role="dialog" aria-modal="false" aria-labelledby="pong-paused-title">
-                <Icon name="pause" size={30} />
-                <Eyebrow>Everything is frozen</Eyebrow>
-                <h2 id="pong-paused-title">Match paused</h2>
-                <p>{status}</p>
-                <div>
-                  <ActionButton className="primary" onClick={resumeGame}><Icon name="play" size={16} /> Resume</ActionButton>
-                  <ActionButton className="coral" onClick={endActiveRound}>End & grade</ActionButton>
-                </div>
-              </Panel>
-            )}
           </div>
 
           <div className="pong-live-footer">
-            <span>{status}</span>
+            <span role="status">
+              {status}
+              {latestAchievement && <> <b>{achievementCount} {achievementCount === 1 ? "match" : "matches"} completed</b> · session {latestAchievement.playerScore}–{latestAchievement.opponentScore}.</>}
+            </span>
             <div className="pong-rally-meter"><small>LONGEST RALLY</small><b>{maximumRally}×</b><i><span style={{ width: `${maximumRallyPercent}%` }} /></i></div>
           </div>
         </div>

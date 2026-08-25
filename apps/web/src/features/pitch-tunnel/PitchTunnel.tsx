@@ -15,9 +15,14 @@ function anchorLabel(midiFloat: number | null): string {
   return `${noteLabel(nearest)} ${signedCents((midiFloat - nearest) * 100)}`;
 }
 
-function targetHeading(status: "idle" | "tracking" | "complete", offset: number): string {
+function targetHeading(
+  status: "idle" | "tracking" | "complete",
+  achievementReached: boolean,
+  offset: number,
+): string {
   if (status === "idle") return "Make this pitch zero.";
-  if (status === "complete") return "Round trip complete.";
+  if (status === "complete") return "Trace finished.";
+  if (achievementReached) return "Round trip reached. The trace is still live.";
   if (offset === 0) return "Hold the anchor center.";
   return `Steer to ${offset > 0 ? "+" : "−"}${Math.abs(offset)} cents.`;
 }
@@ -25,6 +30,7 @@ function targetHeading(status: "idle" | "tracking" | "complete", offset: number)
 function guidance(
   inputState: "disabled" | "opening" | "running" | "error",
   status: "idle" | "tracking" | "complete",
+  achievementReached: boolean,
   currentMidiFloat: number | null,
   errorCents: number | null,
   inLane: boolean | null,
@@ -32,7 +38,8 @@ function guidance(
   if (inputState === "disabled") return "Enable voice in the global header. The exercise never starts or stops the microphone.";
   if (inputState === "opening") return "The app-owned microphone is opening. This instrument will follow the first voiced window.";
   if (inputState === "error") return "Voice input is unavailable. Use Retry voice in the global header after fixing permission or the device.";
-  if (status === "complete") return "The scored round trip is complete; the live point still follows your current F0.";
+  if (status === "complete") return "You finished this trace. The app-owned live point still follows your current F0.";
+  if (achievementReached) return "The round trip is recorded. Keep steering for as long as you want, then choose Finish trace.";
   if (status === "idle") {
     return currentMidiFloat === null
       ? "Produce one comfortable steady pitch, then anchor its exact live F0."
@@ -49,8 +56,11 @@ function actionView(
   inputState: "disabled" | "opening" | "running" | "error",
   canAnchor: boolean,
 ): Readonly<{ label: string; className: string; disabled: boolean }> {
-  if (status !== "idle") {
+  if (status === "complete") {
     return { label: "Choose a new anchor", className: "", disabled: false };
+  }
+  if (status === "tracking") {
+    return { label: "Finish trace", className: "primary", disabled: false };
   }
   if (inputState !== "running") {
     return { label: "Voice input required", className: "", disabled: true };
@@ -58,7 +68,18 @@ function actionView(
   if (!canAnchor) {
     return { label: "Hold a pitch to anchor", className: "", disabled: true };
   }
-  return { label: "Anchor this pitch", className: "primary", disabled: false };
+  return { label: "Start trace here", className: "primary", disabled: false };
+}
+
+function statusKicker(
+  status: "idle" | "tracking" | "complete",
+  achievementReached: boolean,
+): string {
+  if (achievementReached && status === "tracking") {
+    return "ROUND TRIP REACHED · USER-OWNED TRACE LIVE";
+  }
+  if (status === "complete") return "FINISHED · SENSOR STILL LIVE";
+  return "CURRENT CHECKPOINT";
 }
 
 export function PitchTunnel() {
@@ -73,13 +94,17 @@ export function PitchTunnel() {
   const instruction = guidance(
     input.state,
     state.status,
+    state.achievementReached,
     state.currentMidiFloat,
     state.currentErrorCents,
     state.currentInLane,
   );
-  const choosingAnchor = state.status === "idle";
   const action = actionView(state.status, input.state, canAnchor);
-  const handleAction = choosingAnchor ? session.anchorCurrentPitch : session.reset;
+  const handleAction = () => {
+    if (state.status === "idle") session.anchorCurrentPitch();
+    else if (state.status === "tracking") session.finish();
+    else session.reset();
+  };
 
   return (
     <div className="page pitch-tunnel-page">
@@ -94,8 +119,8 @@ export function PitchTunnel() {
       <Panel className="pitch-tunnel-instrument" data-pitch-tunnel>
         <header className="pitch-tunnel-header">
           <div className="pitch-tunnel-heading">
-            <small>{state.status === "complete" ? "COMPLETE · SENSOR STILL LIVE" : "CURRENT CHECKPOINT"}</small>
-            <h2 aria-live="polite">{targetHeading(state.status, checkpointOffset)}</h2>
+            <small>{statusKicker(state.status, state.achievementReached)}</small>
+            <h2 aria-live="polite">{targetHeading(state.status, state.achievementReached, checkpointOffset)}</h2>
           </div>
           <div className="pitch-tunnel-anchor">
             <small>{state.status === "idle" ? "LIVE ANCHOR CANDIDATE" : "FROZEN SESSION ANCHOR"}</small>
@@ -125,7 +150,7 @@ export function PitchTunnel() {
         <PitchTunnelMetricsView metrics={metrics} />
 
         <div className="pitch-tunnel-footnote">
-          One app-owned stream · one live pitch lane · ±{state.options.laneHalfWidthCents}¢ walls · {state.options.requiredInLaneSeconds.toFixed(1)} sample-timed second per checkpoint · no reference audio
+          One app-owned stream · one user-finished pitch trace · ±{state.options.laneHalfWidthCents}¢ walls · {state.options.requiredInLaneSeconds.toFixed(1)} sample-timed second per checkpoint · no automatic cutoff
         </div>
       </Panel>
     </div>

@@ -5,7 +5,7 @@ interface PitchRibbonProps {
   frames: readonly PitchFrame[];
   targetMidiFloat: number;
   toleranceCents: number;
-  durationSeconds?: number;
+  windowSeconds?: number;
   envelope?: readonly number[];
 }
 
@@ -34,10 +34,10 @@ function pathSegments(frames: readonly PitchFrame[], targetMidiFloat: number, st
   return paths;
 }
 
-export function PitchRibbon({ frames, targetMidiFloat, toleranceCents, durationSeconds = 8, envelope }: PitchRibbonProps) {
-  const endTime = frames.at(-1)?.timeSeconds ?? durationSeconds;
-  const startTime = Math.max(0, endTime - durationSeconds);
-  const paths = pathSegments(frames, targetMidiFloat, startTime, durationSeconds);
+export function PitchRibbon({ frames, targetMidiFloat, toleranceCents, windowSeconds = 8, envelope }: PitchRibbonProps) {
+  const endTime = frames.at(-1)?.timeSeconds ?? windowSeconds;
+  const startTime = Math.max(0, endTime - windowSeconds);
+  const paths = pathSegments(frames, targetMidiFloat, startTime, windowSeconds);
   const bandHalfHeight = toleranceCents * 1.18;
   return (
     <div className="pitch-ribbon-wrap">
@@ -57,7 +57,7 @@ export function PitchRibbon({ frames, targetMidiFloat, toleranceCents, durationS
         {paths.map((path, index) => <path key={index} d={path} className="pitch-trace" />)}
         {!paths.length && <text x="500" y="178" textAnchor="middle" className="ribbon-empty">Your voiced pitch will travel across this lane</text>}
       </svg>
-      <div className="ribbon-time-labels"><span>{durationSeconds.toFixed(0)}s ago</span><span>time →</span><span>now</span></div>
+      <div className="ribbon-time-labels"><span>recent</span><span>continuous trace →</span><span>now</span></div>
       <div className="target-tag"><span /> target lane <b>±{toleranceCents}¢</b></div>
       {frames.at(-1)?.voiced && frames.at(-1)?.midiFloat != null && <div className="live-error-tag">{signed((frames.at(-1)!.midiFloat! - targetMidiFloat) * 100, 0)}¢</div>}
     </div>

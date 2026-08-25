@@ -50,6 +50,19 @@ describe("Pattern Challenge continuous-input architecture guard", () => {
     expect(controller).not.toMatch(/observation\.timeSeconds|performance\.now|Date\.now|requestAnimationFrame|setTimeout/);
   });
 
+  it("keeps phrase achievement inside the live stage and reserves results for explicit Stop", () => {
+    expect(component).toContain('data-live-lifetime="user-owned"');
+    expect(component).toContain('data-phrase-achieved={phraseAchieved ? "true" : "false"}');
+    expect(controller).toContain("A phrase is a repeatable milestone inside one user-owned run");
+    expect(controller).toContain("scoreAggregate: foldPhraseScore(state.scoreAggregate, session)");
+    expect(controller).toContain("session: nextPhraseSession(state, elapsedSeconds)");
+    expect(controller).not.toMatch(/session\.status\s*===\s*["']complete["']\s*\?\s*finishPatternChallenge/);
+    expect(controller).toContain('case "stop":');
+    expect(controller).toContain("? finishPatternChallenge(state, state.session)");
+    expect(controller).toContain('return state.phase === "preview" || state.phase === "result"');
+    expect(controller).toContain('return state.phase === "result"');
+  });
+
   it("keeps the component and mutable React ownership bounded", () => {
     expect(component.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);
     expect(controller.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);

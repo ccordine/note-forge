@@ -213,6 +213,61 @@ exercise scheduler, timer graph, or workflow interpreter.
   storage fields, compatibility adapters, or tests. Delete the obsolete model
   so it cannot become authoritative again.
 
+## Permanent user-owned live lifetime
+
+Across every mode in NoteForge, a user-started live vocal session has no
+duration and no automatic cutoff. The user owns both Start and Stop. This is a
+type-level product invariant, not copy, a preference, or a configurable timeout.
+
+- A shared live-trace `begin` action accepts configuration only. Its state and
+  actions contain no duration, deadline, countdown, timeout, or automatic
+  completion threshold.
+- Incoming observations may advance sample-authoritative time, evidence, game
+  state, checkpoints, and scores. They may never stop observation or turn a
+  running user-owned session into a stopped/restart-required workflow.
+- Elapsed time, silence, uncertainty, scoring readiness, target achievement,
+  course completion, a full presentation history, route rerenders, and React
+  lifecycle are never Stop authority.
+- Only an explicit user action may end/reset the feature session. Only the
+  global Disable voice action may stop app-owned microphone capture. Feature
+  code may not call, simulate, schedule, or infer either action.
+- `Start`, `Finish`, and `Stop` are reserved session-lifetime commands. They may
+  be dispatched only from a control whose visible meaning is that exact user
+  choice. A settings change, detector callback, media `ended` event, storage
+  failure, score handoff, promise continuation, React effect, timeout, or
+  interval may not dispatch or call one of those commands on the user's behalf.
+- Natural playback/course completion records playback state or an achievement;
+  it does not finish the surrounding live vocal session. Persistence failure
+  marks the result or take unsavable while the live operation remains under the
+  user's Stop control. Only an actual underlying media-resource failure may
+  force infrastructure teardown, and it must not masquerade as normal Finish.
+- A result or achievement may be recorded without replacing the still-live
+  control surface. Continued observations remain authoritative until the user
+  explicitly leaves or ends the mode.
+- `Finish` is a real feature-state boundary, not decorative copy. After it, new
+  observations may refresh shared telemetry but may not silently resume motion,
+  scoring, recording, or qualified-time accumulation. Resumption requires a new
+  explicit `Start` command.
+- Runtime evidence retention must be bounded without changing session state.
+  Dropping old presentation/history samples is not permission to stop, reset,
+  replace, grade-and-dismiss, or otherwise cut off the live session.
+- A hold requirement is an achievement threshold, never an occupancy cap.
+  Exact current and peak sample-time hold continue beyond the threshold until
+  credible out-of-range evidence or an explicit user action changes the task.
+  Reaching a checkpoint may enable Next; it may not stop measurement.
+- Bounded recent history is presentation evidence, not a substitute for the
+  full session. Whole-session scoring uses bounded online aggregates that keep
+  silence, wrong notes, confidence, sample authority, hold runs, and error
+  moments exact; deleting old frames may never bridge or relabel them.
+- Regression proof must advance beyond every former cutoff (including an hour
+  of wall time) and leave the session active. Architecture tests must reject
+  duration-driven termination anywhere in shared live-session infrastructure.
+- Every observation-driven reducer with a terminal action is registered in the
+  repository lifetime audit. The audit traces terminal reducer transitions and
+  rejects authority from non-user actions, automatic callbacks, timers, effects,
+  media completion, and storage failure; a new unregistered reducer fails the
+  release gate rather than silently inventing another lifetime model.
+
 ## Product information architecture
 
 The permanent navigation describes user jobs, never the implementation
@@ -288,9 +343,10 @@ tuner, a wall-clock scheduler, or another detector.
   continuous hold while preserving aggregate session evidence.
 - Duplicate, reordered, discontinuous, changed-authority, or oversized sample
   gaps credit zero time and establish fresh authority without catch-up.
-- Completion freezes scored aggregates, not the instrument: current F0,
-  observation kind, exact sample coordinates, and observation count continue to
-  update while capture remains enabled.
+- Completing the authored trajectory latches a nonterminal achievement while
+  whole-trace aggregates and exact sample time continue to grow. Only the
+  user's explicit Finish freezes scoring; current F0, observation kind, exact
+  sample coordinates, and observation count remain live afterward.
 - The one horizontal lane is the canonical live input visualization. Do not add
   `NoteInput`, a level meter, a setup tuner, a results tuner, reference audio, or
   a second input action beside it.
@@ -322,6 +378,10 @@ VocalControlVector -> deterministic flight/course/scoring runtime -> renderer`.
 - Physics, gate crossings, course duration, and scoring use exact observation
   deltas. `requestAnimationFrame` renders the latest authoritative state and
   never advances simulation or owns game truth.
+- Completing the authored gate course records a nonterminal achievement. The
+  aircraft, continuation lane, sample-time scoring, and online aggregates keep
+  advancing until the player presses Finish. Finish freezes only Vocal Flight
+  state; the app-owned observation stream remains live until global Disable.
 - Course scores report only measured dimensions. Unattempted recovery or
   single-axis evidence is `N/A`, never free 100% mastery. Loudness is never a
   scoring input.
@@ -394,10 +454,13 @@ It drives 8.5-second voice-like sustains at F-sharp1, quiet C3 below the former
 level gate, C4, and D6 through the real production microphone path. Every
 target must retain at least eight seconds of correct contiguous detector
 evidence while PCM/worklet/window counters remain monotonic. The same still-live
-track then enters Range Loop, retains one tuner DOM identity through wrong
-pitch, silence, reference playback, and success, and earns exactly three
-sample-timed seconds on C3. No stream, track, context, or worklet replacement
-and no pre-Disable stop is permitted.
+track then enters Range Loop, proves that no dwell is credited before the
+visible Start command, retains one tuner DOM identity through wrong pitch,
+silence, reference playback, and achievement, and continues accumulating exact
+sample-timed C3 dwell beyond the former three-second requirement. Only the
+visible Finish command may freeze feature dwell, and shared PCM/live-note
+telemetry must continue afterward. No stream, track, context, or worklet
+replacement and no pre-Disable stop is permitted.
 
 `npm run proof:voice-draw:browser` is the cabinet-level authority for Vocal
 Canvas. It must enter the built Voice Arcade through the real cabinet button,
@@ -405,11 +468,13 @@ enable the shared microphone once, and drive the production worklet and
 detector with generated microphone PCM. It proves that C3, D3, E3, and F-sharp3
 produce Up, Right, Down, and Left motion; that intervening silence advances PCM
 while cursor position remains exact; and that the resulting SVG contains four
-coalesced connected strokes. Its final runtime observation count must equal the
-native worklet-window count; every bounded React publication must identify the
-exact worklet ordinal it represents. It may read native/worklet/diagnostic/DOM
-evidence, but it may never inject a `PitchObservation` or call the drawing
-reducer.
+coalesced connected strokes. It must operate the visible Start and Finish
+controls, prove no drawing before Start, and prove that shared telemetry keeps
+advancing while the explicitly finished canvas remains immutable. Its final
+runtime observation count must equal the native worklet-window count; every
+bounded React publication must identify the exact worklet ordinal it
+represents. It may read native/worklet/diagnostic/DOM evidence, but it may never
+inject a `PitchObservation` or call the drawing reducer.
 
 `tests/audio-kernel-headless.test.ts` is the consumer-independence stress
 authority. It advances 30,000 exact silence windows—ten minutes of 50 Hz sample
@@ -426,9 +491,27 @@ identity, prove bounded React publications retain that authority, cross all nine
 checkpoints on their exact completing observations, publish the first voiced
 frame after silence without a one-hop delay, exercise silence and
 credible-wrong-pitch semantics, retain one lane DOM identity through
-idle/tracking/complete, and keep live F0 updating after the score latches. It may
+idle/tracking/achievement, and keep both scoring and live F0 updating after the
+authored trajectory is achieved. Only the visible Finish command may freeze
+feature scoring, while authoritative telemetry must continue afterward. It may
 observe native calls, diagnostics, and DOM attributes; it may never inject an
 observation or call the reducer/detector directly.
+
+`npm run proof:user-owned-traces:browser` is the built-interaction authority for
+the shared indefinite live-trace runner. It must visibly Start Pitch Match, Hum
+Lab, and Pitch Control, advance each beyond its former 4-, 8-, and 12-second
+cutoff, and prove that the session remains active and continues consuming exact
+sample-authoritative observations. Each mode may become terminal only after its
+own visible Finish command. Advancing fake or browser time, losing pitch,
+reaching a score threshold, and bounded-history eviction may never finish it.
+
+`npm run proof:vocal-flight:browser` is the built-interaction authority for
+Vocal Flight. It must calibrate and Start through visible controls, reconcile
+the shared worklet stream to normalized controls and deterministic simulation,
+continue flight and scoring after the course achievement, then use the visible
+Finish command. After Finish, PCM and observations must keep advancing while
+the feature's simulation-frame count and score remain frozen. Route exit may
+not stop capture, and no game-owned capture or detector path is permitted.
 
 `npm run proof:pitch-match:responsive` is the built-layout authority for Pitch
 Match. It must exercise all five modes at 1440, 1261/1260, 1041/1040, 761/760,
@@ -459,84 +542,89 @@ both phone widths. A root `scrollWidth` assertion alone is never sufficient.
    route/history, workflow identity, audio-playback, and responsive proofs.
    **Complete.**
 8. Build and deploy the production container only after every release gate is
-   green. **Complete; image `sha256:b8eb712983d4…` is deployed on the production
+   green. **Complete; image `sha256:954b37169341…` is deployed on the production
    Docker context and the routed HTTPS health check is green.**
 
-## Final-tree release evidence — 2026-08-24
+## Final-tree release evidence — 2026-08-25
 
-The authoritative built-bundle Chromium proof passed with:
+The authoritative built-bundle Chromium proofs passed with:
 
 - 57/57 semitones MIDI 30–86;
-- 45 Hz measured at 45.000 Hz (+0.01 cents) and 1,200 Hz at 1,200.372 Hz
+- 45 Hz measured at 45.000 Hz (-0.02 cents) and 1,200 Hz at 1,200.372 Hz
   (+0.54 cents);
 - 18/18 quiet low notes at median -60.0 dBFS;
-- 55 silence observations and 187/187 loud-noise observations unvoiced;
-- exact 1,943/1,943 native AudioWorklet-to-detector `(captureEpoch, endSample)`
+- 56 silence observations and 213/213 loud-noise observations unvoiced;
+- exact 2,170/2,170 native AudioWorklet-to-detector `(captureEpoch, endSample)`
   pairs at a 960-sample hop;
 - immediate DOM changes on the first C3, E3, and G3 detector frames, matched by
   exact `endSample`;
-- detector time 2.2 ms median, 3.0 ms p95, and 11.4 ms maximum, every frame
+- detector time 2.2 ms median, 3.0 ms p95, and 10.9 ms maximum, every frame
   below the 20 ms hop budget;
-- 1,095 Pitch Mirror observations, 116 observations with no consumer mounted,
-  and 725 Hum Lab observations, with a 94 ms maximum diagnostic gap and 23 ms
-  maximum no-consumer gap;
-- rendered C3 occupancy entered at zero and every bounded React publication
-  retained the exact detector sample coordinate and hop-multiple dwell, then
-  reset on note departure and cleared by silence;
 - a real AudioContext suspension automatically resumed with continuity epoch
   0→1 and `discontinuity=true`, while stream, track, and worklet ownership all
   remained singular;
 - one `getUserMedia`, zero track disables, zero pre-Disable stops, and exactly
-  one explicit stop;
-- the 38-second sustain proof paired 2,533/2,533 native windows and detector
-  frames; F-sharp1, quiet C3, C4, and D6 each retained more than 8.4 seconds of
-  uninterrupted evidence; quiet C3 reached exactly 3.0 seconds in Range Loop
-  without replacing its tuner, stream, context, or worklet;
-- Vocal Canvas used one stream, track, source, and worklet to consume all 452
-  native PCM windows while React emitted 202 bounded publications; five silence
-  intervals were stationary, C3/D3/E3/F-sharp3 moved Up/Right/Down/Left, and
-  four SVG strokes closed with 0.0 px error and 0.0 px opposite-side mismatch;
-- Pitch Tunnel consumed 784/784 post-anchor observations in exact order while
-  React emitted 351 exact bounded publications; nine independently reconstructed
-  1.00-second dwells and every checkpoint/completion DOM transition matched the
-  causing detector frame; silence retained 0.44 seconds, credible wrong pitch
-  reset only current dwell, and the same no-playback lane stayed live afterward;
-- Vocal Flight consumed all 1,734 pre-exit worklet observations, retained exact
-  sample identity in 718 bounded React publications, and advanced to 1,826
-  observations after leaving the route without stopping capture; isolated pitch
-  reached +0.713960/-0.682013 elevator input, same-F0 dark/bright spectra reached
-  -1/+1 roll, silence applied zero force, the first resumed frame advanced zero
-  simulation time, and deterministic aircraft motion remained independent from
-  the continuing `requestAnimationFrame` renderer;
+  one explicit global Disable stop;
+- the sustained-note proof paired 2,589/2,589 native windows and detector
+  frames; F-sharp1 held for 8.420 seconds, quiet C3 at -62.9 dBFS for 8.360
+  seconds, C4 for 8.440 seconds, and D6 for 8.440 seconds; Range Loop credited
+  zero before visible Start, grew C3 dwell from 3.08 to 3.60 seconds beyond its
+  achievement, and froze it only on visible Finish while PCM and live C3 kept
+  advancing;
+- the shared live-trace proof kept Pitch Match active for 4.82 seconds, Hum Lab
+  for 8.82 seconds, and Pitch Control for 12.82 seconds beyond their deleted
+  automatic cutoffs; only each visible Finish command completed the session,
+  with one capture and zero pre-Disable stops;
+- Vocal Canvas used one stream, track, source, and worklet to consume all 459
+  native PCM windows while React emitted 204 bounded publications; silence was
+  stationary, C3/D3/E3/F-sharp3 moved Up/Right/Down/Left, four SVG strokes
+  closed exactly, and visible Finish froze the canvas while shared telemetry
+  continued;
+- Pitch Tunnel consumed 978/978 post-anchor observations in exact order while
+  React emitted 438 exact bounded publications across 19.54 seconds of sample
+  time; its nine independently reconstructed dwells were exactly 1.00 second,
+  silence retained 0.46 seconds, credible wrong pitch reset only current dwell,
+  achievement remained tracking, scoring grew from 9.40 to 10.14 seconds after
+  achievement, and visible Finish alone froze scoring while telemetry continued;
+- Vocal Flight consumed all 1,771 worklet observations before its authority
+  snapshot and 1,889 after route exit, retained exact sample identity in 728
+  bounded React publications, reached +0.713954/-0.682011 elevator input and
+  -1/+1 roll from same-F0 dark/bright spectra, and applied zero vocal force
+  during silence;
+- after visible Vocal Flight Finish, authoritative observations advanced from
+  1,823 to 1,853 while simulated frames remained exactly 1,005; the achieved
+  course had continued flight and scoring until that command, and route exit
+  still produced zero capture stops;
 - Vocal Flight calibration and active flight passed containment, reachability,
-  and hit testing at 1440, 760, 430, 390, and 320 CSS pixels; its shared
-  pitch-plus-brightness processing measured 9.8 ms maximum against the 20 ms hop;
+  and hit testing at 1440, 760, 430, 390, and 320 CSS pixels; its maximum shared
+  pitch-plus-brightness processing time was 11.4 ms against the 20 ms hop;
 - Pitch Match passed 55 idle mode/viewport combinations at all 11 shell and
   feature breakpoint widths, plus real idle/tracking/complete/reset workflows
   at 390 and 320 pixels; every visible control remained horizontally contained,
   vertically reachable, and hit-testable with one canonical `NoteInput`;
-- the headless kernel consumed 30,000 silence windows (ten minutes of sample
-  time) with no React subscriber or feature attachment and zero capture stops;
-- the final frontend suite passed 822/822 across 86 files; production-inclusive
-  coverage is 62.20% statements, 57.45% branches, 53.67% functions, and 64.55%
-  lines; pitch-engine statement coverage is 94.36%;
-- the architecture audit scanned 337 source files and 139 JSX components,
-  reached all 200 application modules, and reported zero violations, zero
+- the headless kernel consumed 30,000 silence windows—ten minutes of 50 Hz
+  sample time—with no React subscriber or feature attachment and zero capture
+  stops;
+- the final frontend suite passed 901/901 across 90 files;
+- the architecture audit scanned 346 source files and 141 JSX components,
+  reached all 203 application modules, and reported zero violations, zero
   unreachable application modules, and zero feature raw-stream reads;
-- fresh-profile offline Chromium proof with 70 precached resources, the exact
-  hashed worklet, 14 canonical activity routes, nested Arcade reload/Back,
-  and zero API/health/missing-asset shell fallbacks;
-- Go tests, race tests, vet, typecheck, production build, and desktop/mobile
-  selector-gated visual inspection all passed.
+- the production build transformed 284 modules and emitted
+  `index-CNV_v_bg.js`, `VocalFlight-DhT4ywmM.js`,
+  `PitchTunnel-Cye8qQmf.js`, and
+  `pitch-capture-worklet-BImFxh7e.js`; each exact deployed asset returns HTTP
+  200, and service worker `c2182a472eb0` precaches all 70 resources;
+- Go tests, vet, typecheck, production build, static lifetime authority checks,
+  and the exhaustive 14-owner visible Start/Finish inventory all passed;
 - the final hardened container runs as UID/GID 65532 with a read-only root
   filesystem and all Linux capabilities dropped; Docker reports it healthy on
   `worknet_net`, the in-container health endpoint returns `ok`, and
   `https://noteforge.worknet/healthz` returns HTTP 200. The routed homepage
-  serves `index-CHdlnUCJ.js`; `VocalFlight-DyCYHbVh.js` and the hashed
-  `pitch-capture-worklet-BImFxh7e.js` both return HTTP 200; service worker
-  `f5a026312ca2` precaches all 70 resources; browser-navigation requests for
-  `/arcade/flight` return the SPA document; and the deployed image is
-  `sha256:b8eb712983d4…`.
+  serves `index-CNV_v_bg.js`; browser-navigation requests for `/arcade/flight`
+  return the SPA document; and deployed image
+  `sha256:954b37169341ecae558919f19ad55406c28c04dd7de8a59fe703cc5e995dbcfc`
+  has manifest
+  `sha256:108910a5254e7bfd023c0dd1de3b5d6449924a031de848e2b896d1d749aef258`.
 
 These measurements establish the final checked-in software path. They do not
 certify a particular physical microphone, room, OS audio stack, hot-plug event,

@@ -155,6 +155,7 @@ export function createPitchTunnel(
 ): PitchTunnelState {
   return freezeState({
     status: "idle",
+    achievementReached: false,
     options: resolvePitchTunnelOptions(options),
     anchorMidiFloat: null,
     elapsedSeconds: 0,
@@ -425,10 +426,7 @@ function advanceTracking(
   const credibleOutsideLane = fields.reliable && fields.currentInLane === false;
   const heldSeconds = credibleOutsideLane
     ? 0
-    : Math.min(
-      state.options.requiredInLaneSeconds,
-      state.checkpoint.heldSeconds + (qualified ? deltaSeconds : 0),
-    );
+    : state.checkpoint.heldSeconds + (qualified ? deltaSeconds : 0);
   const checkpoint: PitchTunnelCheckpointProgress = Object.freeze({
     ...state.checkpoint,
     ...checkpointErrors,
@@ -463,6 +461,10 @@ function advanceTracking(
     previousInLane: fields.currentInLane === true,
     previousErrorCents: fields.currentErrorCents,
   } satisfies PitchTunnelState;
+  // Completing the authored trajectory is an achievement, never a cutoff.
+  // Continue measuring the final lane, loss, corrections, and full trace until
+  // the user's explicit Finish command changes the session status.
+  if (state.achievementReached) return freezeState(common);
   if (heldSeconds + EPSILON < state.options.requiredInLaneSeconds) {
     return freezeState(common);
   }
@@ -473,7 +475,11 @@ function advanceTracking(
   ]);
   const nextIndex = checkpoint.index + 1;
   if (nextIndex >= state.options.checkpointOffsetsCents.length) {
-    return freezeState({ ...common, status: "complete", completedCheckpoints });
+    return freezeState({
+      ...common,
+      achievementReached: true,
+      completedCheckpoints,
+    });
   }
   const nextCheckpoint = createCheckpoint(
     state.options,
@@ -502,13 +508,13 @@ export function observePitchTunnel(
   state: Readonly<PitchTunnelState>,
   observation: Readonly<PitchObservation>,
 ): PitchTunnelState {
-  if (state.status === "complete") return observeAfterCompletion(state, observation);
+  if (state.status === "complete") return observeWithoutScoring(state, observation);
   return state.status === "idle"
     ? observeWhileIdle(state, observation)
     : advanceTracking(state, observation);
 }
 
-function observeAfterCompletion(
+function observeWithoutScoring(
   state: Readonly<PitchTunnelState>,
   observation: Readonly<PitchObservation>,
 ): PitchTunnelState {
@@ -542,6 +548,15 @@ function observeAfterCompletion(
   });
 }
 
+/** Only a direct user command may end the live Pitch Tunnel session. */
+export function finishPitchTunnel(
+  state: Readonly<PitchTunnelState>,
+): PitchTunnelState {
+  return state.status === "tracking"
+    ? freezeState({ ...state, status: "complete" })
+    : state as PitchTunnelState;
+}
+
 export function resetPitchTunnel(state: Readonly<PitchTunnelState>): PitchTunnelState {
   const reset = createPitchTunnel(state.options);
   return freezeState({
@@ -563,6 +578,8 @@ export function reducePitchTunnel(
       return observePitchTunnel(state, action.observation);
     case "start":
       return startPitchTunnel(state);
+    case "finish":
+      return finishPitchTunnel(state);
     case "reset":
       return resetPitchTunnel(state);
   }

@@ -50,6 +50,21 @@ describe("Song Ride continuous-input architecture guard", () => {
     expect(hook).not.toMatch(/input\.state\s*!==\s*"running"/);
   });
 
+  it("keeps visibility and track completion from ending or replacing the live rail", () => {
+    expect(hook).not.toContain("visibilitychange");
+    expect(session).toContain('export type SongPlaybackState = "stopped" | "playing" | "paused" | "ended";');
+    expect(session).not.toMatch(/\|\s*["']paused["']\s*\n\s*\|\s*["']result["']/);
+    expect(component).toContain("onEnded={controller.completeTrack}");
+    expect(component).not.toMatch(/onEnded=.*finish/);
+    expect(component).toContain('data-live-lifetime="user-owned"');
+    expect(runtime).toContain('type: "track-completed"');
+    const trackCompletion = session.slice(
+      session.indexOf('case "track-completed"'),
+      session.indexOf('case "run-finished"'),
+    );
+    expect(trackCompletion).not.toContain('phase: "result"');
+  });
+
   it("uses sample-coordinate authority and bounded source ownership", () => {
     expect(session).toContain("observation.endSample - previous.endSample");
     expect(session).toContain("observation.sampleRate");

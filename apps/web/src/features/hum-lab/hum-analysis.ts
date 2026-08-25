@@ -1,7 +1,14 @@
-import { smoothPitchFrames, type PitchFrame } from "@noteforge/pitch-engine";
-import { scoreSustainedNote, type AttemptMetrics } from "@noteforge/trainer-core";
+import { type PitchFrame } from "@noteforge/pitch-engine";
+import { type AttemptMetrics } from "@noteforge/trainer-core";
 import type { Timbre } from "@/audio/synth";
-import type { CompletedAttempt } from "@/features/training-session/attempt-runner";
+import {
+  attemptScoringFrames,
+  type CompletedAttempt,
+} from "@/features/training-session/attempt-runner";
+import {
+  scoreWeightedSustainedNote,
+} from "@/features/training-session/attempt-scoring";
+import { aggregateMedianMidi } from "@/features/training-session/attempt-scoring-aggregate";
 import { continuousMidiToHz } from "@/lib/music-display";
 import type { HumMode } from "@/navigation";
 
@@ -14,11 +21,10 @@ export interface HumTakeConfiguration {
   readonly centsOffset: number;
   readonly timbre: Timbre;
   readonly toleranceCents: number;
-  readonly duration: number;
 }
 
 export interface HumResult {
-  readonly frames: PitchFrame[];
+  readonly frames: readonly PitchFrame[];
   readonly metrics: AttemptMetrics | null;
   readonly anchor: {
     readonly midiFloat: number;
@@ -41,17 +47,19 @@ export function scoreHumTake(
   take: Readonly<CompletedAttempt<HumTakeConfiguration>>,
 ): HumResult {
   const configuration = take.configuration;
-  const frames = smoothPitchFrames(take.frames, { correctOctaveJumps: true });
-  const voiced = frames.filter((frame) => frame.voiced && frame.confidence >= 0.5 && frame.midiFloat !== null);
-  const continuityRatio = frames.length ? voiced.length / frames.length : 0;
-  if (voiced.length < 3) return { frames, metrics: null, anchor: null, continuityRatio };
+  const frames = attemptScoringFrames(take);
+  const continuityRatio = take.scoringAggregate.totalFrameCount > 0
+    ? take.scoringAggregate.analyzedFrameCount / take.scoringAggregate.totalFrameCount
+    : 0;
+  const voicedWeight = take.scoringAggregate.analyzedFrameCount;
+  if (voicedWeight < 3) return { frames, metrics: null, anchor: null, continuityRatio };
 
   let targetMidi = configuration.midi;
   let targetCents = configuration.centsOffset;
   let anchor: HumResult["anchor"] = null;
-  let scoreFrames = frames;
+  const scoreFrames = frames;
   if (configuration.mode === "anchor") {
-    const center = median(voiced.map((frame) => frame.midiFloat!))!;
+    const center = aggregateMedianMidi(take.scoringAggregate)!;
     targetMidi = Math.round(center);
     targetCents = (center - targetMidi) * 100;
     anchor = {
@@ -62,14 +70,10 @@ export function scoreHumTake(
       continuityRatio,
     };
   }
-  if (configuration.mode === "glide") {
-    scoreFrames = frames.filter((_, index) => (
-      (take.frameElapsedSeconds[index] ?? 0) >= configuration.duration * 0.55
-    ));
-  }
-  const metrics = scoreSustainedNote(
+  const metrics = scoreWeightedSustainedNote(
+    take,
     scoreFrames,
-    { midi: targetMidi, centsOffset: targetCents, durationMs: configuration.duration * 1_000, timbre: configuration.timbre, amplitude: 0.22 },
+    { midi: targetMidi, centsOffset: targetCents, timbre: configuration.timbre, amplitude: 0.22 },
     { toleranceCents: configuration.toleranceCents, minimumConfidence: 0.5, promptTimeSeconds: scoreFrames[0]?.timeSeconds, maximumVoicedGapSeconds: 0.24 },
   );
   return { frames, metrics, anchor, continuityRatio };

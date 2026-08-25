@@ -70,6 +70,7 @@ export function VocalFlight(props: ArcadeGameProps) {
     <section
       className={`arcade-game-shell vocal-flight-shell phase-${state.phase}`}
       data-vocal-flight
+      data-live-lifetime="user-owned"
       data-phase={state.phase}
       data-input-state={input.state}
       data-observation-kind={state.telemetry?.observationKind ?? "absent"}

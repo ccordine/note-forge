@@ -19,7 +19,13 @@ function captureHarness() {
     readyState: "live",
     enabled: true,
     addEventListener: vi.fn(),
-    getSettings: vi.fn(() => ({ deviceId: "usb-interface" })),
+    getSettings: vi.fn(() => ({
+      deviceId: "usb-interface",
+      latency: 0.008,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    })),
     getConstraints: vi.fn(() => ({})),
     stop: vi.fn(),
   };
@@ -32,25 +38,42 @@ function captureHarness() {
     connect: vi.fn((target: unknown) => target),
     disconnect: vi.fn(),
   };
-  const gain = {
-    gain: { value: 1 },
-    connect: vi.fn((target: unknown) => target),
-    disconnect: vi.fn(),
-  };
+  const gains: Array<ReturnType<typeof createGainNode>> = [];
+  function createGainNode() {
+    const gain = {
+      value: 1,
+      cancelAndHoldAtTime: vi.fn(),
+      cancelScheduledValues: vi.fn(),
+      setValueAtTime: vi.fn(),
+      linearRampToValueAtTime: vi.fn(),
+    };
+    return {
+      gain,
+      connect: vi.fn((target: unknown) => target),
+      disconnect: vi.fn(),
+    };
+  }
   const context = {
     state: "running",
     sampleRate: 48_000,
+    currentTime: 12.5,
+    baseLatency: 0.005,
+    outputLatency: 0.009,
     destination: {},
     audioWorklet: { addModule: vi.fn(async () => undefined) },
-    createMediaStreamSource: vi.fn(() => source),
-    createGain: vi.fn(() => gain),
+    createMediaStreamSource: vi.fn((_input: unknown) => source),
+    createGain: vi.fn(() => {
+      const gain = createGainNode();
+      gains.push(gain);
+      return gain;
+    }),
     resume: vi.fn(async () => {
       context.state = "running";
     }),
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   };
-  return { context, stream, track };
+  return { context, stream, track, source, gains };
 }
 
 class FakeAudioWorkletNode {
@@ -79,6 +102,9 @@ describe("canonical microphone capture", () => {
     FakeAudioWorkletNode.options.length = 0;
     FakeAudioWorkletNode.instances.length = 0;
     vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    vi.stubGlobal("MediaStream", class {
+      constructor(readonly tracks: readonly unknown[]) {}
+    });
   });
 
   afterEach(() => {
@@ -87,13 +113,13 @@ describe("canonical microphone capture", () => {
   });
 
   it("always requests the single canonical raw-input constraint set", async () => {
-    const { context, stream } = captureHarness();
-    const getUserMedia = vi.fn(async () => stream);
+    const { context, stream, track } = captureHarness();
+    const getUserMedia = vi.fn(async (_constraints?: MediaStreamConstraints) => stream);
     ensureAudioReady.mockResolvedValue(context);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const capture = new MicrophoneCapture();
 
-    await capture.start(() => undefined);
+    const info = await capture.start(() => undefined);
 
     expect(FakeAudioWorkletNode.options.at(-1)).toMatchObject({
       channelCount: 1,
@@ -105,12 +131,101 @@ describe("canonical microphone capture", () => {
     });
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
-        channelCount: 1,
+        channelCount: { ideal: 1 },
         echoCancellation: { ideal: false },
         noiseSuppression: { ideal: false },
         autoGainControl: { ideal: false },
       },
     });
+    const microphoneStream = context.createMediaStreamSource.mock.calls[0]?.[0] as {
+      tracks: readonly unknown[];
+    };
+    expect(microphoneStream.tracks).toEqual([track]);
+    expect(getUserMedia.mock.calls[0]?.[0]).not.toHaveProperty("audio.sampleRate");
+    expect(info.latency).toEqual({
+      baseSeconds: 0.005,
+      outputSeconds: 0.009,
+      inputSeconds: 0.008,
+    });
+    expect(info.settings).toMatchObject({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+    capture.stop();
+  });
+
+  it("adds the latency hint only when the browser reports that constraint", async () => {
+    const { context, stream } = captureHarness();
+    const getUserMedia = vi.fn(async (_constraints?: MediaStreamConstraints) => stream);
+    ensureAudioReady.mockResolvedValue(context);
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia,
+        getSupportedConstraints: () => ({ latency: true }),
+      },
+    });
+    const capture = new MicrophoneCapture();
+
+    await capture.start(() => undefined);
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: expect.objectContaining({ latency: { ideal: 0 } }),
+    });
+    expect(getUserMedia.mock.calls[0]?.[0]).not.toHaveProperty("audio.sampleRate");
+    capture.stop();
+  });
+
+  it("builds one direct muted monitor branch beside the analysis branch", async () => {
+    const { context, stream, source, gains } = captureHarness();
+    const getUserMedia = vi.fn(async () => stream);
+    ensureAudioReady.mockResolvedValue(context);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const capture = new MicrophoneCapture();
+
+    await capture.start(() => undefined);
+
+    const worklet = FakeAudioWorkletNode.instances[0]!;
+    const [silentAnalysisGain, monitorGain] = gains;
+    expect(gains).toHaveLength(2);
+    expect(silentAnalysisGain?.gain.value).toBe(0);
+    expect(monitorGain?.gain.value).toBe(0);
+    expect(source.connect).toHaveBeenCalledWith(monitorGain);
+    expect(monitorGain?.connect).toHaveBeenCalledWith(context.destination);
+    expect(source.connect).toHaveBeenCalledWith(worklet);
+    expect(worklet.connect).toHaveBeenCalledWith(silentAnalysisGain);
+    expect(silentAnalysisGain?.connect).toHaveBeenCalledWith(context.destination);
+    expect(monitorGain?.connect).not.toHaveBeenCalledWith(worklet);
+    capture.stop();
+  });
+
+  it("changes monitoring only by ramping the same gain node", async () => {
+    const { context, stream, track, gains } = captureHarness();
+    const getUserMedia = vi.fn(async () => stream);
+    ensureAudioReady.mockResolvedValue(context);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const capture = new MicrophoneCapture();
+    await capture.start(() => undefined);
+    const monitorGain = gains[1]!;
+
+    capture.setMonitoring(true, 0.65);
+    capture.setMonitoring(true, 0.73);
+    capture.setMonitoring(false, 0.73);
+
+    expect(monitorGain.gain.cancelAndHoldAtTime).toHaveBeenCalledTimes(3);
+    expect(monitorGain.gain.cancelAndHoldAtTime).toHaveBeenCalledWith(12.5);
+    expect(monitorGain.gain.linearRampToValueAtTime.mock.calls).toEqual([
+      [0.65, 12.505],
+      [0.73, 12.505],
+      [0, 12.505],
+    ]);
+    expect(context.createMediaStreamSource).toHaveBeenCalledOnce();
+    expect(context.createGain).toHaveBeenCalledTimes(2);
+    expect(FakeAudioWorkletNode.instances).toHaveLength(1);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(() => capture.setMonitoring(true, -0.01)).toThrow(RangeError);
+    expect(() => capture.setMonitoring(true, 1.01)).toThrow(RangeError);
     capture.stop();
   });
 
@@ -272,7 +387,7 @@ describe("canonical microphone capture", () => {
   it("repairs a missing PCM heartbeat by replacing only the processing graph", async () => {
     vi.useFakeTimers();
     try {
-      const { context, stream, track } = captureHarness();
+      const { context, stream, track, source, gains } = captureHarness();
       const getUserMedia = vi.fn(async () => stream);
       const transportEvents = vi.fn();
       const onSamples = vi.fn();
@@ -312,6 +427,11 @@ describe("canonical microphone capture", () => {
       expect(getUserMedia).toHaveBeenCalledOnce();
       expect(track.stop).not.toHaveBeenCalled();
       expect(FakeAudioWorkletNode.instances).toHaveLength(2);
+      expect(context.createMediaStreamSource).toHaveBeenCalledOnce();
+      expect(gains).toHaveLength(3);
+      expect(gains[1]?.disconnect).not.toHaveBeenCalled();
+      expect(source.disconnect).toHaveBeenCalledWith(FakeAudioWorkletNode.instances[0]);
+      expect(source.disconnect).not.toHaveBeenCalledWith(gains[1]);
       expect(FakeAudioWorkletNode.options[1]?.processorOptions).toMatchObject({
         captureEpoch: 1,
         continuityEpoch: 1,

@@ -106,4 +106,61 @@ describe("SettingsPersistence", () => {
     await expect(persistence.flushWhileActive()).resolves.toBe(false);
     expect(results).toEqual(["saving"]);
   });
+
+  it("makes a remount wait for every queued write from the previous mount", async () => {
+    let stored: unknown = { version: 0 };
+    const firstWrite = deferred<void>();
+    const secondWrite = deferred<void>();
+    database.getSetting.mockImplementation(() => Promise.resolve(stored));
+    database.setSettings
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+
+    const firstMount = new SettingsPersistence(["progress"] as const);
+    await firstMount.load();
+    firstMount.save([{ key: "progress", value: { version: 1 } }], () => undefined);
+    firstMount.save([{ key: "progress", value: { version: 2 } }], () => undefined);
+    firstMount.dispose();
+
+    const secondMount = new SettingsPersistence(["progress"] as const);
+    const remountLoad = secondMount.load();
+    await vi.waitFor(() => expect(database.setSettings).toHaveBeenCalledTimes(1));
+    expect(database.getSetting).toHaveBeenCalledTimes(1);
+
+    stored = { version: 1 };
+    firstWrite.resolve();
+    await vi.waitFor(() => expect(database.setSettings).toHaveBeenCalledTimes(2));
+    expect(database.getSetting).toHaveBeenCalledTimes(1);
+
+    stored = { version: 2 };
+    secondWrite.resolve();
+    await expect(remountLoad).resolves.toMatchObject({
+      values: { progress: { version: 2 } },
+    });
+    expect(database.getSetting).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces queued snapshots to the newest value before the next database write", async () => {
+    database.getSetting.mockResolvedValue({ version: 0 });
+    const firstWrite = deferred<void>();
+    const secondWrite = deferred<void>();
+    database.setSettings
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const persistence = new SettingsPersistence(["progress"] as const);
+    await persistence.load();
+
+    persistence.save([{ key: "progress", value: { version: 1 } }], () => undefined);
+    persistence.save([{ key: "progress", value: { version: 2 } }], () => undefined);
+    persistence.save([{ key: "progress", value: { version: 3 } }], () => undefined);
+    await vi.waitFor(() => expect(database.setSettings).toHaveBeenCalledTimes(1));
+    firstWrite.resolve();
+    await vi.waitFor(() => expect(database.setSettings).toHaveBeenCalledTimes(2));
+
+    expect(database.setSettings.mock.calls[1]).toEqual([[
+      { key: "progress", value: { version: 3 } },
+    ]]);
+    secondWrite.resolve();
+    await persistence.flushWhileActive();
+  });
 });

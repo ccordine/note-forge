@@ -7,10 +7,10 @@ import {
   type ObservationSampleAuthority,
 } from "@/realtime/observation-continuity";
 import {
-  createRangeDwell,
-  updateRangeDwell,
-  type RangeDwellState,
-} from "../range-loop/range-dwell";
+  createNoteDwell,
+  updateNoteDwell,
+  type NoteDwellState,
+} from "@/features/training-session/note-dwell";
 import {
   CARDINAL_DIRECTIONS,
   type CardinalDirection,
@@ -93,7 +93,7 @@ export interface PitchMazeControllerState {
   readonly phase: PitchMazeControllerPhase;
   readonly activeDirection: CardinalDirection | null;
   readonly activeTargetMidi: number | null;
-  readonly dwell: RangeDwellState | null;
+  readonly dwell: NoteDwellState | null;
   readonly capture: PitchMazeCommandCapture | null;
   /** Prevent one continuous note occupation from becoming auto-repeat. */
   readonly committedDirection: CardinalDirection | null;
@@ -348,12 +348,12 @@ function beginTracking(
   selection: Readonly<PitchMazeDirectionSelection>,
   frame: Readonly<PitchMazeVoiceFrame>,
 ): PitchMazeControllerUpdate {
-  const initialDwell = createRangeDwell({
+  const initialDwell = createNoteDwell({
     targetMidi: selection.targetMidi,
     requiredHoldSeconds: state.options.requiredHoldSeconds,
     toleranceCents: state.options.toleranceCents,
   });
-  const dwell = updateRangeDwell(initialDwell, frame);
+  const dwell = updateNoteDwell(initialDwell, frame);
   return {
     event: null,
     state: {
@@ -426,7 +426,7 @@ export function updatePitchMazeController(
           // earned occupancy through silence and uncertain evidence. The first
           // credible frame after the gap re-establishes qualification and earns
           // no catch-up interval.
-          dwell: updateRangeDwell(state.dwell, frame),
+          dwell: updateNoteDwell(state.dwell, frame),
           lastAuthority: authorityFromFrame(frame),
         },
       };
@@ -484,7 +484,7 @@ export function updatePitchMazeController(
       : beginTracking(state, selection, frame);
   }
 
-  const dwell = updateRangeDwell(state.dwell, frame);
+  const dwell = updateNoteDwell(state.dwell, frame);
   const capture = appendCapture(state.capture, activeErrorCents, frame.timeSeconds, state.options);
   if (!dwell.achievementReached) {
     return {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
-  createRangeDwell,
-  updateRangeDwell,
-  type RangeDwellState,
-} from "../apps/web/src/features/range-loop/range-dwell";
+  createNoteDwell,
+  updateNoteDwell,
+  type NoteDwellState,
+} from "../apps/web/src/features/training-session/note-dwell";
 
 const SAMPLE_RATE = 48_000;
 const WINDOW_SIZE = 4_096;
@@ -74,8 +74,8 @@ function observation(
   });
 }
 
-function controller(requiredHoldSeconds = 0.06): RangeDwellState {
-  return createRangeDwell({
+function controller(requiredHoldSeconds = 0.06): NoteDwellState {
+  return createNoteDwell({
     targetMidi: 60,
     toleranceCents: 20,
     requiredHoldSeconds,
@@ -83,18 +83,18 @@ function controller(requiredHoldSeconds = 0.06): RangeDwellState {
 }
 
 function feed(
-  initial: RangeDwellState,
+  initial: NoteDwellState,
   frames: readonly PitchObservation[],
-): RangeDwellState {
-  return frames.reduce(updateRangeDwell, initial);
+): NoteDwellState {
+  return frames.reduce(updateNoteDwell, initial);
 }
 
-describe("sample-authoritative range dwell", () => {
+describe("sample-authoritative note dwell", () => {
   it("credits only capture samples bounded by consecutive in-tolerance frames", () => {
     const initial = controller(0.04);
-    const first = updateRangeDwell(initial, observation(WINDOW_SIZE));
-    const second = updateRangeDwell(first, observation(WINDOW_SIZE + HOP_SIZE));
-    const achieved = updateRangeDwell(second, observation(WINDOW_SIZE + HOP_SIZE * 2));
+    const first = updateNoteDwell(initial, observation(WINDOW_SIZE));
+    const second = updateNoteDwell(first, observation(WINDOW_SIZE + HOP_SIZE));
+    const achieved = updateNoteDwell(second, observation(WINDOW_SIZE + HOP_SIZE * 2));
 
     expect(initial).toMatchObject({ achievementReached: false, heldSamples: 0, heldSeconds: 0 });
     expect(first).toMatchObject({ achievementReached: false, heldSamples: 0, heldSeconds: 0 });
@@ -123,7 +123,7 @@ describe("sample-authoritative range dwell", () => {
     ]);
     expect(state.heldSamples).toBe(HOP_SIZE);
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 2, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 2, {
       kind: "unvoiced",
     }));
     expect(state).toMatchObject({
@@ -134,7 +134,7 @@ describe("sample-authoritative range dwell", () => {
       previousFrameQualified: false,
     });
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 3, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 3, {
       kind: "uncertain",
       midiFloat: 60.02,
       frequencyHz: 262,
@@ -144,9 +144,9 @@ describe("sample-authoritative range dwell", () => {
     expect(state.currentMidiFloat).toBe(60.02);
     expect(state.currentCentsFromTarget).toBeCloseTo(2, 10);
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
     expect(state.heldSamples).toBe(HOP_SIZE);
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5));
     expect(state.heldSamples).toBe(HOP_SIZE * 2);
     expect(state.heldSeconds).toBeCloseTo(0.04, 12);
   });
@@ -159,7 +159,7 @@ describe("sample-authoritative range dwell", () => {
     ]);
     expect(state.heldSamples).toBe(HOP_SIZE * 2);
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 3, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 3, {
       midiFloat: 61,
       confidence: 0.01,
     }));
@@ -169,9 +169,9 @@ describe("sample-authoritative range dwell", () => {
       previousFrameQualified: false,
     });
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
     expect(state.heldSamples).toBe(0);
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5, {
       midiFloat: 60.25,
       confidence: 0.95,
     }));
@@ -187,7 +187,7 @@ describe("sample-authoritative range dwell", () => {
       observation(WINDOW_SIZE),
       observation(WINDOW_SIZE + HOP_SIZE),
     ]);
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 8, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 8, {
       captureEpoch: 2,
       midiFloat: 59,
     }));
@@ -198,15 +198,15 @@ describe("sample-authoritative range dwell", () => {
     const first = observation(WINDOW_SIZE);
     const second = observation(WINDOW_SIZE + HOP_SIZE);
     const afterSecond = feed(controller(), [first, second]);
-    const duplicate = updateRangeDwell(afterSecond, second);
-    const reordered = updateRangeDwell(duplicate, first);
+    const duplicate = updateNoteDwell(afterSecond, second);
+    const reordered = updateNoteDwell(duplicate, first);
 
     expect(duplicate).toBe(afterSecond);
     expect(reordered).toBe(afterSecond);
     expect(reordered.heldSamples).toBe(HOP_SIZE);
     expect(reordered.lastAuthority?.endSample).toBe(WINDOW_SIZE + HOP_SIZE);
 
-    const next = updateRangeDwell(reordered, observation(WINDOW_SIZE + HOP_SIZE * 2));
+    const next = updateNoteDwell(reordered, observation(WINDOW_SIZE + HOP_SIZE * 2));
     expect(next.heldSamples).toBe(HOP_SIZE * 2);
   });
 
@@ -221,12 +221,12 @@ describe("sample-authoritative range dwell", () => {
       observation(WINDOW_SIZE + HOP_SIZE),
     ]);
     const heldBefore = state.heldSamples;
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4, boundary));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4, boundary));
 
     expect(state.heldSamples).toBe(heldBefore);
     expect(state.previousFrameQualified).toBe(true);
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5, {
       ...boundary,
       discontinuity: false,
     }));
@@ -238,15 +238,15 @@ describe("sample-authoritative range dwell", () => {
       observation(WINDOW_SIZE),
       observation(WINDOW_SIZE + HOP_SIZE),
     ]);
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
     expect(state.heldSamples).toBe(HOP_SIZE);
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5));
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5));
     expect(state.heldSamples).toBe(HOP_SIZE * 2);
   });
 
   it("reports the current raw pitch coordinate separately from qualification", () => {
-    const state = updateRangeDwell(controller(), observation(WINDOW_SIZE, {
+    const state = updateNoteDwell(controller(), observation(WINDOW_SIZE, {
       midiFloat: 59.875,
       nearestMidi: 60,
       frequencyHz: 259.74,
@@ -278,7 +278,7 @@ describe("sample-authoritative range dwell", () => {
       peakHeldSeconds: 0.02,
     });
 
-    state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 2, {
+    state = updateNoteDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 2, {
       midiFloat: 57,
     }));
     expect(state).toMatchObject({
@@ -297,7 +297,7 @@ describe("sample-authoritative range dwell", () => {
     const hourFrameCount = Math.round(60 * 60 / (HOP_SIZE / SAMPLE_RATE));
     let state = controller(3);
     for (let index = 0; index <= hourFrameCount; index += 1) {
-      state = updateRangeDwell(
+      state = updateNoteDwell(
         state,
         observation(WINDOW_SIZE + HOP_SIZE * index),
       );
@@ -311,14 +311,14 @@ describe("sample-authoritative range dwell", () => {
     expect(state.peakHeldSeconds).toBeCloseTo(3_600, 7);
     expect(state.progress).toBe(1);
 
-    state = updateRangeDwell(state, observation(
+    state = updateNoteDwell(state, observation(
       WINDOW_SIZE + HOP_SIZE * (hourFrameCount + 1),
       { kind: "unvoiced" },
     ));
     expect(state.heldSeconds).toBeCloseTo(3_600, 7);
     expect(state.observedFrameCount).toBe(hourFrameCount + 2);
 
-    state = updateRangeDwell(state, observation(
+    state = updateNoteDwell(state, observation(
       WINDOW_SIZE + HOP_SIZE * (hourFrameCount + 2),
       { midiFloat: 61 },
     ));
@@ -335,7 +335,7 @@ describe("sample-authoritative range dwell", () => {
   it("uses the canonical hop-derived interval default without a second confidence gate", () => {
     const state = controller();
     expect(state.maximumCreditedIntervalSeconds).toBe(0.03);
-    expect(() => createRangeDwell({
+    expect(() => createNoteDwell({
       targetMidi: 60,
       toleranceCents: 0,
       requiredHoldSeconds: 1,

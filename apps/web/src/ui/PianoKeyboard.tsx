@@ -25,6 +25,13 @@ export interface PianoKeyboardProps {
   className?: string;
 }
 
+export interface PianoKeyboardViewportProps extends PianoKeyboardProps {
+  /** Accessible name for the independently scrollable keyboard region. */
+  viewportAriaLabel?: string;
+  /** Optional class for the scroll viewport; `className` still targets the keyboard. */
+  viewportClassName?: string;
+}
+
 interface KeyLayout {
   midi: number;
   kind: "white" | "black";
@@ -32,6 +39,8 @@ interface KeyLayout {
 }
 
 const WHITE_PITCH_CLASSES = new Set([0, 2, 4, 5, 7, 9, 11]);
+export const PIANO_KEYBOARD_MINIMUM_WHITE_KEY_WIDTH_PX = 44;
+const PIANO_KEYBOARD_HORIZONTAL_FRAME_PX = 14;
 const MARKER_GLYPHS: Record<PianoKeyMarkerRole, string> = {
   anchor: "S",
   guess: "●",
@@ -123,7 +132,11 @@ export function PianoKeyboard({
 
   const keyboardStyle = {
     "--piano-white-key-count": whiteKeys.length,
-    "--piano-black-key-width": `${(0.64 / whiteKeys.length) * 100}%`
+    "--piano-black-key-width": `${(0.64 / whiteKeys.length) * 100}%`,
+    "--piano-scroll-minimum-width": `${
+      whiteKeys.length * PIANO_KEYBOARD_MINIMUM_WHITE_KEY_WIDTH_PX
+      + PIANO_KEYBOARD_HORIZONTAL_FRAME_PX
+    }px`,
   } as CSSProperties;
   const keyboardLabel = ariaLabel ?? `Piano keyboard from ${noteLabel(startMidi)} to ${noteLabel(endMidi)}`;
   const keyDisabled = disabled || !onKeyPress;
@@ -166,11 +179,48 @@ export function PianoKeyboard({
       aria-label={keyboardLabel}
       data-start-midi={startMidi}
       data-end-midi={endMidi}
+      data-white-key-count={whiteKeys.length}
     >
       <div className="piano-keyboard__white-keys">
         {whiteKeys.map(renderKey)}
       </div>
       {blackKeys.map(renderKey)}
+    </div>
+  );
+}
+
+/**
+ * The canonical wide-keyboard boundary. Only this viewport scrolls; the page
+ * remains width-contained. It never reads markers or moves to a target, so a
+ * hidden answer cannot leak through an automatic scroll position.
+ */
+export function PianoKeyboardViewport({
+  viewportAriaLabel,
+  viewportClassName = "",
+  ariaLabel,
+  className = "",
+  startMidi,
+  endMidi,
+  ...keyboardProps
+}: PianoKeyboardViewportProps) {
+  const keyboardLabel = ariaLabel
+    ?? `Piano keyboard from ${noteLabel(startMidi)} to ${noteLabel(endMidi)}`;
+  const scrollLabel = viewportAriaLabel ?? `Scrollable ${keyboardLabel}`;
+  return (
+    <div
+      className={`piano-keyboard-scroll ${viewportClassName}`.trim()}
+      role="region"
+      aria-label={scrollLabel}
+      tabIndex={0}
+      data-piano-keyboard-viewport="true"
+    >
+      <PianoKeyboard
+        {...keyboardProps}
+        startMidi={startMidi}
+        endMidi={endMidi}
+        ariaLabel={keyboardLabel}
+        className={`piano-keyboard--scrollable ${className}`.trim()}
+      />
     </div>
   );
 }

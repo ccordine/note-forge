@@ -18,6 +18,10 @@ import {
 } from "./audio-react-publication";
 import { CircularBuffer } from "./circular-buffer";
 import {
+  AudioMonitoring,
+  type AudioMonitoringController,
+} from "./audio-monitoring";
+import {
   pitchDiagnostics,
   toDiagnosticToken,
   toFrameDiagnostic,
@@ -167,6 +171,7 @@ function observationRequiresImmediatePublication(
  */
 export class AudioKernel {
   private readonly capture: MicrophoneCapture;
+  private readonly monitoring: AudioMonitoring;
   private readonly engine = new NoteInputEngine();
   private readonly reactPublication: AudioReactPublication;
   private readonly optionReaders = new Map<symbol, OptionsReader>();
@@ -197,12 +202,15 @@ export class AudioKernel {
   private levelSequence = 0;
   private lastTelemetry: InputTelemetry | null = null;
   readonly controller: AudioInputController;
+  readonly monitoringController: AudioMonitoringController;
 
   constructor(
     capture = new MicrophoneCapture(),
     presentationScheduler?: AudioPresentationScheduler,
   ) {
     this.capture = capture;
+    this.monitoring = new AudioMonitoring(capture);
+    this.monitoringController = this.monitoring.controller;
     this.reactPublication = new AudioReactPublication({
       publishPitch: this.publishPitch,
       publishAuxiliary: this.publishAuxiliary,
@@ -367,6 +375,7 @@ export class AudioKernel {
     this.enableGeneration += 1;
     this.enablePromise = null;
     this.capture.stop();
+    this.monitoring.setInputRunning(false);
     this.clearRealtime();
     this.publishTransport({
       state: "error",
@@ -424,6 +433,7 @@ export class AudioKernel {
 
   readonly enable = (): Promise<MicrophoneInfo | null> => {
     if (this.capture.isActive()) {
+      this.monitoring.setInputRunning(true);
       this.publishTransport({
         ...this.transport,
         state: "running",
@@ -477,6 +487,7 @@ export class AudioKernel {
           microphoneInfo: info,
           transportRepairCount: 0,
         });
+        this.monitoring.setInputRunning(true);
         pitchDiagnostics.record({
           kind: "microphone-state",
           microphone: {
@@ -522,6 +533,7 @@ export class AudioKernel {
     this.enableGeneration += 1;
     this.enablePromise = null;
     this.capture.stop();
+    this.monitoring.setInputRunning(false);
     this.clearRealtime();
     this.publishTransport(EMPTY_TRANSPORT);
   };
@@ -542,6 +554,7 @@ export class AudioKernel {
     this.enableGeneration += 1;
     this.enablePromise = null;
     this.capture.stop();
+    this.monitoring.setInputRunning(false);
     this.clearRealtime();
     this.publishTransport(EMPTY_TRANSPORT);
     this.optionReaders.clear();

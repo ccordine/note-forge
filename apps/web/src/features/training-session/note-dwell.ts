@@ -10,21 +10,21 @@ import {
   type ObservationSampleAuthority,
 } from "@/realtime/observation-continuity";
 
-export const RANGE_DWELL_DEFAULTS = Object.freeze({
+export const NOTE_DWELL_DEFAULTS = Object.freeze({
   /** One missing 20 ms detector hop cannot be credited as observed dwell. */
   maximumCreditedIntervalSeconds: MICROPHONE_ANALYSIS_HOP_SECONDS * 1.5,
 });
 
-export type RangeDwellAuthority = ObservationSampleAuthority;
+export type NoteDwellAuthority = ObservationSampleAuthority;
 
-export interface CreateRangeDwellOptions {
+export interface CreateNoteDwellOptions {
   readonly targetMidi: number;
   readonly toleranceCents: number;
   readonly requiredHoldSeconds: number;
   readonly maximumCreditedIntervalSeconds?: number;
 }
 
-export interface RangeDwellState {
+export interface NoteDwellState {
   readonly targetMidi: number;
   readonly toleranceCents: number;
   readonly requiredHoldSeconds: number;
@@ -48,20 +48,20 @@ export interface RangeDwellState {
   readonly currentConfidence: number;
   readonly currentInTolerance: boolean | null;
   readonly observedFrameCount: number;
-  readonly lastAuthority: Readonly<RangeDwellAuthority> | null;
+  readonly lastAuthority: Readonly<NoteDwellAuthority> | null;
   /** Whether the preceding authoritative frame can bound a credited interval. */
   readonly previousFrameQualified: boolean;
 }
 
-export type RangeDwellAction =
+export type NoteDwellAction =
   | { readonly type: "observation"; readonly observation: Readonly<PitchObservation> }
-  | { readonly type: "replace"; readonly state: Readonly<RangeDwellState> };
+  | { readonly type: "replace"; readonly state: Readonly<NoteDwellState> };
 
 function requireFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
 }
 
-function freezeState(state: RangeDwellState): RangeDwellState {
+function freezeState(state: NoteDwellState): NoteDwellState {
   return Object.freeze(state);
 }
 
@@ -88,7 +88,7 @@ function currentStateFields(
 }
 
 function readCurrentObservation(
-  state: Readonly<RangeDwellState>,
+  state: Readonly<NoteDwellState>,
   observation: Readonly<PitchObservation>,
 ): CurrentObservation {
   const midiFloat = finiteOrNull(observation.midiFloat);
@@ -117,11 +117,11 @@ function readCurrentObservation(
 }
 
 function observeWithoutCredit(
-  state: Readonly<RangeDwellState>,
+  state: Readonly<NoteDwellState>,
   authority: Readonly<ObservationSampleAuthority>,
   current: Readonly<CurrentObservation>,
   previousFrameQualified: boolean,
-): RangeDwellState {
+): NoteDwellState {
   return freezeState({
     ...state,
     ...currentStateFields(current),
@@ -132,10 +132,10 @@ function observeWithoutCredit(
 }
 
 function resetFromObservation(
-  state: Readonly<RangeDwellState>,
+  state: Readonly<NoteDwellState>,
   authority: Readonly<ObservationSampleAuthority>,
   current: Readonly<CurrentObservation>,
-): RangeDwellState {
+): NoteDwellState {
   return freezeState({
     ...state,
     ...currentStateFields(current),
@@ -148,9 +148,9 @@ function resetFromObservation(
   });
 }
 
-export function createRangeDwell(
-  options: Readonly<CreateRangeDwellOptions>,
-): RangeDwellState {
+export function createNoteDwell(
+  options: Readonly<CreateNoteDwellOptions>,
+): NoteDwellState {
   requireFinite(options.targetMidi, "Target MIDI");
   if (options.targetMidi < 0 || options.targetMidi > 127) {
     throw new RangeError("Target MIDI must be from 0 through 127.");
@@ -164,7 +164,7 @@ export function createRangeDwell(
     throw new RangeError("Required hold duration must be greater than zero.");
   }
   const maximumCreditedIntervalSeconds = options.maximumCreditedIntervalSeconds
-    ?? RANGE_DWELL_DEFAULTS.maximumCreditedIntervalSeconds;
+    ?? NOTE_DWELL_DEFAULTS.maximumCreditedIntervalSeconds;
   requireFinite(maximumCreditedIntervalSeconds, "Maximum credited interval");
   if (maximumCreditedIntervalSeconds <= 0) {
     throw new RangeError("Maximum credited interval must be greater than zero.");
@@ -201,13 +201,13 @@ export function createRangeDwell(
  * Achievement is a latched milestone; observation processing and exact current
  * occupation time never become terminal or clamp at the milestone.
  */
-export function updateRangeDwell(
-  state: Readonly<RangeDwellState>,
+export function updateNoteDwell(
+  state: Readonly<NoteDwellState>,
   observation: Readonly<PitchObservation>,
-): RangeDwellState {
+): NoteDwellState {
   const previous = state.lastAuthority;
   const continuity = observationContinuity(previous, observation);
-  if (!continuity.accepted || continuity.authority === null) return state as RangeDwellState;
+  if (!continuity.accepted || continuity.authority === null) return state as NoteDwellState;
   const authority = continuity.authority;
 
   const current = readCurrentObservation(state, observation);
@@ -254,11 +254,11 @@ export function updateRangeDwell(
 }
 
 /** Reduce realtime observations and explicit target replacement through one owner. */
-export function reduceRangeDwell(
-  state: Readonly<RangeDwellState>,
-  action: Readonly<RangeDwellAction>,
-): RangeDwellState {
+export function reduceNoteDwell(
+  state: Readonly<NoteDwellState>,
+  action: Readonly<NoteDwellAction>,
+): NoteDwellState {
   return action.type === "observation"
-    ? updateRangeDwell(state, action.observation)
-    : action.state as RangeDwellState;
+    ? updateNoteDwell(state, action.observation)
+    : action.state as NoteDwellState;
 }

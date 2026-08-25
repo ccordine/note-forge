@@ -1,5 +1,18 @@
 import { ensureAudioReady } from "./audio-context";
+import { DirectMicrophoneMonitor } from "./direct-microphone-monitor";
 import { NOTE_INPUT_DEFAULTS, NOTE_INPUT_SAMPLE_RATE_BOUNDS } from "./note-input";
+import {
+  microphoneLatencyInfo,
+  rawMicrophoneConstraints,
+  requireMonitorLevel,
+  type MicrophoneLatencyInfo,
+} from "./microphone-environment";
+
+export {
+  MICROPHONE_MONITOR_DEFAULT_LEVEL,
+  MICROPHONE_MONITOR_RAMP_SECONDS,
+  type MicrophoneMonitorState,
+} from "./microphone-environment";
 
 export interface CapturedSamples {
   readonly samples: Float32Array;
@@ -36,6 +49,8 @@ export interface MicrophoneInfo {
   readonly analysisHopSize: number;
   readonly meterWindowSize: number;
   readonly captureEpoch: number;
+  /** Browser-reported estimates, never a measured microphone-to-ear round trip. */
+  readonly latency?: Readonly<MicrophoneLatencyInfo>;
 }
 
 export interface AnalysisWindowSizes {
@@ -130,13 +145,6 @@ export function analysisWindowSizes(
   return Object.freeze({ windowSize, hopSize, meterSize });
 }
 
-const REQUESTED_CONSTRAINTS: MediaTrackConstraints = {
-  channelCount: 1,
-  echoCancellation: { ideal: false },
-  noiseSuppression: { ideal: false },
-  autoGainControl: { ideal: false },
-};
-
 const PITCH_CAPTURE_WORKLET_URL = new URL(
   "./pitch-capture-worklet.js",
   import.meta.url,
@@ -159,6 +167,7 @@ export class MicrophoneCapture {
   private source: MediaStreamAudioSourceNode | null = null;
   private worklet: AudioWorkletNode | null = null;
   private silentOutput: GainNode | null = null;
+  private monitor: DirectMicrophoneMonitor | null = null;
   private info: MicrophoneInfo | null = null;
   private sizes: AnalysisWindowSizes | null = null;
   private lifecycle = 0;
@@ -195,6 +204,11 @@ export class MicrophoneCapture {
 
   getInfo(): MicrophoneInfo | null {
     return this.info;
+  }
+
+  setMonitoring(enabled: boolean, level: number): void {
+    requireMonitorLevel(level);
+    this.monitor?.set(enabled, level);
   }
 
   isActive(): boolean {
@@ -243,6 +257,7 @@ export class MicrophoneCapture {
     let source: MediaStreamAudioSourceNode | null = null;
     let worklet: AudioWorkletNode | null = null;
     let silentOutput: GainNode | null = null;
+    let monitor: DirectMicrophoneMonitor | null = null;
     const cancellationError = () => new DOMException(
       "Microphone start was cancelled.",
       "AbortError",
@@ -252,7 +267,7 @@ export class MicrophoneCapture {
       if (cancelled()) throw cancellationError();
       const sizes = analysisWindowSizes(context.sampleRate, windowSize);
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { ...REQUESTED_CONSTRAINTS },
+        audio: rawMicrophoneConstraints(navigator.mediaDevices),
       });
       if (cancelled()) throw cancellationError();
       const track = stream.getAudioTracks()[0];
@@ -270,11 +285,16 @@ export class MicrophoneCapture {
       this.graphGeneration = 0;
       this.processCount = 0;
       this.processedSampleCount = 0;
-      source = context.createMediaStreamSource(stream);
+      const microphoneStream = new MediaStream([track]);
+      source = context.createMediaStreamSource(microphoneStream);
       worklet = this.createWorklet(context, sizes);
       silentOutput = context.createGain();
       silentOutput.gain.value = 0;
+      monitor = new DirectMicrophoneMonitor(context);
       this.attachWorkletHandler(worklet, context.sampleRate, lifecycle);
+      // Monitoring is a direct Web Audio branch. It never waits for the
+      // worklet, detector, callbacks, a JS PCM buffer, or React publication.
+      monitor.connect(source);
       source.connect(worklet).connect(silentOutput).connect(context.destination);
       if (cancelled()) throw cancellationError();
 
@@ -285,21 +305,24 @@ export class MicrophoneCapture {
         throw new Error("The microphone audio track ended during setup.");
       }
 
+      const settings = track.getSettings();
       const info = Object.freeze({
         label: track.label,
-        settings: Object.freeze({ ...track.getSettings() }),
+        settings: Object.freeze({ ...settings }),
         constraints: Object.freeze({ ...track.getConstraints() }),
         sampleRate: context.sampleRate,
         analysisWindowSize: sizes.windowSize,
         analysisHopSize: sizes.hopSize,
         meterWindowSize: sizes.meterSize,
         captureEpoch: this.captureEpoch,
+        latency: microphoneLatencyInfo(context, settings),
       });
       this.stream = stream;
       this.context = context;
       this.source = source;
       this.worklet = worklet;
       this.silentOutput = silentOutput;
+      this.monitor = monitor;
       this.sizes = sizes;
       this.info = info;
       this.lastPcmProgressAt = nowMilliseconds();
@@ -308,7 +331,7 @@ export class MicrophoneCapture {
       this.startHeartbeat();
       return info;
     } catch (error) {
-      this.disposeGraph(source, worklet, silentOutput);
+      this.disposeCaptureGraph(source, worklet, silentOutput, monitor);
       stream?.getTracks().forEach((track) => track.stop());
       throw error;
     }
@@ -399,7 +422,6 @@ export class MicrophoneCapture {
       return this.recovery ?? Promise.resolve();
     }
     const context = this.context;
-    const stream = this.stream;
     const sizes = this.sizes;
     const lifecycle = this.lifecycle;
     this.recoveryAttempts += 1;
@@ -435,27 +457,27 @@ export class MicrophoneCapture {
         return;
       }
 
-      const oldSource = this.source;
       const oldWorklet = this.worklet;
       const oldSilentOutput = this.silentOutput;
       this.continuityEpoch += 1;
       this.graphGeneration += 1;
-      const nextSource = context.createMediaStreamSource(stream);
       const nextWorklet = this.createWorklet(context, sizes);
       const nextSilentOutput = context.createGain();
       nextSilentOutput.gain.value = 0;
       this.attachWorkletHandler(nextWorklet, context.sampleRate, lifecycle);
-      nextSource.connect(nextWorklet).connect(nextSilentOutput).connect(context.destination);
+      // PCM recovery replaces only the analysis branch. The source and direct
+      // monitor branch remain attached, so infrastructure repair cannot create
+      // an audible monitoring dropout.
+      this.source?.connect(nextWorklet).connect(nextSilentOutput).connect(context.destination);
       if (lifecycle !== this.lifecycle) {
-        this.disposeGraph(nextSource, nextWorklet, nextSilentOutput);
+        this.disposeAnalysisBranch(this.source, nextWorklet, nextSilentOutput);
         return;
       }
-      this.source = nextSource;
       this.worklet = nextWorklet;
       this.silentOutput = nextSilentOutput;
       this.lastPcmProgressAt = nowMilliseconds();
       this.pendingRecoveryReason = reason;
-      this.disposeGraph(oldSource, oldWorklet, oldSilentOutput);
+      this.disposeAnalysisBranch(this.source, oldWorklet, oldSilentOutput);
     })();
     this.recovery = operation;
     try {
@@ -477,18 +499,36 @@ export class MicrophoneCapture {
     window.removeEventListener("keydown", this.handleUserInteraction, { capture: true });
   }
 
-  private disposeGraph(
+  private disposeAnalysisBranch(
     source: MediaStreamAudioSourceNode | null,
     worklet: AudioWorkletNode | null,
     silentOutput: GainNode | null,
   ): void {
+    if (source && worklet) {
+      try {
+        source.disconnect(worklet);
+      } catch {
+        // A partially constructed or already detached graph has nothing left
+        // to disconnect. Teardown must remain idempotent.
+      }
+    }
     if (worklet) {
       worklet.port.onmessage = null;
       worklet.port.close();
       worklet.disconnect();
     }
-    source?.disconnect();
     silentOutput?.disconnect();
+  }
+
+  private disposeCaptureGraph(
+    source: MediaStreamAudioSourceNode | null,
+    worklet: AudioWorkletNode | null,
+    silentOutput: GainNode | null,
+    monitor: DirectMicrophoneMonitor | null,
+  ): void {
+    this.disposeAnalysisBranch(source, worklet, silentOutput);
+    source?.disconnect();
+    monitor?.dispose();
   }
 
   stop(): void {
@@ -499,13 +539,19 @@ export class MicrophoneCapture {
     }
     this.context?.removeEventListener("statechange", this.handleContextStateChange);
     this.detachInteractionRecovery();
-    this.disposeGraph(this.source, this.worklet, this.silentOutput);
+    this.disposeCaptureGraph(
+      this.source,
+      this.worklet,
+      this.silentOutput,
+      this.monitor,
+    );
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
     this.context = null;
     this.source = null;
     this.worklet = null;
     this.silentOutput = null;
+    this.monitor = null;
     this.info = null;
     this.sizes = null;
     this.opening = null;

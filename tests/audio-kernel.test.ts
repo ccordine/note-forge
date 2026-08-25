@@ -54,6 +54,7 @@ class FakeCapture {
   onSamples: ((window: CapturedSamples) => void) | null = null;
   onLevel: ((level: CapturedLevel) => void) | null = null;
   onTransport: ((event: CaptureTransportEvent) => void) | null = null;
+  readonly monitoringCalls: Array<readonly [boolean, number]> = [];
   readonly info: MicrophoneInfo = {
     settings: {},
     constraints: {},
@@ -81,6 +82,9 @@ class FakeCapture {
   isActive(): boolean { return this.active; }
   getInfo(): MicrophoneInfo | null { return this.active ? this.info : null; }
   getStream(): MediaStream | null { return null; }
+  setMonitoring(enabled: boolean, level: number): void {
+    this.monitoringCalls.push([enabled, level]);
+  }
   stop(): void { this.active = false; }
 
   emit(endSample: number, options: EmitOptions = {}): void {
@@ -124,6 +128,38 @@ class FakeCapture {
 }
 
 describe("AudioKernel external realtime store", () => {
+  it("applies saved monitoring only while capture runs and never publishes it on pitch stores", async () => {
+    const capture = new FakeCapture();
+    const kernel = new AudioKernel(capture as unknown as MicrophoneCapture, new ManualScheduler());
+    const pitch = vi.fn();
+    const transport = vi.fn();
+    kernel.controller.subscribePitch(pitch);
+    kernel.controller.subscribeTransport(transport);
+
+    kernel.monitoringController.configure({ version: 1, enabled: true, level: 0.73 });
+    expect(kernel.monitoringController.getSnapshot()).toMatchObject({ effective: false });
+    expect(capture.monitoringCalls.at(-1)).toEqual([false, 0.73]);
+    expect(pitch).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+
+    await kernel.controller.enable();
+    expect(kernel.monitoringController.getSnapshot()).toMatchObject({
+      enabled: true,
+      level: 0.73,
+      effective: true,
+    });
+    expect(capture.monitoringCalls.at(-1)).toEqual([true, 0.73]);
+
+    kernel.controller.disable();
+    expect(kernel.monitoringController.getSnapshot()).toMatchObject({
+      enabled: true,
+      level: 0.73,
+      effective: false,
+    });
+    expect(capture.monitoringCalls.at(-1)).toEqual([false, 0.73]);
+    kernel.destroy();
+  });
+
   it("delivers authoritative observations even when optional diagnostics reject a frame", async () => {
     const capture = new FakeCapture();
     const kernel = new AudioKernel(

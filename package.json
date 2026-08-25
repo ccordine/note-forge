@@ -21,6 +21,8 @@
     "proof:pitch-tunnel:browser": "npm run build && node scripts/prove-pitch-tunnel-browser.mjs",
     "proof:pitch-match:responsive": "npm run build && node scripts/prove-pitch-match-responsive.mjs",
     "proof:mobile-note-playback:layout": "npm run build && node scripts/prove-mobile-note-playback-layout.mjs",
+    "proof:tone-map:browser": "npm run build && node scripts/prove-tone-map-browser.mjs",
+    "proof:monitoring:browser": "npm run build && node scripts/prove-monitoring-browser.mjs",
     "proof:offline:browser": "npm run build && node scripts/prove-offline-browser.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",

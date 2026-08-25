@@ -53,6 +53,7 @@ class HeadlessCapture {
   isActive(): boolean { return this.active; }
   getInfo(): MicrophoneInfo | null { return this.active ? this.info : null; }
   getStream(): MediaStream | null { return null; }
+  setMonitoring(_enabled: boolean, _level: number): void {}
   stop(): void { this.active = false; this.stopCount += 1; }
 
   emitSilence(index: number): void {

@@ -147,6 +147,50 @@ React component tree.
 - Never add a V2 path, compatibility shim, legacy fallback, second detector,
   or feature-specific capture implementation. Replace and delete in place.
 
+## Direct vocal-monitoring contract
+
+Vocal monitoring is one global audio-environment capability, never an exercise
+feature. It uses the same persistent interactive `AudioContext`, retained
+microphone track, and `MediaStreamAudioSourceNode` as detector capture:
+
+```text
+                              -> monitor GainNode -> AudioContext.destination
+one microphone source node -|
+                              -> AudioWorklet -> zero GainNode -> destination
+```
+
+- The monitor branch fans out directly at the source. It never crosses an
+  AudioWorklet, detector, worker, callback, JavaScript PCM buffer, React state,
+  or feature runtime before playback.
+- The monitor gain is capture-lifetime and begins at exactly zero. On, level,
+  and Off mutate only that one `AudioParam`, using a five-millisecond ramp.
+  They may not connect/disconnect nodes, open/stop capture, resume a context,
+  replace a worklet, or change detector input.
+- PCM-heartbeat repair replaces only the analysis worklet/zero-gain branch.
+  The source and monitor branch remain attached, so detector recovery cannot
+  produce an audible monitoring dropout.
+- Saved `enabled` and `level` are desired global settings. Effective monitoring
+  is `input running && desired enabled`. A saved On setting never opens the
+  microphone; it becomes effective only after the user's explicit global
+  Enable voice action. Global Disable ends effective monitoring without
+  silently deleting the saved preference.
+- Monitoring defaults Off. The UI always warns about speaker feedback and
+  Bluetooth buffering, but warning copy is not another blocking workflow.
+- Monitor level never changes pitch analysis, scoring, recording, or reference
+  playback gain. The analyzer always receives the raw source branch.
+- Input latency is requested only when the browser reports that constraint.
+  Sample rate is never forced. Diagnostics show negotiated processing settings
+  and finite browser-reported base/output/input latency when available; they
+  must say those numbers are estimates, never measured round-trip latency.
+- Output selection is progressive enhancement. It is offered only when both
+  the user-mediated output chooser and shared-context `setSinkId` exist. Since
+  the sink belongs to the one context, it is labeled Audio output and routes
+  monitoring plus NoteForge playback together. Unsupported browsers truthfully
+  use System default and no second output/context implementation is allowed.
+- React subscribes to the slow monitoring preference/effective snapshot only.
+  Detector observations do not publish monitoring state, and monitoring never
+  becomes another RMS or pitch meter.
+
 ## Sample authority and diagnostic boundaries
 
 `realtime/observation-continuity.ts` is the only application authority for
@@ -361,6 +405,72 @@ Run `npm run audit:architecture` as a release gate. Any reported oversized
 source/component, duplicated `NoteInput`, capture ownership violation, excessive
 control depth, or unreachable application module must be resolved or narrowed
 by improving the audit itself when it has produced a documented false positive.
+
+## Ear-to-note learning contract
+
+The canonical tone-map activity trains commitment before feedback. A learner
+hears a prompt and answers from memory; the requested note, its keyboard marker,
+the detected vocal note, frequency, cents, and correctness remain absent from
+the visible answer surface until the learner explicitly commits an answer.
+Guided trials may deliberately show the note label while first establishing an
+association, but guided correctness never counts as blind mastery.
+
+- Recognition spans the physical 88-key piano, MIDI 21 through 108. The piano
+  is one shared component inside its own horizontally scrolling viewport. At
+  phone widths only the keyboard scrolls horizontally; the document and the
+  prompt/progress controls remain width-contained and stationary.
+- A hidden target may not choose the keyboard scroll position, focus a key,
+  alter pre-answer styling, add a marker, or otherwise leak its location.
+  Labels and answer/target markers appear only in committed-answer review.
+- Curriculum levels introduce six new MIDI tones. The active pool is cumulative:
+  level N schedules all tones from levels 1 through N. Trial order is randomized
+  from persisted curriculum order and current evidence, avoids immediate
+  repeats, and may emphasize weak/confused tones; it may never expose a fixed
+  pattern the learner can memorize instead of the sound mapping.
+- Keyboard identification and vocal production are independent evidence for
+  every MIDI. Each retains lifetime attempts/correct answers, recent stability,
+  current blind streak, and best streak. A miss resets and revokes only the
+  contradicted note/skill's current blind gate, retains history, and reopens a
+  bounded guided recovery. It never erases unrelated notes or the whole level.
+- Early guided correctness establishes the sound/label association; later
+  blind answers establish recall. A tone becomes stable only through consecutive
+  blind evidence after its scaffold is hidden. All required evidence in the
+  cumulative active pool plus a fresh current-level confirmation is required
+  before the user may explicitly advance. Advancement is never automatic.
+- Vocal answering consumes the shared target-independent `LiveNote`/observation
+  authority. It never displays the detected answer before commitment, never
+  owns capture, and never auto-commits on a detector callback. The learner must
+  explicitly commit the currently stable sung note. Exact `onFrame` evidence
+  feeds the canonical note-dwell authority at ±20 cents; coalesced `LiveNote`
+  presentation time is not scoring authority. A task change and every prompt
+  Play/Stop cycle invalidate prior evidence. The answer may arm only after the
+  prompt is visibly Off, a fresh authoritative unvoiced boundary has occurred,
+  and the new candidate earns its own sample-timed dwell. Prompt leakage and a
+  note held across trials therefore cannot become a production answer.
+- Recognition range and production range are different facts. A note outside
+  the demonstrated usable voice profile may be marked unreachable without a
+  miss, accuracy penalty, or fake success. That reversible eligibility excludes
+  only vocal scheduling/gating; keyboard recognition remains required and the
+  lifetime history remains intact.
+- One-note prompts use the canonical sustained **Play / Stop** lane and have no
+  duration or automatic cutoff. Answering, Next, a correct response, a miss, or
+  a level gate never stops it. Authored multi-tone Simon sequences use the
+  separate finite gesture transport, collect the complete untimed answer, then
+  reveal and grade the sequence; they do not create another isolated-note player.
+- Tone-map progress is persisted locally through one storage authority. Reload,
+  route changes, and offline use preserve curriculum order, level, evidence,
+  scaffold state, and vocal eligibility without creating a second scheduler or
+  feature-specific microphone path. Missing storage may initialize a course;
+  invalid, unsupported, or internally inconsistent storage may never be silently
+  replaced. It remains read-only until the user explicitly chooses the visible
+  reset action. Settings writes are ordered by one app-lifetime coordinator so
+  a remounted route cannot hydrate an older snapshot while its previous mount
+  still has writes queued.
+- The accepted-answer reducer owns a stable trial ordinal, attempt id, and
+  commitment timestamp. Attempt history is derived only from that accepted
+  state and uses an idempotent IndexedDB put. A double click, stale callback, or
+  rejected reducer action may never create a second history row or evidence
+  result.
 
 ## Numeric boundary authority
 
@@ -630,6 +740,37 @@ control, proves page-end reachability, descendant containment and hit testing,
 and operates the canonical toggle through Play -> Stop -> Play. Hiding document
 overflow without making the controls reachable is a failure.
 
+`npm run proof:monitoring:browser` is the built direct-monitor authority. It
+must instrument exact Web Audio node identities and edges, then prove one
+interactive production context, one microphone stream/track/source, one stable
+monitor gain, and one worklet analysis branch. The monitor begins muted; visible
+On, level changes, and Off automate only that same gain while real generated C3
+continues through the production worklet/detector with monotonic samples and no
+track writes/stops. Route changes may not create audio resources. At 320x568 and
+390x844 both global controls must be in-bounds/hit-testable, the Settings drawer
+must scroll to every monitor/diagnostic control without document horizontal
+overflow, and the headphone/latency truth must remain visible. A reload with
+saved On/level must leave `getUserMedia` untouched until explicit Enable, then
+apply that level; only global Disable may stop the track. This proves the
+shortest software topology and continuity, not physical acoustic round-trip
+latency, which requires external loopback measurement.
+
+`npm run proof:tone-map:browser` is the built-interaction authority for the
+ear-to-note curriculum. At 320x568 and 390x844 it must prove that the page owns
+no horizontal overflow, only the complete 88-key keyboard scrolls sideways,
+all keys remain hit-testable, hidden targets cannot alter markup or scroll
+position, the isolated prompt remains On across answer and Next until explicit
+Stop, guided evidence actually becomes blind, and a blind miss reopens the
+same tone's visible recovery without changing the level. Its Simon leg must
+lock input before/during complete authored playback, leave the full response
+untimed, reveal only after every position is committed, and require explicit
+Next. Its voice leg must enter generated PCM only through the visible global
+Enable and the production `getUserMedia` -> `AudioWorklet` -> detector path. It
+must reconcile semantic release/readiness to exact worklet sample authority,
+reject prompt-era and cross-trial held notes, remain ungraded indefinitely
+until visible Commit, retain one stream/source/worklet with zero track writes
+or stops, and never inject an observation or call a detector/reducer directly.
+
 `npm run proof:voice-draw:browser` is the cabinet-level authority for Vocal
 Canvas. It must enter the built Voice Arcade through the real cabinet button,
 enable the shared microphone once, and drive the production worklet and
@@ -821,6 +962,90 @@ or non-Chromium browser; those require the same live counters and device evidenc
 Because every production detector call completed within its 20 ms hop and the
 stream accumulated no detector backlog, WASM is not justified by current
 measurements. Re-profile before changing that decision.
+
+## Tone Map release evidence — 2026-08-25
+
+- The built `/#/practice/note-recognition/map` workflow passed at 320x568 and
+  390x844 with document width equal to viewport width, a locally scrolling
+  2,302-pixel 88-key piano, hit-testable first/middle/last keys, reachable page
+  bottom, zero target-driven initial scrolling, and byte-identical hidden
+  answer markup for distant targets.
+- The isolated prompt stayed On across 1.6 seconds, answer, and explicit Next;
+  only the visible Stop toggle ended it. Twelve guided commitments reached the
+  first blind task, a genuine blind miss reopened the same tone's guided
+  recovery without changing level, and Simon locked answers before/during
+  playback, kept an incomplete response untimed, and advanced only on visible
+  Next.
+- A generated 48 kHz `MediaStream` entered through one visible global Enable,
+  one `getUserMedia`, one stream/track/source, and one production worklet. All
+  133 worklet windows advanced by the exact 960-sample hop. Prompt-era pitch,
+  24 post-Stop held windows, and 24 same-tone windows on the next trial could
+  not arm Commit. A fresh unvoiced boundary at `endSample=58816` and subsequent
+  F2+10-cent dwell armed at the exact `endSample=76096` worklet window. Only
+  visible Commit graded it. Eight semantic React publications represented the
+  133 audio windows; the feature made zero track writes and zero stops.
+- The global mobile playback proof covered 24 route/viewport combinations with
+  zero unreachable controls and exercised Tone Map's literal Play -> Stop ->
+  Play control at both phone widths.
+- The shared noisy Range Loop proof retained 16.24 seconds of C3 through 13
+  clean/noise/transient/harmonic/dropout stages with zero hold regressions,
+  then accepted persistent D3 and earned 3.00 seconds on the same shared input.
+  The sustained proof paired 2,609/2,609 worklet/detector windows, retained
+  F-sharp1, quiet C3 near -62.8 dBFS, C4, and D6 for more than eight seconds,
+  and measured a 10.4 ms detector maximum below the 20 ms hop.
+- The final frontend suite and instrumented coverage run each passed
+  1,131/1,131 tests across 118 files. Coverage is 65.24% statements
+  (8,339/12,781), 60.87% branches (6,385/10,488), 57.56% functions
+  (1,575/2,736), and 67.68% lines (7,717/11,402).
+- Typecheck and the production build passed across 322 transformed modules;
+  service worker `4c9b85b1e8a8` precaches 75 resources. The fresh-install
+  offline proof loaded React and the pitch worklet across 14 canonical routes.
+  The architecture audit scanned 422 source files and 155 JSX components,
+  reached all 236 application modules, and reported zero violations and zero
+  unreachable application files. Go tests and Go vet passed.
+
+## Direct monitoring release evidence — 2026-08-25
+
+- The built browser proof used Chromium's real fake-microphone device with a
+  deterministic 60-second C3 WAV; it did not substitute detector observations
+  or route a test AudioContext into production. At both 320x568 and 390x844 it
+  found exactly one interactive context, source, worklet, monitor gain, and
+  analysis gain. The exact source split was source -> monitor gain -> shared
+  destination and source -> worklet -> zero analysis gain -> destination.
+- The monitor began at zero. Visible On, level adjustment, and Off produced
+  exact five-millisecond ramps to 0.65, 0.73, and 0 on the same AudioParam.
+  Every React categorical publication during those changes remained C3, every
+  PCM window advanced by one exact hop, and the operations made zero capture,
+  source, worklet, track-write, or track-stop changes.
+- Both phone layouts kept the global headphone-only state visible and
+  hit-testable before Settings opened. The scrollable Settings surface reached
+  its level, input/output devices, requested interactive mode, negotiated
+  processing values, reported latency values, and external-loopback disclaimer
+  without page horizontal overflow. Its displayed native values reconciled
+  exactly with the browser instrumentation.
+- Reloading a saved On/0.73 preference made zero microphone requests. One
+  explicit global Enable created capture and reapplied 0.73; a route change
+  retained one context/source/worklet; only explicit global Disable stopped
+  the one track. Three additional consecutive device-path runs passed the same
+  continuity assertions before the final official release run.
+- The final architecture audit scanned 436 source files and 157 JSX components,
+  reached all 244 application modules, and reported zero violations, zero
+  unreachable application modules, and zero feature raw-stream reads. The
+  production container independently passed all 1,147 tests across 122 files,
+  typecheck/build across 330 transformed modules, Go vet, and Go tests. Service
+  worker `450e1c5436b9` precaches 74 resources.
+- WorkNet runs image index
+  `sha256:37f6bdc8e258b113f0099a6559587e8ec81773a0549304561ca995df8adcc455`
+  (amd64 manifest
+  `sha256:bee7ed477a2ac53715270b5a92f956a8595c17c592cb46afac45fe550ef46fe4`).
+  The container is healthy as UID/GID 65532 with a read-only root, all
+  capabilities dropped, `no-new-privileges`, a 64 MiB memory limit, and a
+  64-process limit. Internal and routed HTTPS health checks return `ok`/200.
+- Local, container, and routed SHA-256 values match exactly: `index.html`
+  `028fc2df59dc…`, `sw.js` `63a0a0282bde…`, main JS `19590e8126e3…`, and
+  AudioWorklet `1645c857a4ae…`. This establishes the deployed software graph
+  and continuity. It does not claim a physical microphone-to-ear latency;
+  measuring that still requires an external loopback path.
 
 ## Working rules
 

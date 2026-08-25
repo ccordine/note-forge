@@ -337,6 +337,7 @@ async function main() {
           instrumentationErrors: [],
         };
         const knownStreams = new WeakSet();
+        const knownTracks = new WeakSet();
         Object.defineProperty(window, '__noteforgeVoiceDrawProof', {
           configurable: false,
           enumerable: false,
@@ -355,7 +356,10 @@ async function main() {
               writable: true,
               value(stream) {
                 proof.mediaStreamSources += 1;
-                if (knownStreams.has(stream)) proof.knownStreamSources += 1;
+                if (knownStreams.has(stream)
+                  || stream.getAudioTracks().some((track) => knownTracks.has(track))) {
+                  proof.knownStreamSources += 1;
+                }
                 return Reflect.apply(nativeCreateMediaStreamSource, this, [stream]);
               },
             });
@@ -493,7 +497,10 @@ async function main() {
                 const stream = await originalGetUserMedia(...args);
                 proof.streams += 1;
                 knownStreams.add(stream);
-                stream.getAudioTracks().forEach(instrumentTrack);
+                stream.getAudioTracks().forEach((track) => {
+                  knownTracks.add(track);
+                  instrumentTrack(track);
+                });
                 return stream;
               },
             });

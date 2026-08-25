@@ -123,6 +123,7 @@ const LIVE_CONTROL_SURFACES: readonly ControlSurfaceContract[] = Object.freeze([
 ]);
 
 const AUDIO_LIFETIME_OWNERS = Object.freeze({
+  "apps/web/src/features/ear-training/use-tone-map-voice-answer.ts": "Tone Map",
   "apps/web/src/features/hum-lab/HumLab.tsx": "Hum Lab",
   "apps/web/src/features/pitch-control/PitchControl.tsx": "Pitch Control",
   "apps/web/src/features/pitch-mirror/PitchMirror.tsx": "Pitch Match",
@@ -151,6 +152,7 @@ describe("visible user-owned live-session controls", () => {
     const auditedNames = new Set([
       ...LIVE_CONTROL_SURFACES.map(({ name }) => name),
       "Song Lab",
+      "Tone Map",
     ]);
     expect(new Set(Object.values(AUDIO_LIFETIME_OWNERS))).toEqual(auditedNames);
   });

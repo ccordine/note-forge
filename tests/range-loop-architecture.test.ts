@@ -88,7 +88,7 @@ describe("Range Loop architecture guard", () => {
   it("reduces detector observations outside React and never owns capture", () => {
     expect(RANGE_LOOP_HOOK_SOURCE.match(/useAudioInput\s*\(/g)).toHaveLength(1);
     expect(RANGE_LOOP_HOOK_SOURCE).toContain("useRealtimeSession");
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain("reduceRangeDwell");
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("reduceNoteDwell");
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('dwellSession.observe({ type: "observation", observation })');
     expect(implementationSource).not.toMatch(/\bsetDwell\b|input\.(?:enable|disable)\s*\(/);
   });

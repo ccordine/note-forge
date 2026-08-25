@@ -287,6 +287,15 @@ export function generatedSustainedMicrophoneWav() {
   return encodeMicrophoneSegments(SUSTAINED_MICROPHONE_SEGMENTS);
 }
 
+/** Stable, device-path fixture for direct-monitor graph and continuity proofs. */
+export function generatedMonitoringC3Wav() {
+  return encodeMicrophoneSegments([{
+    midi: 48,
+    durationSeconds: 60,
+    rmsDbfs: NORMAL_RMS_DBFS,
+  }]);
+}
+
 function deterministicNoiseSample(state) {
   const nextState = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
   return {

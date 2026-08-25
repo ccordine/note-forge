@@ -46,6 +46,13 @@ export type ScheduledToneSpec = ToneSpec & { duration: number; when: number };
 
 export interface ActiveVoice {
   stop: (releaseSeconds?: number) => void;
+  /** Resolves after every scheduled source has actually ended. */
+  readonly finished?: Promise<void>;
+}
+
+/** A finite authored gesture with an observable audio-timeline completion. */
+export interface AuthoredGestureVoice extends ActiveVoice {
+  readonly finished: Promise<void>;
 }
 
 interface SustainedVoice extends ActiveVoice {
@@ -137,7 +144,7 @@ function envelopeFor(timbre: Timbre, duration: number): { attack: number; decay:
   return { attack: 0.018, decay: 0.08, sustain: 0.78 };
 }
 
-export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
+export async function playTone(spec: ToneSpec): Promise<AuthoredGestureVoice> {
   validateFrequency(spec.frequencyHz);
   validateToneValues(spec);
   const context = await ensureAudioReady();
@@ -165,6 +172,10 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
   output.gain.setValueAtTime(Math.max(Number.EPSILON, amplitude * env.sustain), startAt + duration);
   output.gain.exponentialRampToValueAtTime(Number.EPSILON, startAt + duration + release);
 
+  let resolveFinished: (() => void) | null = null;
+  const finished = new Promise<void>((resolve) => {
+    resolveFinished = resolve;
+  });
   let activeOscillators = PARTIALS[timbre].length;
   const oscillatorNodes = PARTIALS[timbre].map((partial) => {
     const oscillator = context.createOscillator();
@@ -181,6 +192,8 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
       if (activeOscillators === 0) {
         output.disconnect();
         compressor.disconnect();
+        resolveFinished?.();
+        resolveFinished = null;
       }
     };
     oscillator.start(startAt);
@@ -190,6 +203,7 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
 
   let stopped = false;
   return {
+    finished,
     stop: (releaseSeconds = 0.06) => {
       requireFiniteRange("Stop release", releaseSeconds, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
       if (stopped) return;
@@ -291,7 +305,7 @@ export function createToneSequenceSchedule(
 export async function playToneSequence(
   tones: readonly ToneSequenceItem[],
   options: ToneSequenceOptions = {}
-): Promise<ActiveVoice> {
+): Promise<AuthoredGestureVoice> {
   validateCollectionSize("Tone sequence", tones.length, SYNTH_LIMITS.maximumToneCount);
   validateToneValues(options);
   if (options.gap !== undefined) requireFiniteRange("Sequence gap", options.gap, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
@@ -303,13 +317,15 @@ export async function playToneSequence(
     validateToneValues(item);
     if (item.gapAfter !== undefined) requireFiniteRange("Tone gap", item.gapAfter, 0, SYNTH_LIMITS.maximumEnvelopeSeconds);
   });
-  if (tones.length === 0) return { stop: () => undefined };
+  if (tones.length === 0) return { stop: () => undefined, finished: Promise.resolve() };
   const context = await ensureAudioReady();
   const startAt = context.currentTime + (options.startDelay ?? 0.025);
   const schedule = createToneSequenceSchedule(tones, startAt, options);
   const voices = await Promise.all(schedule.map((tone) => playTone(tone)));
+  const finished = Promise.all(voices.map((voice) => voice.finished)).then(() => undefined);
   let stopped = false;
   return {
+    finished,
     stop: (releaseSeconds = 0.05) => {
       if (stopped) return;
       stopped = true;

@@ -14,9 +14,9 @@ import {
 import { matchAppRoute } from "../apps/web/src/routing/use-app-navigation";
 
 describe("typed product routes", () => {
-  it("publishes 52 exact, unique, router-matched activity paths", () => {
+  it("publishes 53 exact, unique, router-matched activity paths", () => {
     const paths = ALL_APP_ROUTES.map(appRoutePath);
-    expect(paths).toHaveLength(52);
+    expect(paths).toHaveLength(53);
     expect(new Set(paths).size).toBe(paths.length);
     for (const route of ALL_APP_ROUTES) {
       expect(matchAppRoute(appRoutePath(route))).toEqual(route);
@@ -26,6 +26,7 @@ describe("typed product routes", () => {
   it("uses the five product surfaces as URL authority", () => {
     expect(appRoutePath(DEFAULT_ROUTES.home)).toBe("/");
     expect(appRoutePath(DEFAULT_ROUTES.pitchMatch)).toBe("/practice/pitch-match/glide");
+    expect(appRoutePath(DEFAULT_ROUTES.noteRecognition)).toBe("/practice/note-recognition/map");
     expect(appRoutePath(DEFAULT_ROUTES.arcade)).toBe("/arcade");
     expect(appRoutePath(DEFAULT_ROUTES.sound)).toBe("/explore/sound/dyad");
     expect(appRoutePath(DEFAULT_ROUTES.songs)).toBe("/songs/lab");

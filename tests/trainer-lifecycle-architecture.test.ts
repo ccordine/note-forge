@@ -120,7 +120,7 @@ describe("non-Arcade live trainer architecture", () => {
   it("keeps distinct session mathematics explicit instead of cloning attempt phases", () => {
     expect(family).toContain("reduceNoteFamilySession");
     expect(family).not.toContain("useAttemptRunner");
-    expect(rangeLoopSession).toContain("reduceRangeDwell");
+    expect(rangeLoopSession).toContain("reduceNoteDwell");
     expect(rangeLoopSession).toContain("useRealtimeSession");
     expect(rangeLoopSession).not.toContain("useAttemptRunner");
     expect(rangeSimulator).toContain("reduceRangeSimulatorController");

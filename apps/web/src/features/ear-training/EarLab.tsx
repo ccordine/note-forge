@@ -9,8 +9,10 @@ import { Eyebrow, Panel, Segmented, Select, Switch } from "@/ui/Controls";
 import { AdvancedEarActivity } from "./AdvancedEarActivity";
 import { isFoundationEarMode, type AdvancedEarMode } from "./advanced-ear-model";
 import { NoteFamilyTrainer } from "./NoteFamilyTrainer";
+import { ToneMapTrainer } from "./ToneMapTrainer";
 
 const MODES: readonly { value: EarMode; label: string }[] = Object.freeze([
+  { value: "map", label: "Tone map · keyboard + voice" },
   { value: "letters", label: "Letters · fixed register" },
   { value: "reference", label: "Anchor + keyboard" },
   { value: "same-different", label: "Same / different" },
@@ -28,6 +30,13 @@ interface EarIntroduction {
 }
 
 function introductionFor(mode: EarMode): EarIntroduction {
+  if (mode === "map") {
+    return {
+      eyebrow: "Ear → note mapping",
+      title: "Hear it. Find it. Produce it.",
+      detail: "Learn six tones at a time, then keep them stable as each level expands the sound map.",
+    };
+  }
   if (mode === "letters") {
     return {
       eyebrow: "Foundation · one variable at a time",
@@ -65,7 +74,7 @@ export function EarLab() {
   const { route, navigate } = useAppNavigation();
   const mode = route.surface === "practice" && route.activity === "note-recognition"
     ? route.mode
-    : "letters";
+    : "map";
   const [crossTimbre, setCrossTimbre] = useState(false);
   const introduction = introductionFor(mode);
   const foundation = isFoundationEarMode(mode);
@@ -75,7 +84,9 @@ export function EarLab() {
   };
 
   let activity;
-  if (foundation) {
+  if (mode === "map") {
+    activity = <ToneMapTrainer timbre={timbre} />;
+  } else if (foundation) {
     activity = (
       <>
         <FoundationPrinciple />
@@ -121,8 +132,10 @@ export function EarLab() {
           >
             {TIMBRES.map((item) => <option key={item} value={item}>{item}</option>)}
           </Select>
-          <Switch label="Vary timbre (advanced)" checked={crossTimbre} onChange={setCrossTimbre} />
-          {!foundation && (
+          {mode !== "map" && (
+            <Switch label="Vary timbre (advanced)" checked={crossTimbre} onChange={setCrossTimbre} />
+          )}
+          {!foundation && mode !== "map" && (
             <Switch label="Discovery mode" checked={labelsHidden} onChange={setLabelsHidden} />
           )}
         </div>

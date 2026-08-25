@@ -22,8 +22,9 @@ import {
   type AppRoute,
   type AppScreenId,
 } from "@/navigation";
-import { useAudioInputStatus, type AudioInputController } from "@/audio/use-audio-input";
 import { RouteLink } from "@/ui/Controls";
+import { GlobalAudioControl } from "@/ui/GlobalAudioControl";
+import { AudioSettings } from "@/ui/AudioSettings";
 
 const SURFACES = {
   home: lazy(() => import("@/features/home/Home").then((module) => ({ default: module.Home }))),
@@ -138,7 +139,8 @@ function SettingsDialog({ onDismiss, returnFocusRef }: {
       onMouseDown={(event) => event.target === event.currentTarget && close()}
     >
       <section className="settings-drawer">
-        <div className="drawer-header"><div><span>Instrument</span><h2 id="settings-title">Training settings</h2></div><button onClick={close} aria-label="Close settings">×</button></div>
+        <div className="drawer-header"><div><span>Instrument</span><h2 id="settings-title">NoteForge settings</h2></div><button onClick={close} aria-label="Close settings">×</button></div>
+        <AudioSettings />
         <label className="settings-block"><span>Pitch tolerance <b>±{toleranceCents} cents</b></span><input type="range" min="5" max="50" step="5" value={toleranceCents} onChange={(event) => setToleranceCents(Number(event.target.value))} /><small>Beginner 35¢ · Developing 20¢ · Precise 10¢</small></label>
         <label className="settings-block diagnostic-consent"><span>Share derived pitch diagnostics <b>{remotePitchDiagnosticsEnabled ? "ON" : "OFF"}</b></span><input data-remote-pitch-diagnostics-toggle type="checkbox" checked={remotePitchDiagnosticsEnabled} onChange={(event) => setRemotePitchDiagnosticsEnabled(event.target.checked)} /><small>Explicit troubleshooting opt-in. Sends bounded detector/sample facts to this NoteForge server; never microphone PCM or exercise targets.</small></label>
         <div className="privacy-note"><Icon name="record" size={18} /><span><b>Recording is separately opt-in.</b> Raw microphone audio stays local.</span></div>
@@ -154,38 +156,15 @@ function Topbar({ screen, onMenu, onSettings, menuButtonRef, settingsButtonRef }
   menuButtonRef: RefObject<HTMLButtonElement | null>;
   settingsButtonRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const input = useAudioInputStatus();
   const title = PAGE_TITLES[screen];
-  const status = {
-    disabled: "Voice input off",
-    opening: "Opening microphone",
-    running: "Microphone active",
-    error: "Microphone error",
-  }[input.state];
   return (
     <header className="topbar">
       <button ref={menuButtonRef} className="mobile-menu" onClick={onMenu} aria-label="Open menu"><span /><span /></button>
       <div className="page-title"><span>{title.eyebrow}</span><h2>{title.title}</h2></div>
-      <div className={`global-mic-control ${input.state}`} role="status" aria-live="polite" title={input.error || undefined}>
-        <span><i /> {status}</span>
-        <MicrophoneAction input={input} />
-      </div>
+      <GlobalAudioControl />
       <button ref={settingsButtonRef} data-settings-open className="icon-button" onClick={onSettings} aria-label="Settings"><Icon name="settings" size={20} /></button>
     </header>
   );
-}
-
-function MicrophoneAction({ input }: { input: AudioInputController }) {
-  switch (input.state) {
-    case "disabled":
-      return <button type="button" data-global-mic-enable onClick={() => { void input.enable(); }}>Enable voice</button>;
-    case "opening":
-      return null;
-    case "running":
-      return <button type="button" data-global-mic-disable onClick={input.disable}>Disable voice</button>;
-    case "error":
-      return <button type="button" data-global-mic-enable onClick={() => { void input.enable(); }}>Retry voice</button>;
-  }
 }
 
 export function App() {

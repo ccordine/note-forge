@@ -1,9 +1,9 @@
 import type { PitchObservation } from "@/audio/note-input";
 import {
-  createRangeDwell,
-  updateRangeDwell,
-  type RangeDwellState,
-} from "@/features/range-loop/range-dwell";
+  createNoteDwell,
+  updateNoteDwell,
+  type NoteDwellState,
+} from "@/features/training-session/note-dwell";
 import {
   createDefaultRangeProfile,
   type PersonalRangeProfile,
@@ -28,7 +28,7 @@ export interface RangeSimulatorControllerState {
   readonly status: RangeSimulatorStatus;
   readonly session: RangeSimulatorSessionState;
   readonly profile: PersonalRangeProfile;
-  readonly dwell: RangeDwellState;
+  readonly dwell: NoteDwellState;
   readonly rating: EffortRating | null;
   readonly coordinationChange: boolean;
   readonly notice: string;
@@ -72,8 +72,8 @@ function targetMidiForSession(session: Readonly<RangeSimulatorSessionState>): nu
 function createDwellForSession(
   session: Readonly<RangeSimulatorSessionState>,
   toleranceCents: number,
-): RangeDwellState {
-  return createRangeDwell({
+): NoteDwellState {
+  return createNoteDwell({
     targetMidi: targetMidiForSession(session),
     toleranceCents,
     requiredHoldSeconds: RANGE_SIMULATOR_HOLD_SECONDS,
@@ -227,7 +227,7 @@ export function reduceRangeSimulatorController(
       };
     case "observation": {
       if (state.status !== "tracking") return state as RangeSimulatorControllerState;
-      const dwell = updateRangeDwell(state.dwell, action.observation);
+      const dwell = updateNoteDwell(state.dwell, action.observation);
       if (dwell === state.dwell) return state as RangeSimulatorControllerState;
       return {
         ...state,

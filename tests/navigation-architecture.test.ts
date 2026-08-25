@@ -15,6 +15,7 @@ const musical = source("state/MusicalContext.tsx");
 const preferences = source("state/UserPreferencesContext.tsx");
 const practice = source("features/practice/Practice.tsx");
 const home = source("features/home/Home.tsx");
+const globalAudioControl = source("ui/GlobalAudioControl.tsx");
 
 describe("navigation architecture", () => {
   it("delegates hash/history ownership to the maintained router", () => {
@@ -64,10 +65,12 @@ describe("navigation architecture", () => {
   });
 
   it("keeps global voice enable/stop/retry in the shell", () => {
-    expect(app).toContain("data-global-mic-enable");
-    expect(app).toContain("data-global-mic-disable");
-    expect(app).toContain("Enable voice");
-    expect(app).toContain("Retry voice");
+    expect(app).toContain("<GlobalAudioControl />");
+    expect(globalAudioControl).toContain("data-global-mic-enable");
+    expect(globalAudioControl).toContain("data-global-mic-disable");
+    expect(globalAudioControl).toContain("data-global-monitor-toggle");
+    expect(globalAudioControl).toContain("Enable voice");
+    expect(globalAudioControl).toContain("Retry voice");
   });
 
   it("routes Home work directly into product-owned activities", () => {

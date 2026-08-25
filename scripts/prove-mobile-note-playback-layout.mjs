@@ -33,6 +33,7 @@ const ROUTES = Object.freeze([
   { label: "Range Loop", path: "/practice/range-loop", root: ".range-loop-page" },
   { label: "Range Simulator", path: "/progress/range-map", root: ".range-simulator-page" },
   { label: "Interval Production", path: "/practice/intervals/production", root: ".interval-page .production" },
+  { label: "Tone Map", path: "/practice/note-recognition/map", root: ".tone-map-trial__instruction" },
   { label: "Note Recognition letters", path: "/practice/note-recognition/letters", root: ".ear-page .family-prompt-card" },
   { label: "Harmony production", path: "/practice/harmony/scale-degree-production", root: ".harmony-page .degree-production" },
   { label: "Harmony chord tone", path: "/practice/harmony/chord-tone", root: ".harmony-page .selected-function-card" },

@@ -17,6 +17,7 @@ import {
   AUDIO_LEVEL_DISPLAY_MINIMUM_DBFS,
   dbfsDisplayPercent,
 } from "@/lib/audio-level-display";
+import { formatNegotiatedAudioSwitch } from "@/audio/audio-environment-display";
 import { clamp } from "@/lib/numeric";
 import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
 import {
@@ -33,12 +34,6 @@ export interface InputScopeProps {
 
 function formatDb(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "—" : `${value.toFixed(1)} dB`;
-}
-
-function formatNegotiatedSwitch(value: boolean | string | undefined): string {
-  if (value === undefined) return "unknown";
-  if (typeof value === "boolean") return value ? "on" : "off";
-  return value;
 }
 
 function hasMeaningfulClipping(telemetry: Readonly<InputTelemetry>): boolean {
@@ -178,9 +173,9 @@ function AdvancedInputDiagnostics({
         <div><span>PITCH WINDOW</span><b>{microphoneInfo && windowDurationMs !== null ? `${microphoneInfo.analysisWindowSize.toLocaleString()} samples · ${windowDurationMs.toFixed(1)} ms` : "unknown"}</b></div>
         <div><span>ANALYSIS HOP</span><b>{microphoneInfo && hopDurationMs !== null ? `${microphoneInfo.analysisHopSize.toLocaleString()} samples · ${hopDurationMs.toFixed(1)} ms` : "unknown"}</b></div>
         <div><span>METER WINDOW</span><b>{microphoneInfo ? `${microphoneInfo.meterWindowSize.toLocaleString()} samples` : "unknown"}</b></div>
-        <div><span>ECHO CANCELLATION</span><b>{formatNegotiatedSwitch(microphoneInfo?.settings.echoCancellation)}</b></div>
-        <div><span>NOISE SUPPRESSION</span><b>{formatNegotiatedSwitch(microphoneInfo?.settings.noiseSuppression)}</b></div>
-        <div><span>AUTO GAIN</span><b>{formatNegotiatedSwitch(microphoneInfo?.settings.autoGainControl)}</b></div>
+        <div><span>ECHO CANCELLATION</span><b>{formatNegotiatedAudioSwitch(microphoneInfo?.settings.echoCancellation)}</b></div>
+        <div><span>NOISE SUPPRESSION</span><b>{formatNegotiatedAudioSwitch(microphoneInfo?.settings.noiseSuppression)}</b></div>
+        <div><span>AUTO GAIN</span><b>{formatNegotiatedAudioSwitch(microphoneInfo?.settings.autoGainControl)}</b></div>
       </div>
     </>
   );

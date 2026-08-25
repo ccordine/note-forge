@@ -32,10 +32,10 @@ import {
   type PersonalRangeProfile,
 } from "./profile";
 import {
-  createRangeDwell,
-  reduceRangeDwell,
-  type RangeDwellState,
-} from "./range-dwell";
+  createNoteDwell,
+  reduceNoteDwell,
+  type NoteDwellState,
+} from "@/features/training-session/note-dwell";
 import {
   completeRangeLoopFamily,
   firstRangeLoopTarget,
@@ -65,7 +65,7 @@ export interface RangeLoopSession {
   readonly sequence: readonly number[];
   readonly passedMidis: ReadonlySet<number>;
   readonly followingMidi: number;
-  readonly dwell: RangeDwellState;
+  readonly dwell: NoteDwellState;
   readonly achievementReached: boolean;
   readonly holding: boolean;
   readonly hydrated: boolean;
@@ -89,8 +89,8 @@ function createDwell(
   targetMidi: number,
   toleranceCents: number,
   holdSeconds: number,
-): RangeDwellState {
-  return createRangeDwell({
+): NoteDwellState {
+  return createNoteDwell({
     targetMidi,
     toleranceCents,
     requiredHoldSeconds: holdSeconds,
@@ -124,7 +124,7 @@ export function useRangeLoopSession(): RangeLoopSession {
     createRangeLoopLiveState,
   );
   const dwellSession = useRealtimeSession(
-    reduceRangeDwell,
+    reduceNoteDwell,
     () => createDwell(DEFAULT_BASELINE_MIDI, initialToleranceCents, 3),
   );
   const dwell = dwellSession.state;
@@ -146,7 +146,7 @@ export function useRangeLoopSession(): RangeLoopSession {
     },
   });
 
-  const replaceDwell = useCallback((next: RangeDwellState) => {
+  const replaceDwell = useCallback((next: NoteDwellState) => {
     dwellSession.dispatch({ type: "replace", state: next });
   }, [dwellSession.dispatch]);
 

@@ -39,6 +39,11 @@
   .page-title h2 { font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .global-mic-control > span { font-size: 0; }
   .global-mic-control > span::after { content: "Mic"; font-size: 8px; }
+  .global-mic-control .monitor-toggle-long { display: none; }
+  .global-mic-control .monitor-toggle-short { display: inline; }
+  .drawer-header button { width: 44px; height: 44px; flex: 0 0 44px; }
+  .settings-drawer { padding: 22px 20px max(28px,env(safe-area-inset-bottom)); }
+  .settings-toggle { gap: 14px; }
   .page { padding: 23px 14px 60px; }
   .surface-navigation { padding: 9px 14px 0; }
   .surface-navigation label { width: 100%; justify-content: flex-end; }
@@ -137,7 +142,12 @@
   .topbar > .icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
   .global-mic-control { min-width: 0; padding: 2px 3px; gap: 0; }
   .global-mic-control > span { display: none; }
+  .global-audio-actions { gap: 2px; }
   .global-mic-control button { min-height: 44px; padding-inline: 8px; white-space: nowrap; }
+  .global-mic-control .monitor-toggle { width: 64px; padding: 0 5px; gap: 3px; font-size: 7px; }
+  .global-mic-control .microphone-action { max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
+  .audio-device-row { align-items: flex-start; flex-direction: column; }
+  .audio-device-row button { width: 100%; min-height: 44px; }
   .mode-grid { grid-template-columns: 1fr; }
   .mode-card { min-height: 135px; }
   .hero-copy h1 { font-size: 47px; }

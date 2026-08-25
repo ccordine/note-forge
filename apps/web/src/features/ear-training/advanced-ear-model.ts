@@ -4,7 +4,7 @@ import { clamp } from "@/lib/numeric";
 import type { EarMode } from "@/navigation";
 import type { FoundationEarMode } from "./NoteFamilyTrainer";
 
-export type AdvancedEarMode = Exclude<EarMode, FoundationEarMode>;
+export type AdvancedEarMode = Exclude<EarMode, FoundationEarMode | "map">;
 export type RelationAnswer = "same" | "different" | "higher" | "lower";
 export type AdvancedAnswerKind = "relation" | "pitch-class" | "octave" | "complete";
 

@@ -6,13 +6,14 @@ export const BRIEF_COMPARISON_SECONDS = 0.42;
 export async function attachVoiceToScope(
   signal: AbortSignal,
   start: (signal: AbortSignal) => Promise<ActiveVoice>,
-): Promise<void> {
+): Promise<ActiveVoice | null> {
   const voice = await start(signal);
   if (signal.aborted) {
     voice.stop(0);
-    return;
+    return null;
   }
   signal.addEventListener("abort", () => voice.stop(0.03), { once: true });
+  return voice;
 }
 
 export interface SessionEffectScope {
@@ -24,7 +25,7 @@ export interface SessionEffectScope {
   readonly playGesture: (
     label: string,
     start: (signal: AbortSignal) => Promise<ActiveVoice>,
-  ) => void;
+  ) => Promise<boolean>;
 }
 
 export function useSessionEffectScope(): SessionEffectScope {
@@ -42,14 +43,20 @@ export function useSessionEffectScope(): SessionEffectScope {
     return controller.signal;
   }, [abort]);
 
-  const playGesture = useCallback((
+  const playGesture = useCallback(async (
     label: string,
     start: (signal: AbortSignal) => Promise<ActiveVoice>,
   ) => {
     const signal = restart();
-    void attachVoiceToScope(signal, start).catch((error) => {
+    try {
+      const voice = await attachVoiceToScope(signal, start);
+      if (voice?.finished === undefined) return false;
+      await voice.finished;
+      return !signal.aborted;
+    } catch (error) {
       if (!signal.aborted) console.error(`${label} failed.`, error);
-    });
+      return false;
+    }
   }, [restart]);
 
   useEffect(() => abort, [abort]);

@@ -17,7 +17,7 @@ export type SoundMode = "note" | "dyad" | "chord";
 export type MirrorMode = "glide" | "delayed" | "cold" | "anchor" | "silent";
 export type HumMode = "anchor" | "match" | "glide" | "sustain";
 export type ControlMode = "free" | "steady" | "crescendo" | "decrescendo" | "diamond" | "pulses";
-export type EarMode = "letters" | "reference" | "same-different" | "direction" | "pitch-class" | "octave" | "complete" | "family";
+export type EarMode = "map" | "letters" | "reference" | "same-different" | "direction" | "pitch-class" | "octave" | "complete" | "family";
 export type IntervalMode = "recognition" | "production" | "comparison" | "mutation";
 export type HarmonyMode = "scale-degree-recognition" | "scale-degree-production" | "chord-tone" | "voice-leading" | "harmony-follow";
 export type MelodyMode = "echo" | "contour" | "draw" | "transcribe";
@@ -69,7 +69,7 @@ export const DEFAULT_ROUTES = Object.freeze({
   hum: freezeRoute({ surface: "practice", activity: "hum", mode: "anchor" } as const),
   rangeLoop: freezeRoute({ surface: "practice", activity: "range-loop" } as const),
   pitchControl: freezeRoute({ surface: "practice", activity: "pitch-control", mode: "diamond" } as const),
-  noteRecognition: freezeRoute({ surface: "practice", activity: "note-recognition", mode: "letters" } as const),
+  noteRecognition: freezeRoute({ surface: "practice", activity: "note-recognition", mode: "map" } as const),
   intervals: freezeRoute({ surface: "practice", activity: "intervals", mode: "recognition" } as const),
   harmony: freezeRoute({ surface: "practice", activity: "harmony", mode: "chord-tone" } as const),
   melody: freezeRoute({ surface: "practice", activity: "melody", mode: "echo" } as const),
@@ -93,7 +93,7 @@ export const ALL_APP_ROUTES: readonly AppRoute[] = Object.freeze([
   ...routesWithMode((mode: HumMode) => ({ surface: "practice", activity: "hum", mode }), ["anchor", "match", "glide", "sustain"]),
   DEFAULT_ROUTES.rangeLoop,
   ...routesWithMode((mode: ControlMode) => ({ surface: "practice", activity: "pitch-control", mode }), ["free", "steady", "crescendo", "decrescendo", "diamond", "pulses"]),
-  ...routesWithMode((mode: EarMode) => ({ surface: "practice", activity: "note-recognition", mode }), ["letters", "reference", "same-different", "direction", "pitch-class", "octave", "complete", "family"]),
+  ...routesWithMode((mode: EarMode) => ({ surface: "practice", activity: "note-recognition", mode }), ["map", "letters", "reference", "same-different", "direction", "pitch-class", "octave", "complete", "family"]),
   ...routesWithMode((mode: IntervalMode) => ({ surface: "practice", activity: "intervals", mode }), ["recognition", "production", "comparison", "mutation"]),
   ...routesWithMode((mode: HarmonyMode) => ({ surface: "practice", activity: "harmony", mode }), ["scale-degree-recognition", "scale-degree-production", "chord-tone", "voice-leading", "harmony-follow"]),
   ...routesWithMode((mode: MelodyMode) => ({ surface: "practice", activity: "melody", mode }), ["echo", "contour", "draw", "transcribe"]),

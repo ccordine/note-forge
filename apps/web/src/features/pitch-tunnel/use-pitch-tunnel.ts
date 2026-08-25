@@ -1,7 +1,9 @@
+import { useLayoutEffect } from "react";
 import { useAudioInput, type AudioInputController } from "@/audio/use-audio-input";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import type { RealtimePresentationPolicy } from "@/realtime/realtime-session-store";
 import { sameObservationStream } from "@/realtime/observation-continuity";
+import { useUserPreferences } from "@/state/UserPreferencesContext";
 import {
   createPitchTunnel,
   pitchTunnelMetrics,
@@ -31,6 +33,7 @@ export const PITCH_TUNNEL_PRESENTATION_POLICY = Object.freeze({
     || previous.achievementReached !== next.achievementReached
     || previous.checkpoint?.index !== next.checkpoint?.index
     || authorityChanged(previous, next)
+    || action.type === "reconfigure-tolerance"
     || (action.type === "observation" && action.observation.discontinuity)
   ),
 }) satisfies RealtimePresentationPolicy<PitchTunnelState, PitchTunnelAction>;
@@ -49,9 +52,10 @@ export interface PitchTunnelSession {
  * Every detector observation is reduced synchronously before presentation.
  */
 export function usePitchTunnel(): PitchTunnelSession {
+  const { toleranceCents } = useUserPreferences();
   const realtime = useRealtimeSession(
     reducePitchTunnel,
-    createPitchTunnel,
+    () => createPitchTunnel({ laneHalfWidthCents: toleranceCents }),
     30,
     PITCH_TUNNEL_PRESENTATION_POLICY,
   );
@@ -59,6 +63,10 @@ export function usePitchTunnel(): PitchTunnelSession {
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const state = realtime.state;
+
+  useLayoutEffect(() => {
+    realtime.dispatch({ type: "reconfigure-tolerance", toleranceCents });
+  }, [realtime.dispatch, toleranceCents]);
 
   return {
     input,

@@ -5,6 +5,7 @@ const { ensureAudioReady } = vi.hoisted(() => ({ ensureAudioReady: vi.fn() }));
 vi.mock("../apps/web/src/audio/audio-context", () => ({ ensureAudioReady }));
 
 import {
+  routeSharedAudioOutput,
   selectSharedAudioOutput,
   supportsSharedAudioOutputSelection,
 } from "../apps/web/src/audio/audio-output-routing";
@@ -45,6 +46,7 @@ describe("progressive shared audio output routing", () => {
 
     expect(supportsSharedAudioOutputSelection()).toBe(true);
     await expect(selectSharedAudioOutput()).resolves.toEqual({
+      deviceId: "chosen-output",
       label: "USB Headphones",
       contextInfo: {
         requestedLatencyHint: "interactive",
@@ -59,5 +61,32 @@ describe("progressive shared audio output routing", () => {
       ensureAudioReady.mock.invocationCallOrder[0]!,
     );
     expect(setSinkId).toHaveBeenCalledWith("chosen-output");
+
+    setSinkId.mockClear();
+    await expect(routeSharedAudioOutput("remembered-output")).resolves.toEqual({
+      requestedLatencyHint: "interactive",
+      sampleRate: 48_000,
+      baseSeconds: 0.005,
+      outputSeconds: 0.008,
+    });
+    expect(selectAudioOutput).toHaveBeenCalledOnce();
+    expect(setSinkId).toHaveBeenCalledWith("remembered-output");
+  });
+
+  it("rejects an invalid chooser result before routing the shared context", async () => {
+    class SupportedAudioContext {}
+    Object.defineProperty(SupportedAudioContext.prototype, "setSinkId", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.stubGlobal("AudioContext", SupportedAudioContext);
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        selectAudioOutput: vi.fn(async () => ({ deviceId: "", label: "Unknown" })),
+      },
+    });
+
+    await expect(selectSharedAudioOutput()).rejects.toThrow("invalid audio output");
+    expect(ensureAudioReady).not.toHaveBeenCalled();
   });
 });

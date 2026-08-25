@@ -33,7 +33,9 @@ export function useToneMapVoiceAnswer(
 ): ToneMapVoiceAnswerController {
   const contextRef = useRef(context);
   contextRef.current = context;
-  const stateRef = useRef<ToneMapVoiceAnswerState>(createToneMapVoiceAnswerState());
+  const stateRef = useRef<ToneMapVoiceAnswerState>(
+    createToneMapVoiceAnswerState(context.toleranceCents),
+  );
   const publishedRef = useRef<Readonly<ToneMapVoiceAnswerSnapshot>>(
     toneMapVoiceAnswerSnapshot(stateRef.current),
   );

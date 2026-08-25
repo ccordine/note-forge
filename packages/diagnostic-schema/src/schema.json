@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "flows": {
     "audio-input": true
   },
@@ -7,6 +7,13 @@
     "voiced": true,
     "unvoiced": true,
     "uncertain": true
+  },
+  "trackingDecisions": {
+    "accepted-cold-attack": true,
+    "accepted-continuation": true,
+    "accepted-confirmed-transition": true,
+    "no-pitch": true,
+    "pending-transition": true
   },
   "liveSignal": {
     "frequencyHz": {

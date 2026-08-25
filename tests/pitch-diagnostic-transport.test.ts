@@ -91,6 +91,25 @@ function voicedFrame(): FrameDiagnosticSource {
     periodSamples: 366.928123,
     yinValue: 0.01234567,
     reason: "detected",
+    pitchCandidate: {
+      frequencyHz: 130.81278265,
+      midiFloat: 48.00043821,
+      nearestMidi: 48,
+      centsFromNearest: 0.043821,
+      confidence: 0.987654,
+      yinValue: 0.01234567,
+      periodSamples: 366.928123,
+      voiced: true,
+      reason: "detected",
+      rawCandidate: {
+        frequencyHz: 130.7901,
+        periodSamples: 366.9918,
+        yinValue: 0.01321,
+        confidence: 0.98679,
+      },
+      harmonicAmbiguity: 0.03125,
+    },
+    pitchTrackingDecision: "accepted-continuation",
   };
 }
 
@@ -108,7 +127,7 @@ async function settle(): Promise<void> {
 
 describe("derived pitch diagnostic transport", () => {
   it("has one sensor-owned wire flow and no workflow diagnostic model", async () => {
-    expect(PITCH_DIAGNOSTIC_VERSION).toBe(4);
+    expect(PITCH_DIAGNOSTIC_VERSION).toBe(5);
     expect(DIAGNOSTIC_FLOW).toBe("audio-input");
     expect(DIAGNOSTIC_FLOWS).toEqual(["audio-input"]);
 
@@ -150,7 +169,7 @@ describe("derived pitch diagnostic transport", () => {
     await settle();
     expect(calls).toHaveLength(1);
     expect(batchFrom(calls[0]!)).toMatchObject({
-      version: 4,
+      version: 5,
       flow: "audio-input",
       events: [{ kind: "pitch-frame" }],
     });
@@ -239,6 +258,41 @@ describe("derived pitch diagnostic transport", () => {
     expect(batchFrom(calls[0]!).events).toHaveLength(3);
   });
 
+  it("drains a full in-flight backlog at diagnostic cadence without discarding its frames", async () => {
+    const calls: FetchCall[] = [];
+    const timers = createManualTimers();
+    let releaseFirst: (() => void) | undefined;
+    const transport = new PitchDiagnosticTransport({
+      enabled: true,
+      sessionId: "contract-backlog",
+      fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, init });
+        if (calls.length === 1) {
+          await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        }
+        return { ok: true, status: 204 } as Response;
+      }) as typeof fetch,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+      maximumBatchEvents: 4,
+      maximumBufferedEvents: 64,
+      batchDelayMs: 1_000,
+    });
+
+    for (let index = 0; index < 20; index += 1) transport.record(pitchEvent());
+    expect(calls).toHaveLength(1);
+    releaseFirst?.();
+    await settle();
+    expect(timers.pending().map(({ delayMs }) => delayMs)).toEqual([250]);
+
+    while (calls.length < 5) {
+      timers.fireNext();
+      await settle();
+    }
+    expect(calls.flatMap((call) => batchFrom(call).events)).toHaveLength(20);
+    expect(calls.map((call) => batchFrom(call).droppedEvents ?? 0)).toEqual([0, 0, 0, 0, 0]);
+  });
+
   it("serializes only bounded sensor facts, never PCM, identity, or activity semantics", async () => {
     const calls: FetchCall[] = [];
     const transport = new PitchDiagnosticTransport({
@@ -282,6 +336,17 @@ describe("derived pitch diagnostic transport", () => {
       "pcm", "samples", "deviceId", "label", "targetMidi", "toleranceCents",
       "phase", "holdMs", "tracking", "workflow", "secret-device", "secret microphone",
     ]) expect(serialized).not.toContain(forbidden);
+    expect(batchFrom(calls[0]!).events[0]).toMatchObject({
+      pitch: {
+        frame: {
+          pitchTrackingDecision: "accepted-continuation",
+          pitchCandidate: {
+            frequencyHz: 130.8128,
+            rawCandidate: { frequencyHz: 130.7901 },
+          },
+        },
+      },
+    });
   });
 
   it("validates exact observation identity and the canonical detector boundaries", () => {
@@ -313,6 +378,30 @@ describe("derived pitch diagnostic transport", () => {
     expect(() => toFrameDiagnostic(atFrequency(
       LIVE_DIAGNOSTIC_SIGNAL_BOUNDS.detectorFrequencyHz.maximum + 0.001,
     ))).toThrow(RangeError);
+  });
+
+  it("preserves exploratory raw YIN candidates outside the admitted live range", () => {
+    const source = voicedFrame();
+    const diagnostic = toFrameDiagnostic({
+      ...source,
+      pitchCandidate: {
+        ...source.pitchCandidate!,
+        rawCandidate: {
+          frequencyHz: 1_263.1579,
+          periodSamples: 38,
+          yinValue: 0.42,
+          confidence: 0.58,
+        },
+      },
+    });
+
+    expect(diagnostic.pitchCandidate?.frequencyHz).toBeCloseTo(130.8128, 4);
+    expect(diagnostic.pitchCandidate?.rawCandidate).toEqual({
+      frequencyHz: 1_263.1579,
+      periodSamples: 38,
+      yinValue: 0.42,
+      confidence: 0.58,
+    });
   });
 
   it("preserves detector note identity on both sides of a rounded half-semitone", () => {

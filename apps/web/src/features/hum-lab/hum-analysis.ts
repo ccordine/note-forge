@@ -21,7 +21,6 @@ export interface HumTakeConfiguration {
   readonly midi: number;
   readonly centsOffset: number;
   readonly timbre: Timbre;
-  readonly toleranceCents: number;
 }
 
 export interface HumResult {
@@ -50,6 +49,7 @@ export function humRibbonAnchorMidi(
 
 export function scoreHumTake(
   take: Readonly<CompletedAttempt<HumTakeConfiguration>>,
+  toleranceCents: number,
 ): HumResult {
   const configuration = take.configuration;
   const frames = attemptScoringFrames(take);
@@ -79,7 +79,7 @@ export function scoreHumTake(
     take,
     scoreFrames,
     { midi: targetMidi, centsOffset: targetCents, timbre: configuration.timbre, amplitude: 0.22 },
-    { toleranceCents: configuration.toleranceCents, minimumConfidence: 0.5, promptTimeSeconds: scoreFrames[0]?.timeSeconds, maximumVoicedGapSeconds: 0.24 },
+    { toleranceCents, minimumConfidence: 0.5, promptTimeSeconds: scoreFrames[0]?.timeSeconds, maximumVoicedGapSeconds: 0.24 },
   );
   return { frames, metrics, anchor, continuityRatio };
 }

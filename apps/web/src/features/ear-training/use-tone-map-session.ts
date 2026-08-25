@@ -8,6 +8,7 @@ import {
   VOCAL_PROFILE_STORAGE_KEY,
 } from "@/features/range-loop/profile";
 import { continuousMidiToHz } from "@/lib/music-display";
+import { useUserPreferences } from "@/state/UserPreferencesContext";
 import { saveAttempt } from "@/storage/database";
 import { SettingsPersistence } from "@/storage/settings-persistence";
 import type { Timbre } from "@/audio/synth";
@@ -70,6 +71,7 @@ function newSeed(label: string): string {
 }
 
 export function useToneMapSession(timbre: Timbre): ToneMapSessionController {
+  const { toleranceCents } = useUserPreferences();
   const [session, dispatch] = useReducer(
     reduceToneMapSession,
     undefined,
@@ -109,11 +111,13 @@ export function useToneMapSession(timbre: Timbre): ToneMapSessionController {
     active: session.task?.skill === "production",
     answered: session.answer !== null,
     promptPlaying: promptPlayback.playing,
+    toleranceCents,
   }), [
     promptPlayback.playing,
     session.answer,
     session.task?.skill,
     session.trialOrdinal,
+    toleranceCents,
   ]);
   const voiceAnswerController = useToneMapVoiceAnswer(voiceContext);
   const input = voiceAnswerController.input;

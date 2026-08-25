@@ -3,12 +3,15 @@ import type { YinPitchFrame } from "@noteforge/pitch-engine";
 export const PITCH_STATE_TRACKER_DEFAULTS = Object.freeze({
   /** Fine steering and ordinary vibrato remain immediate. */
   maximumImmediateJumpCents: 45,
-  /** Two coherent remote candidates establish a real step in one 20 ms hop. */
-  transitionConfirmationFrames: 2,
+  /**
+   * A remote candidate must remain coherent for 80 ms before it can replace
+   * established musical state. Physical diagnostic sessions contained false
+   * low-frequency candidates lasting one or two 20 ms windows; those are
+   * estimator transients, not possible note changes.
+   */
+  transitionConfirmationFrames: 4,
   /** A competing candidate may move this far and still describe one contour. */
   candidateContinuationCents: 180,
-  /** Silence longer than this establishes a new cold-attack authority. */
-  retainedPitchGapSeconds: 0.12,
   /** A sample gap this large cannot participate in temporal interpretation. */
   maximumFrameGapSeconds: 0.1,
 });
@@ -108,21 +111,21 @@ function sameDirection(left: number, right: number): boolean {
  * Target-independent causal interpretation of independently estimated windows.
  *
  * YIN candidates remain inspectable in `candidate`. Fine motion is immediate.
- * A single remote candidate cannot become musical state; a coherent second
- * candidate confirms a genuine step or fast contour one hop later. Silence is
- * published immediately and never replaced by a stale pitch.
+ * Brief remote candidates cannot become musical state; four coherent windows
+ * confirm a genuine step or fast contour. Silence is published immediately and
+ * never replaced by a stale pitch. The last established pitch remains only as
+ * an internal continuity reference, so a remote candidate after silence cannot
+ * bypass confirmation as a one-frame cold attack.
  */
 export class PitchStateTracker {
   private accepted: AcceptedPitch | null = null;
   private pending: PendingTransition | null = null;
   private lastFrameTimeSeconds: number | null = null;
-  private noPitchStartedAtSeconds: number | null = null;
 
   reset(): void {
     this.accepted = null;
     this.pending = null;
     this.lastFrameTimeSeconds = null;
-    this.noPitchStartedAtSeconds = null;
   }
 
   track(frame: Readonly<YinPitchFrame>): Readonly<TrackedPitchFrame> {
@@ -139,30 +142,14 @@ export class PitchStateTracker {
     ) {
       this.accepted = null;
       this.pending = null;
-      this.noPitchStartedAtSeconds = null;
     }
 
     if (!finiteVoicedPitch(frame)) {
       this.pending = null;
-      this.noPitchStartedAtSeconds ??= frame.timeSeconds;
-      if (
-        this.accepted !== null
-        && frame.timeSeconds - this.noPitchStartedAtSeconds
-          > PITCH_STATE_TRACKER_DEFAULTS.retainedPitchGapSeconds
-      ) {
-        this.accepted = null;
-      }
       return Object.freeze({ frame, candidate, decision: "no-pitch" });
     }
 
-    const gapSeconds = this.noPitchStartedAtSeconds === null
-      ? 0
-      : frame.timeSeconds - this.noPitchStartedAtSeconds;
-    this.noPitchStartedAtSeconds = null;
-    if (
-      this.accepted === null
-      || gapSeconds > PITCH_STATE_TRACKER_DEFAULTS.retainedPitchGapSeconds
-    ) {
+    if (this.accepted === null) {
       this.accepted = Object.freeze({
         midiFloat: frame.midiFloat,
         timeSeconds: frame.timeSeconds,

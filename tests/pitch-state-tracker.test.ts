@@ -66,7 +66,7 @@ describe("target-independent causal pitch state", () => {
     });
   });
 
-  it("accepts a genuinely persistent note step after one ambiguous hop", () => {
+  it("accepts a genuinely persistent note step after four coherent windows", () => {
     const tracker = new PitchStateTracker();
     const results = [
       tracker.track(voiced(48, 0)),
@@ -74,11 +74,15 @@ describe("target-independent causal pitch state", () => {
       // Ordinary estimator jitter can reverse by a few cents while remaining
       // strong persistent evidence for the same remote pitch region.
       tracker.track(voiced(49.98, 0.04)),
-      tracker.track(voiced(49.98, 0.06)),
+      tracker.track(voiced(50.01, 0.06)),
+      tracker.track(voiced(49.98, 0.08)),
+      tracker.track(voiced(49.98, 0.10)),
     ];
 
-    expect(results.map(({ frame }) => frame.nearestMidi)).toEqual([48, null, 50, 50]);
-    expect(results[2]!.decision).toBe("accepted-confirmed-transition");
+    expect(results.map(({ frame }) => frame.nearestMidi)).toEqual([
+      48, null, null, null, 50, 50,
+    ]);
+    expect(results[4]!.decision).toBe("accepted-confirmed-transition");
   });
 
   it("passes vibrato and a fast coherent glide without a median-filter delay", () => {
@@ -93,19 +97,54 @@ describe("target-independent causal pitch state", () => {
       .toBe(true);
   });
 
-  it("publishes silence immediately and treats a later voiced attack as new authority", () => {
+  it("publishes silence immediately but does not let a brief remote re-entry replace authority", () => {
     const tracker = new PitchStateTracker();
     const first = tracker.track(voiced(48, 0));
     const silence = Array.from({ length: 8 }, (_unused, index) =>
       tracker.track(unvoiced(0.02 * (index + 1))));
-    const attack = tracker.track(voiced(67, 0.18));
+    const falseLow = [
+      tracker.track(voiced(34, 0.18)),
+      tracker.track(voiced(34.04, 0.20)),
+    ];
+    const returnToC3 = tracker.track(voiced(48.02, 0.22));
 
     expect(first.frame.nearestMidi).toBe(48);
     expect(silence.every(({ frame, decision }) => !frame.voiced && decision === "no-pitch"))
       .toBe(true);
-    expect(attack).toMatchObject({
-      decision: "accepted-cold-attack",
-      frame: { nearestMidi: 67, voiced: true },
+    expect(falseLow).toEqual([
+      expect.objectContaining({
+        decision: "pending-transition",
+        frame: expect.objectContaining({ nearestMidi: null, voiced: false }),
+      }),
+      expect.objectContaining({
+        decision: "pending-transition",
+        frame: expect.objectContaining({ nearestMidi: null, voiced: false }),
+      }),
+    ]);
+    expect(returnToC3).toMatchObject({
+      decision: "accepted-continuation",
+      frame: { nearestMidi: 48, voiced: true },
+    });
+  });
+
+  it("admits a real remote re-entry after silence only when it persists", () => {
+    const tracker = new PitchStateTracker();
+    tracker.track(voiced(48, 0));
+    for (let index = 1; index <= 8; index += 1) {
+      tracker.track(unvoiced(index * 0.02));
+    }
+    const attack = Array.from({ length: 5 }, (_unused, index) =>
+      tracker.track(voiced(50 + (index % 2 === 0 ? 0.02 : -0.02), 0.18 + index * 0.02)));
+
+    expect(attack.slice(0, 3).every(({ decision, frame }) =>
+      decision === "pending-transition" && !frame.voiced)).toBe(true);
+    expect(attack[3]).toMatchObject({
+      decision: "accepted-confirmed-transition",
+      frame: { nearestMidi: 50, voiced: true },
+    });
+    expect(attack[4]).toMatchObject({
+      decision: "accepted-continuation",
+      frame: { nearestMidi: 50, voiced: true },
     });
   });
 

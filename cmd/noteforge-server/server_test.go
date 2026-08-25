@@ -172,6 +172,20 @@ func TestPitchDiagnosticsAcceptAndLogDerivedMetrics(t *testing.T) {
 	}
 }
 
+func TestPitchDiagnosticsAcceptExploratoryRawCandidateOutsideLiveRange(t *testing.T) {
+	t.Parallel()
+	server := newTestServer(io.Discard)
+	batch := validDiagnosticBatch()
+	raw := batch.Events[0].Pitch.Frame.PitchCandidate.RawCandidate
+	raw.FrequencyHz = 1_263.1579
+	raw.PeriodSamples = 38
+
+	response := performDiagnosticRequest(server, batch, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %q", response.Code, http.StatusNoContent, response.Body.String())
+	}
+}
+
 func TestPitchDiagnosticsRejectInvalidRequestsWithoutLoggingBodies(t *testing.T) {
 	t.Parallel()
 	validJSON := mustMarshal(t, validDiagnosticBatch())
@@ -690,34 +704,58 @@ func validDiagnosticBatch() DiagnosticBatch {
 	period := 366.94
 	brightness := 0.24
 	brightnessConfidence := 0.91
+	rawCandidateFrequency := 130.7901
+	rawCandidatePeriod := 366.9918
+	rawCandidateYIN := 0.01321
+	rawCandidateConfidence := 0.98679
+	pitchCandidate := &PitchCandidateDiagnostic{
+		FrequencyHz:       &frequency,
+		MIDIFloat:         &midi,
+		NearestMIDI:       &nearest,
+		CentsFromNearest:  &cents,
+		Confidence:        0.99,
+		YINValue:          &yin,
+		PeriodSamples:     &period,
+		Voiced:            true,
+		Reason:            "detected",
+		HarmonicAmbiguity: 0.03,
+		RawCandidate: &RawPitchCandidateDiagnostic{
+			FrequencyHz:   rawCandidateFrequency,
+			PeriodSamples: rawCandidatePeriod,
+			YINValue:      rawCandidateYIN,
+			Confidence:    rawCandidateConfidence,
+		},
+	}
 	frame := FrameDiagnostic{
-		ObservationKind:      "voiced",
-		TimeSeconds:          &timeSeconds,
-		SampleRate:           &sampleRate,
-		StartSample:          &startSample,
-		EndSample:            &endSample,
-		ProcessedSampleCount: &processedSampleCount,
-		CaptureEpoch:         &captureEpoch,
-		ContinuityEpoch:      &continuityEpoch,
-		GraphGeneration:      &graphGeneration,
-		Discontinuity:        &discontinuity,
-		WorkletProcessCount:  &workletProcessCount,
-		Periodicity:          &periodicity,
-		Voiced:               true,
-		FrequencyHz:          &frequency,
-		MIDIFloat:            &midi,
-		NearestMIDI:          &nearest,
-		CentsFromNearest:     &cents,
-		RMS:                  0.08,
-		Confidence:           0.99,
-		Brightness:           &brightness,
-		BrightnessConfidence: &brightnessConfidence,
-		YINValue:             &yin,
-		PeriodSamples:        &period,
-		Reason:               "detected",
+		ObservationKind:       "voiced",
+		TimeSeconds:           &timeSeconds,
+		SampleRate:            &sampleRate,
+		StartSample:           &startSample,
+		EndSample:             &endSample,
+		ProcessedSampleCount:  &processedSampleCount,
+		CaptureEpoch:          &captureEpoch,
+		ContinuityEpoch:       &continuityEpoch,
+		GraphGeneration:       &graphGeneration,
+		Discontinuity:         &discontinuity,
+		WorkletProcessCount:   &workletProcessCount,
+		Periodicity:           &periodicity,
+		Voiced:                true,
+		FrequencyHz:           &frequency,
+		MIDIFloat:             &midi,
+		NearestMIDI:           &nearest,
+		CentsFromNearest:      &cents,
+		RMS:                   0.08,
+		Confidence:            0.99,
+		Brightness:            &brightness,
+		BrightnessConfidence:  &brightnessConfidence,
+		YINValue:              &yin,
+		PeriodSamples:         &period,
+		Reason:                "detected",
+		PitchCandidate:        pitchCandidate,
+		PitchTrackingDecision: "accepted-continuation",
 	}
 	return DiagnosticBatch{
-		Version:       4,
+		Version:       5,
 		SessionID:     "pitch-a1b2c3d4",
 		Sequence:      42,
 		Flow:          "audio-input",
@@ -753,6 +791,15 @@ func unvoicedFrame(reason string) FrameDiagnostic {
 	frame.BrightnessConfidence = pointer(0.0)
 	frame.Confidence = 0.76
 	frame.Reason = reason
+	frame.PitchCandidate = &PitchCandidateDiagnostic{
+		Confidence:        0.76,
+		YINValue:          frame.YINValue,
+		PeriodSamples:     nil,
+		Voiced:            false,
+		Reason:            reason,
+		HarmonicAmbiguity: 0,
+	}
+	frame.PitchTrackingDecision = "no-pitch"
 	return frame
 }
 

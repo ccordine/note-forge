@@ -54,7 +54,6 @@ export interface StoredRangeLoopState {
   readonly noteSet?: unknown;
   readonly order?: unknown;
   readonly holdSeconds?: unknown;
-  readonly toleranceCents?: unknown;
   readonly targetMidi?: unknown;
   readonly progress?: unknown;
 }
@@ -64,14 +63,12 @@ export interface HydratedRangeLoopState {
   readonly noteSet: FamilyNoteSet;
   readonly order: RangeLoopOrder;
   readonly holdSeconds: number;
-  readonly toleranceCents: number;
   readonly targetMidi: number;
   readonly progress: LoopProgress;
   readonly profile: PersonalRangeProfile;
 }
 
 export const RANGE_LOOP_HOLD_OPTIONS = Object.freeze([1.5, 2, 3, 5, 8] as const);
-export const RANGE_LOOP_TOLERANCE_OPTIONS = Object.freeze([10, 15, 20, 30, 40, 50] as const);
 
 export function isRangeLoopFamily(value: unknown): value is RangeFamilyId {
   return RANGE_FAMILIES.some((family) => family.id === value);
@@ -90,17 +87,11 @@ export function isRangeLoopHold(value: unknown): value is number {
     && RANGE_LOOP_HOLD_OPTIONS.some((candidate) => candidate === value);
 }
 
-export function isRangeLoopTolerance(value: unknown): value is number {
-  return typeof value === "number"
-    && RANGE_LOOP_TOLERANCE_OPTIONS.some((candidate) => candidate === value);
-}
-
 /** Normalize persisted state and an optional explicit handoff before React sees it. */
 export function hydrateRangeLoopState(
   stored: StoredRangeLoopState | undefined,
   storedProfile: unknown,
   handoffMidi: number | null,
-  fallbackTolerance: number,
   handoffUpdatedAt: string,
 ): HydratedRangeLoopState {
   let profile = normalizeRangeProfile(storedProfile);
@@ -126,9 +117,6 @@ export function hydrateRangeLoopState(
     : requestedNoteSet;
   const order = isRangeLoopOrder(stored?.order) ? stored.order : "ascending";
   const holdSeconds = isRangeLoopHold(stored?.holdSeconds) ? stored.holdSeconds : 3;
-  const toleranceCents = isRangeLoopTolerance(stored?.toleranceCents)
-    ? stored.toleranceCents
-    : fallbackTolerance;
   const requestedTarget = handoffMidi ?? stored?.targetMidi;
   const targetMidi = typeof requestedTarget === "number"
     && Number.isInteger(requestedTarget)
@@ -140,7 +128,6 @@ export function hydrateRangeLoopState(
     noteSet,
     order,
     holdSeconds,
-    toleranceCents,
     targetMidi,
     progress,
     profile,

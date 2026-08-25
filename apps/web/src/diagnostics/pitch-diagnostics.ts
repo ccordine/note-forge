@@ -1,10 +1,15 @@
 import type { YinPitchFrame } from "@noteforge/pitch-engine";
+import type { PitchCandidateTelemetry, PitchTrackingDecision } from "@/audio/pitch-state-tracker";
 import diagnosticSchema from "../../../../packages/diagnostic-schema/src/schema.json";
 import {
   serializeLivePitchCoordinates,
   validateMicrophoneSignalContract,
   validateSerializedFrameSignalContract,
 } from "./live-signal-contract";
+import {
+  serializePitchCandidate,
+  type PitchCandidateDiagnostic,
+} from "./pitch-candidate-diagnostic";
 
 export { LIVE_DIAGNOSTIC_SIGNAL_BOUNDS } from "./live-signal-contract";
 
@@ -48,6 +53,8 @@ export interface FrameDiagnosticSource {
   readonly yinValue: number | null;
   readonly periodSamples: number | null;
   readonly reason: YinPitchFrame["reason"];
+  readonly pitchCandidate?: Readonly<PitchCandidateTelemetry>;
+  readonly pitchTrackingDecision?: PitchTrackingDecision;
 }
 
 export interface FrameDiagnostic {
@@ -75,6 +82,8 @@ export interface FrameDiagnostic {
   yinValue: number | null;
   periodSamples: number | null;
   reason: YinPitchFrame["reason"];
+  pitchCandidate: PitchCandidateDiagnostic | null;
+  pitchTrackingDecision: PitchTrackingDecision | null;
 }
 
 export interface InputDiagnostic {
@@ -362,6 +371,8 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
       4,
     ),
     reason: frame.reason,
+    pitchCandidate: serializePitchCandidate(frame.pitchCandidate, sampleRate),
+    pitchTrackingDecision: frame.pitchTrackingDecision ?? null,
   };
 }
 
@@ -413,7 +424,7 @@ export class PitchDiagnosticTransport {
     );
     this.maximumBufferedEvents = positiveIntegerOption(
       "maximumBufferedEvents",
-      options.maximumBufferedEvents ?? 256,
+      options.maximumBufferedEvents ?? 4_096,
       4_096,
     );
     this.startedAtMs = finiteClockValue(this.now(), "Diagnostic clock start");
@@ -458,7 +469,7 @@ export class PitchDiagnosticTransport {
       void this.flush();
       return;
     }
-    if (buffer.timer === null) {
+    if (!buffer.sending && buffer.timer === null) {
       buffer.timer = this.setTimer(() => {
         buffer.timer = null;
         void this.flush();
@@ -502,10 +513,16 @@ export class PitchDiagnosticTransport {
     } finally {
       buffer.sending = false;
       if (buffer.events.length > 0 && buffer.timer === null) {
+        // A full batch accumulated while the previous request was in flight.
+        // Drain it at the server's four-request-per-second sustained cadence
+        // instead of sleeping a full second while 50 Hz evidence overflows.
+        const delayMs = buffer.events.length >= this.maximumBatchEvents
+          ? Math.min(this.batchDelayMs, 250)
+          : this.batchDelayMs;
         buffer.timer = this.setTimer(() => {
           buffer.timer = null;
           void this.flush();
-        }, this.batchDelayMs);
+        }, delayMs);
       }
     }
   }

@@ -41,7 +41,7 @@ export function PitchControl() {
 
   const completeAttempt = (completed: Readonly<CompletedAttempt<ControlTakeConfiguration>>) => {
     const configuration = completed.configuration;
-    const nextResult = scoreControlTake(completed);
+    const nextResult = scoreControlTake(completed, toleranceCents);
     setResult(nextResult);
     const frames = attemptScoringFrames(completed);
     const completedAt = new Date().toISOString();
@@ -58,7 +58,6 @@ export function PitchControl() {
   const attempt = useAttemptRunner<ControlTakeConfiguration>({
     scoringProfile: (configuration) => ({
       targetMidiFloat: configuration.midi + configuration.centsOffset / 100,
-      toleranceCents: configuration.toleranceCents,
       envelopeCycleSeconds: configuration.cyclePeriodSeconds,
     }),
     onComplete: completeAttempt,
@@ -77,7 +76,6 @@ export function PitchControl() {
   const activeMidi = attemptConfiguration?.midi ?? selectedMidi;
   const activeCentsOffset = attemptConfiguration?.centsOffset ?? centsOffset;
   const activeTimbre = attemptConfiguration?.timbre ?? timbre;
-  const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
   const activeCyclePeriodSeconds = attemptConfiguration?.cyclePeriodSeconds ?? ENVELOPE_CYCLE_SECONDS;
   const referencePlayback = useSustainedNote({
     frequencyHz: continuousMidiToHz(activeMidi, activeCentsOffset),
@@ -111,7 +109,6 @@ export function PitchControl() {
       midi: selectedMidi,
       centsOffset,
       timbre,
-      toleranceCents,
       cyclePeriodSeconds: ENVELOPE_CYCLE_SECONDS,
     });
   };
@@ -148,7 +145,7 @@ export function PitchControl() {
   } else if (workflowStatus === "tracking") {
     currentStep = (
       <Panel className="envelope-stage active" data-workflow-step="tracking" data-trace-lifetime="user-owned">
-        <div className="envelope-header"><div><span>MISSION · {activeVowel.toUpperCase()}</span><h2>{envelope.cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(activeMidi)}</strong><span>±{activeToleranceCents}¢</span></div></div>
+        <div className="envelope-header"><div><span>MISSION · {activeVowel.toUpperCase()}</span><h2>{envelope.cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(activeMidi)}</strong><span>±{toleranceCents}¢</span></div></div>
         <div className="envelope-visual">
           <svg viewBox="0 0 1000 220" preserveAspectRatio="none" aria-label="Target volume envelope">
             <defs><linearGradient id="envelope-fill" x1="0" x2="1"><stop stopColor="#63d7ff" stopOpacity=".05" /><stop offset=".5" stopColor="#d8ff3e" stopOpacity=".3" /><stop offset="1" stopColor="#ff6b45" stopOpacity=".08" /></linearGradient></defs>
@@ -161,7 +158,7 @@ export function PitchControl() {
           <div className="dynamic-readout"><span>{activeCyclePeriodSeconds}s target loop · trace stays live</span><b style={{ transform: `scale(${0.8 + currentTargetLevel * 0.4})` }}>{dynamicCue}</b></div>
           <div className="envelope-axis"><span>quiet</span><span>VOLUME · dBFS</span><span>loud</span></div>
         </div>
-        <PitchRibbon frames={displayFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} envelope={displayRmsLevels} />
+        <PitchRibbon frames={displayFrames} targetMidiFloat={targetMidiFloat} toleranceCents={toleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} envelope={displayRmsLevels} />
         <div className="stage-actions"><ActionButton onClick={attempt.finish}>Finish trace</ActionButton></div>
       </Panel>
     );
@@ -199,7 +196,7 @@ export function PitchControl() {
 
       {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
 
-      <NoteInput variant="scope" input={input} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} title="Pitch and level monitor" />
+      <NoteInput variant="scope" input={input} targetMidiFloat={targetMidiFloat} toleranceCents={toleranceCents} title="Pitch and level monitor" />
       <div className="practice-reference-control"><NotePlaybackToggle playback={referencePlayback} label={noteLabel(activeMidi)} /></div>
       <section className="practice-current-step">{currentStep}</section>
     </div>

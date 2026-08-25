@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAudioInput, type AudioInputController } from "@/audio/use-audio-input";
 import {
   useSustainedNote,
@@ -63,6 +63,8 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
     timbre,
   } = useMusicalState();
   const { toleranceCents: preferenceToleranceCents } = useUserPreferences();
+  const preferenceToleranceRef = useRef(preferenceToleranceCents);
+  preferenceToleranceRef.current = preferenceToleranceCents;
   const { navigate } = useAppNavigation();
   const [initialState] = useState(() => createRangeSimulatorController({
     anchorMidi: DEFAULT_BASELINE_MIDI,
@@ -91,6 +93,13 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
 
+  useLayoutEffect(() => {
+    realtime.dispatch({
+      type: "reconfigure-tolerance",
+      toleranceCents: preferenceToleranceCents,
+    });
+  }, [preferenceToleranceCents, realtime.dispatch]);
+
   useEffect(() => {
     void persistence.load().then((stored) => {
       if (!stored) return;
@@ -108,7 +117,7 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
         type: "hydrate",
         session,
         profile,
-        toleranceCents: initialState.dwell.toleranceCents,
+        toleranceCents: preferenceToleranceRef.current,
       });
       const allReadable = stored.readableKeys.has(RANGE_SIMULATOR_STORAGE_KEY)
         && stored.readableKeys.has(VOCAL_PROFILE_STORAGE_KEY);
@@ -138,8 +147,8 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
   }, [setCentsOffset, setSelectedMidi, targetMidi]);
 
   const begin = useCallback(() => {
-    realtime.dispatch({ type: "begin", toleranceCents: activeToleranceCents });
-  }, [activeToleranceCents, realtime.dispatch]);
+    realtime.dispatch({ type: "begin", toleranceCents: preferenceToleranceCents });
+  }, [preferenceToleranceCents, realtime.dispatch]);
 
   const chooseRating = useCallback((rating: EffortRating) => {
     realtime.dispatch({ type: "select-rating", rating });

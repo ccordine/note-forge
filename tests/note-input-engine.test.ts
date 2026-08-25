@@ -391,13 +391,15 @@ describe("direct NoteInputEngine detection", () => {
   it("exposes every raw candidate immediately while requiring persistent remote pitch evidence", () => {
     const engine = new NoteInputEngine();
     const sequence = [48, 49, 67, 36, 83, 55, 60, 47, 72] as const;
-    const frames = sequence.flatMap((midi, sequenceIndex) => [0, 1].map((repeat) =>
-      processHarmonic(engine, midi, sequenceIndex * 2 + repeat)));
+    const framesPerPitch = 4;
+    const frames = sequence.flatMap((midi, sequenceIndex) =>
+      Array.from({ length: framesPerPitch }, (_unused, repeat) =>
+        processHarmonic(engine, midi, sequenceIndex * framesPerPitch + repeat)));
     const pairs = sequence.map((_midi, index) =>
-      frames.slice(index * 2, index * 2 + 2));
+      frames.slice(index * framesPerPitch, index * framesPerPitch + framesPerPitch));
 
     expect(frames.map((frame) => frame.pitchCandidate?.nearestMidi)).toEqual(
-      sequence.flatMap((midi) => [midi, midi]),
+      sequence.flatMap((midi) => Array.from({ length: framesPerPitch }, () => midi)),
     );
     frames.forEach((frame, index) => {
       expect(frame.timeSeconds).toBeCloseTo(
@@ -405,27 +407,29 @@ describe("direct NoteInputEngine detection", () => {
         12,
       );
     });
-    expect(pairs[0]!.map((frame) => frame.nearestMidi)).toEqual([48, 48]);
+    expect(pairs[0]!.map((frame) => frame.nearestMidi)).toEqual([48, 48, 48, 48]);
     pairs.slice(1).forEach((pair, index) => {
       const expectedMidi = sequence[index + 1]!;
-      expect(pair[0]).toMatchObject({
-        voiced: false,
-        nearestMidi: null,
-        reason: "temporally-ambiguous",
-        pitchTrackingDecision: "pending-transition",
+      pair.slice(0, 3).forEach((frame) => {
+        expect(frame).toMatchObject({
+          voiced: false,
+          nearestMidi: null,
+          reason: "temporally-ambiguous",
+          pitchTrackingDecision: "pending-transition",
+        });
+        expect(frame.pitchCandidate).toMatchObject({
+          voiced: true,
+          nearestMidi: expectedMidi,
+          reason: "detected",
+        });
       });
-      expect(pair[0]!.pitchCandidate).toMatchObject({
-        voiced: true,
-        nearestMidi: expectedMidi,
-        reason: "detected",
-      });
-      expect(pair[1]).toMatchObject({
+      expect(pair[3]).toMatchObject({
         voiced: true,
         nearestMidi: expectedMidi,
         reason: "detected",
         pitchTrackingDecision: "accepted-confirmed-transition",
       });
-      expect(frameFailure(pair[1]!, expectedMidi, 2)).toBeNull();
+      expect(frameFailure(pair[3]!, expectedMidi, 2)).toBeNull();
     });
   });
 

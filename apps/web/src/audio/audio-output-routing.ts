@@ -1,4 +1,5 @@
 import { ensureAudioReady } from "./audio-context";
+import { preferredAudioOutputSettings } from "./audio-monitoring-settings";
 import {
   audioContextInfo,
   type AudioContextInfo,
@@ -25,8 +26,20 @@ export function supportsSharedAudioOutputSelection(): boolean {
   return typeof prototype.setSinkId === "function";
 }
 
+export async function routeSharedAudioOutput(
+  sinkId: string,
+): Promise<AudioContextInfo> {
+  const context = await ensureAudioReady() as AudioContextWithSink;
+  if (typeof context.setSinkId !== "function") {
+    throw new Error("Audio output routing is not supported in this browser.");
+  }
+  await context.setSinkId(sinkId);
+  return audioContextInfo(context);
+}
+
 /** Selects the sink for the one shared context: monitoring and playback move together. */
 export async function selectSharedAudioOutput(): Promise<Readonly<{
+  deviceId: string;
   label: string;
   contextInfo: AudioContextInfo;
 }>> {
@@ -41,13 +54,13 @@ export async function selectSharedAudioOutput(): Promise<Readonly<{
   // see the original Choose output gesture. Merely opening Settings never
   // creates or resumes audio state.
   const device = await mediaDevices.selectAudioOutput();
-  const context = await ensureAudioReady() as AudioContextWithSink;
-  if (typeof context.setSinkId !== "function") {
-    throw new Error("Audio output selection became unavailable.");
+  const preferredOutput = preferredAudioOutputSettings(device.deviceId, device.label);
+  if (!preferredOutput) {
+    throw new Error("The browser returned an invalid audio output.");
   }
-  await context.setSinkId(device.deviceId);
+  const contextInfo = await routeSharedAudioOutput(preferredOutput.deviceId);
   return Object.freeze({
-    label: device.label.trim() || "Selected audio output",
-    contextInfo: audioContextInfo(context),
+    ...preferredOutput,
+    contextInfo,
   });
 }

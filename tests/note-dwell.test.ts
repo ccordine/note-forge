@@ -265,6 +265,27 @@ describe("sample-authoritative note dwell", () => {
     });
   });
 
+  it.each([
+    [-11, false],
+    [-9, true],
+    [9, true],
+    [11, false],
+  ] as const)("applies a configured ±10-cent boundary to a signed %d-cent pitch", (cents, accepted) => {
+    const state = updateNoteDwell(
+      createNoteDwell({
+        targetMidi: 60,
+        toleranceCents: 10,
+        requiredHoldSeconds: 1,
+      }),
+      observation(WINDOW_SIZE, {
+        midiFloat: 60 + cents / 100,
+      }),
+    );
+
+    expect(state.currentCentsFromTarget).toBeCloseTo(cents, 10);
+    expect(state.currentInTolerance).toBe(accepted);
+  });
+
   it("latches achievement while wrong pitch resets current dwell and preserves its exact peak", () => {
     let state = feed(controller(0.02), [
       observation(WINDOW_SIZE),

@@ -1,4 +1,5 @@
 import { Select } from "@/ui/Controls";
+import { ACCEPTANCE_TOLERANCE_CENTS_OPTIONS } from "@/state/user-preferences-settings";
 import {
   RANGE_FAMILIES,
   type FamilyNoteSet,
@@ -6,7 +7,6 @@ import {
 } from "./model";
 import {
   RANGE_LOOP_HOLD_OPTIONS,
-  RANGE_LOOP_TOLERANCE_OPTIONS,
   type RangeLoopOrder,
 } from "./range-loop-session";
 import type { RangeLoopSession } from "./use-range-loop-session";
@@ -87,7 +87,7 @@ export function RangeLoopSettings({ session }: { readonly session: SettingsProps
           disabled={!session.hydrated}
           onChange={(event) => session.changeTolerance(Number(event.target.value))}
         >
-          {RANGE_LOOP_TOLERANCE_OPTIONS.map((cents) => (
+          {ACCEPTANCE_TOLERANCE_CENTS_OPTIONS.map((cents) => (
             <option value={cents} key={cents}>±{cents} cents</option>
           ))}
         </Select>

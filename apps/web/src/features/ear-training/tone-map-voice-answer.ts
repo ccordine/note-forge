@@ -6,11 +6,11 @@ import {
 } from "@/realtime/observation-continuity";
 import {
   createNoteDwell,
+  reconfigureNoteDwellTolerance,
   updateNoteDwell,
   type NoteDwellState,
 } from "@/features/training-session/note-dwell";
 
-export const TONE_MAP_VOICE_TOLERANCE_CENTS = 20;
 export const TONE_MAP_VOICE_HOLD_SECONDS = 0.25;
 
 export type ToneMapVoiceAnswerStatus =
@@ -24,11 +24,13 @@ export interface ToneMapVoiceTrialContext {
   readonly active: boolean;
   readonly answered: boolean;
   readonly promptPlaying: boolean;
+  readonly toleranceCents: number;
 }
 
 export interface ToneMapVoiceAnswerState {
   readonly trialOrdinal: number | null;
   readonly promptPlaying: boolean;
+  readonly toleranceCents: number;
   readonly status: ToneMapVoiceAnswerStatus;
   /** Exact observation that caused the current semantic status, if any. */
   readonly statusAuthority: Readonly<ObservationSampleAuthority> | null;
@@ -43,23 +45,22 @@ export interface ToneMapVoiceAnswerSnapshot {
   readonly statusAuthority: Readonly<ObservationSampleAuthority> | null;
 }
 
-const INACTIVE_STATE: ToneMapVoiceAnswerState = Object.freeze({
-  trialOrdinal: null,
-  promptPlaying: false,
-  status: "inactive",
-  statusAuthority: null,
-  dwell: null,
-  lastSeenAuthority: null,
-});
+function requireTolerance(toleranceCents: number): void {
+  if (!Number.isFinite(toleranceCents) || toleranceCents <= 0 || toleranceCents > 100) {
+    throw new RangeError("Tone Map voice tolerance must be greater than zero and no greater than 100 cents.");
+  }
+}
 
 function awaitingRelease(
   trialOrdinal: number,
   promptPlaying: boolean,
+  toleranceCents: number,
   lastSeenAuthority: Readonly<ObservationSampleAuthority> | null,
 ): ToneMapVoiceAnswerState {
   return Object.freeze({
     trialOrdinal,
     promptPlaying,
+    toleranceCents,
     status: "awaiting-release",
     statusAuthority: null,
     dwell: null,
@@ -77,13 +78,27 @@ function inactive(
     && state.dwell === null
   ) return state as ToneMapVoiceAnswerState;
   return Object.freeze({
-    ...INACTIVE_STATE,
+    trialOrdinal: null,
+    promptPlaying: false,
+    toleranceCents: state.toleranceCents,
+    status: "inactive",
+    statusAuthority: null,
+    dwell: null,
     lastSeenAuthority: state.lastSeenAuthority,
   });
 }
 
-export function createToneMapVoiceAnswerState(): ToneMapVoiceAnswerState {
-  return INACTIVE_STATE;
+export function createToneMapVoiceAnswerState(toleranceCents: number): ToneMapVoiceAnswerState {
+  requireTolerance(toleranceCents);
+  return Object.freeze({
+    trialOrdinal: null,
+    promptPlaying: false,
+    toleranceCents,
+    status: "inactive",
+    statusAuthority: null,
+    dwell: null,
+    lastSeenAuthority: null,
+  });
 }
 
 /**
@@ -95,31 +110,53 @@ export function configureToneMapVoiceAnswer(
   state: Readonly<ToneMapVoiceAnswerState>,
   context: Readonly<ToneMapVoiceTrialContext>,
 ): ToneMapVoiceAnswerState {
-  if (!context.active || context.answered) return inactive(state);
-  if (state.trialOrdinal !== context.trialOrdinal) {
+  requireTolerance(context.toleranceCents);
+  const configured = state.toleranceCents === context.toleranceCents
+    ? state
+    : Object.freeze({
+        ...state,
+        toleranceCents: context.toleranceCents,
+        dwell: state.dwell === null
+          ? null
+          : reconfigureNoteDwellTolerance(state.dwell, context.toleranceCents),
+      });
+  if (!context.active || context.answered) return inactive(configured);
+  if (configured.trialOrdinal !== context.trialOrdinal) {
     return awaitingRelease(
       context.trialOrdinal,
       context.promptPlaying,
-      state.lastSeenAuthority,
+      context.toleranceCents,
+      configured.lastSeenAuthority,
     );
   }
   if (context.promptPlaying) {
-    if (state.promptPlaying && state.status === "awaiting-release") return state as ToneMapVoiceAnswerState;
-    return awaitingRelease(context.trialOrdinal, true, state.lastSeenAuthority);
+    if (configured.promptPlaying && configured.status === "awaiting-release") return configured as ToneMapVoiceAnswerState;
+    return awaitingRelease(
+      context.trialOrdinal,
+      true,
+      context.toleranceCents,
+      configured.lastSeenAuthority,
+    );
   }
-  if (state.promptPlaying) {
-    return awaitingRelease(context.trialOrdinal, false, state.lastSeenAuthority);
+  if (configured.promptPlaying) {
+    return awaitingRelease(
+      context.trialOrdinal,
+      false,
+      context.toleranceCents,
+      configured.lastSeenAuthority,
+    );
   }
-  return state as ToneMapVoiceAnswerState;
+  return configured as ToneMapVoiceAnswerState;
 }
 
 function newDwell(
   midi: number,
+  toleranceCents: number,
   observation: Readonly<PitchObservation>,
 ): NoteDwellState {
   return updateNoteDwell(createNoteDwell({
     targetMidi: midi,
-    toleranceCents: TONE_MAP_VOICE_TOLERANCE_CENTS,
+    toleranceCents,
     requiredHoldSeconds: TONE_MAP_VOICE_HOLD_SECONDS,
   }), observation);
 }
@@ -161,7 +198,7 @@ export function observeToneMapVoiceAnswer(
   let dwell = state.dwell;
   if (dwell === null) {
     if (midi === null) return Object.freeze({ ...state, lastSeenAuthority });
-    dwell = newDwell(midi, observation);
+    dwell = newDwell(midi, state.toleranceCents, observation);
   } else {
     const updated = updateNoteDwell(dwell, observation);
     if (updated === dwell) return Object.freeze({ ...state, lastSeenAuthority });
@@ -171,7 +208,7 @@ export function observeToneMapVoiceAnswer(
       && dwell.currentInTolerance === false
       && midi !== dwell.targetMidi
     ) {
-      dwell = newDwell(midi, observation);
+      dwell = newDwell(midi, state.toleranceCents, observation);
     }
   }
 

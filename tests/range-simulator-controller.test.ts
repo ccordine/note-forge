@@ -108,6 +108,44 @@ describe("Range Simulator sample-coordinate controller", () => {
     expect(state.dwell.heldSamples).toBe(0);
   });
 
+  it("applies shared tolerance changes live without replacing retained dwell evidence", () => {
+    let state = reduceRangeSimulatorController(controller(), {
+      type: "begin",
+      toleranceCents: 20,
+    });
+    state = reduceRangeSimulatorController(state, {
+      type: "observation",
+      observation: observation(0, { midiFloat: 48.15 }),
+    });
+    state = reduceRangeSimulatorController(state, {
+      type: "observation",
+      observation: observation(1, { midiFloat: 48.15 }),
+    });
+    expect(state.dwell.heldSamples).toBe(HOP_SIZE);
+
+    state = reduceRangeSimulatorController(state, {
+      type: "reconfigure-tolerance",
+      toleranceCents: 10,
+    });
+    expect(state.dwell).toMatchObject({
+      toleranceCents: 10,
+      heldSamples: HOP_SIZE,
+      peakHeldSamples: HOP_SIZE,
+      currentInTolerance: null,
+      previousFrameQualified: false,
+    });
+
+    state = reduceRangeSimulatorController(state, {
+      type: "observation",
+      observation: observation(2, { midiFloat: 48.15 }),
+    });
+    expect(state.dwell).toMatchObject({
+      heldSamples: 0,
+      peakHeldSamples: HOP_SIZE,
+      currentInTolerance: false,
+    });
+  });
+
   it("advances the adaptive model only after sample-authoritative dwell and a user rating", () => {
     let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
     for (let index = 0; index <= 75; index += 1) {

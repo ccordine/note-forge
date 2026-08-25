@@ -300,9 +300,10 @@ export async function waitForMonitoringSetting(session, expected) {
   let latest = null;
   while (Date.now() < deadline) {
     latest = await monitoringSetting(session);
-    if (latest?.version === 1
+    if (latest?.version === 2
       && latest.enabled === expected.enabled
-      && latest.level === expected.level) return latest;
+      && latest.level === expected.level
+      && (latest.preferredOutput === null || latest.preferredOutput === undefined)) return latest;
     await delay(80);
   }
   throw new Error(`Monitoring setting did not persist ${JSON.stringify(expected)}; saw ${JSON.stringify(latest)}.`);

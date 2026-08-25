@@ -112,6 +112,15 @@ function MobileNavigationDialog({ open, onDismiss, route, returnFocusRef }: {
   );
 }
 
+function settingsPersistenceLabel(state: "loading" | "saving" | "saved" | "error"): string {
+  switch (state) {
+    case "loading": return "Restoring NoteForge preferences…";
+    case "saving": return "Saving NoteForge preferences…";
+    case "saved": return "NoteForge preferences saved on this device.";
+    case "error": return "NoteForge preferences are active for this visit only.";
+  }
+}
+
 function SettingsDialog({ onDismiss, returnFocusRef }: {
   onDismiss: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
@@ -121,6 +130,8 @@ function SettingsDialog({ onDismiss, returnFocusRef }: {
     setRemotePitchDiagnosticsEnabled,
     toleranceCents,
     setToleranceCents,
+    preferencesReady,
+    preferencesPersistenceState,
   } = useUserPreferences();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   useEffect(() => {
@@ -138,10 +149,31 @@ function SettingsDialog({ onDismiss, returnFocusRef }: {
       }}
       onMouseDown={(event) => event.target === event.currentTarget && close()}
     >
-      <section className="settings-drawer">
+      <section
+        className="settings-drawer"
+        data-settings-persistence={preferencesPersistenceState}
+        data-settings-ready={preferencesReady ? "true" : "false"}
+      >
         <div className="drawer-header"><div><span>Instrument</span><h2 id="settings-title">NoteForge settings</h2></div><button onClick={close} aria-label="Close settings">×</button></div>
         <AudioSettings />
-        <label className="settings-block"><span>Pitch tolerance <b>±{toleranceCents} cents</b></span><input type="range" min="5" max="50" step="5" value={toleranceCents} onChange={(event) => setToleranceCents(Number(event.target.value))} /><small>Beginner 35¢ · Developing 20¢ · Precise 10¢</small></label>
+        <label className="settings-block">
+          <span>Practice acceptance tolerance <b>±{toleranceCents} cents</b></span>
+          <input
+            data-settings-tolerance
+            type="range"
+            min="5"
+            max="50"
+            step="5"
+            value={toleranceCents}
+            onChange={(event) => setToleranceCents(Number(event.target.value))}
+          />
+          <small>
+            Updates active Practice lanes immediately · Beginner 35¢ · Developing 20¢ · Precise 10¢
+          </small>
+        </label>
+        <p className="settings-persistence-status" role="status" aria-live="polite">
+          {settingsPersistenceLabel(preferencesPersistenceState)}
+        </p>
         <label className="settings-block diagnostic-consent"><span>Share derived pitch diagnostics <b>{remotePitchDiagnosticsEnabled ? "ON" : "OFF"}</b></span><input data-remote-pitch-diagnostics-toggle type="checkbox" checked={remotePitchDiagnosticsEnabled} onChange={(event) => setRemotePitchDiagnosticsEnabled(event.target.checked)} /><small>Explicit troubleshooting opt-in. Sends bounded detector/sample facts to this NoteForge server; never microphone PCM or exercise targets.</small></label>
         <div className="privacy-note"><Icon name="record" size={18} /><span><b>Recording is separately opt-in.</b> Raw microphone audio stays local.</span></div>
       </section>

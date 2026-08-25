@@ -9,6 +9,11 @@ const sources = {
   control: read("apps/web/src/features/pitch-control/PitchControl.tsx"),
   hum: read("apps/web/src/features/hum-lab/HumLab.tsx"),
 };
+const takeConfigurations = {
+  mirror: sources.mirror,
+  control: read("apps/web/src/features/pitch-control/pitch-control-model.ts"),
+  hum: read("apps/web/src/features/hum-lab/hum-analysis.ts"),
+};
 const runner = read("apps/web/src/features/training-session/use-attempt-runner.ts");
 const runnerModel = read("apps/web/src/features/training-session/attempt-runner.ts");
 const effectScope = read("apps/web/src/features/training-session/use-session-effect-scope.ts");
@@ -64,11 +69,26 @@ describe("non-Arcade live trainer architecture", () => {
     expect(sources.control).toMatch(/useEffect\(\(\) => \{[\s\S]*?resetAttempt\(\)[\s\S]*?\}, \[envelopeType, resetAttempt\]\);/);
   });
 
-  it("renders and scores from one frozen tolerance for the whole active attempt", () => {
+  it("routes the one live acceptance tolerance through active presentation and final scoring", () => {
     for (const [name, source] of Object.entries(sources)) {
-      expect(source, name).toMatch(/const activeToleranceCents = attemptConfiguration\?\.toleranceCents \?\? toleranceCents;/);
-      expect(source, name).toMatch(/<NoteInput[\s\S]*?toleranceCents=\{activeToleranceCents\}/);
-      expect(source, name).not.toContain("toleranceCents={toleranceCents}");
+      expect(source, name).not.toMatch(/attemptConfiguration\?\.toleranceCents|activeToleranceCents/);
+      expect(source, name).toMatch(/<NoteInput[\s\S]*?toleranceCents=\{toleranceCents\}/);
+      expect(source, name).toMatch(/<PitchRibbon[\s\S]*?toleranceCents=\{toleranceCents\}/);
+      expect(source, name).toMatch(/score(?:Mirror|Hum|Control)Take\(completed, toleranceCents\)/);
+      const toleranceSetter = source.match(
+        /<Select label="Tolerance"[\s\S]*?onChange=\{([^}]*)\}/,
+      )?.[1] ?? "";
+      if (toleranceSetter) {
+        expect(toleranceSetter, name).toContain("setToleranceCents");
+        expect(toleranceSetter, name).not.toMatch(/reset|clear|finish|begin/i);
+      }
+    }
+    for (const [name, source] of Object.entries(takeConfigurations)) {
+      expect(source, name).not.toMatch(/interface \w+TakeConfiguration \{[\s\S]*?readonly toleranceCents/);
+    }
+    for (const name of ["mirror", "hum"] as const) {
+      expect(sources[name]).toContain("ACCEPTANCE_TOLERANCE_CENTS_OPTIONS.map");
+      expect(sources[name]).not.toMatch(/const (?:TOLERANCES|tolerances)\s*=\s*\[/);
     }
     expect(rangeLoopSession).toContain("const activeToleranceCents = dwell.toleranceCents;");
     expect(rangeLoopSession).toContain("toleranceCents: activeToleranceCents");

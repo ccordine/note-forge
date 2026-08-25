@@ -136,7 +136,12 @@ describe("AudioKernel external realtime store", () => {
     kernel.controller.subscribePitch(pitch);
     kernel.controller.subscribeTransport(transport);
 
-    kernel.monitoringController.configure({ version: 1, enabled: true, level: 0.73 });
+    kernel.monitoringController.configure({
+      version: 2,
+      enabled: true,
+      level: 0.73,
+      preferredOutput: null,
+    });
     expect(kernel.monitoringController.getSnapshot()).toMatchObject({ effective: false });
     expect(capture.monitoringCalls.at(-1)).toEqual([false, 0.73]);
     expect(pitch).not.toHaveBeenCalled();
@@ -299,19 +304,25 @@ describe("AudioKernel external realtime store", () => {
     capture.emit(WINDOW + HOP * 3, { frequencyHz: 146.8324 });
     expect(kernel.controller.liveFrame?.endSample).toBe(WINDOW + HOP * 3);
     expect(kernel.controller.getPitchSnapshot().liveFrame?.endSample)
-      .toBe(WINDOW + HOP * 3);
+      .toBe(WINDOW + HOP * 2);
 
     scheduler.currentTime = 80;
-    capture.emit(WINDOW + HOP * 4, { amplitude: 0 });
+    capture.emit(WINDOW + HOP * 4, { frequencyHz: 146.8324 });
     scheduler.currentTime = 100;
-    capture.emit(WINDOW + HOP * 5, { amplitude: 0, discontinuity: true });
+    capture.emit(WINDOW + HOP * 5, { frequencyHz: 146.8324 });
+    expect(kernel.controller.getPitchSnapshot().liveFrame?.endSample)
+      .toBe(WINDOW + HOP * 5);
+    scheduler.currentTime = 120;
+    capture.emit(WINDOW + HOP * 6, { amplitude: 0 });
+    scheduler.currentTime = 140;
+    capture.emit(WINDOW + HOP * 7, { amplitude: 0, discontinuity: true });
 
     expect(published).toEqual([
       { observationKind: "voiced", nearestMidi: 48, endSample: WINDOW, discontinuity: false, pitchTrackingDecision: "accepted-cold-attack" },
       { observationKind: "uncertain", nearestMidi: null, endSample: WINDOW + HOP * 2, discontinuity: false, pitchTrackingDecision: "pending-transition" },
-      { observationKind: "voiced", nearestMidi: 50, endSample: WINDOW + HOP * 3, discontinuity: false, pitchTrackingDecision: "accepted-confirmed-transition" },
-      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 4, discontinuity: false, pitchTrackingDecision: "no-pitch" },
-      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 5, discontinuity: true, pitchTrackingDecision: "no-pitch" },
+      { observationKind: "voiced", nearestMidi: 50, endSample: WINDOW + HOP * 5, discontinuity: false, pitchTrackingDecision: "accepted-confirmed-transition" },
+      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 6, discontinuity: false, pitchTrackingDecision: "no-pitch" },
+      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 7, discontinuity: true, pitchTrackingDecision: "no-pitch" },
     ]);
     kernel.destroy();
   });

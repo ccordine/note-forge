@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useSustainedNote,
   type SustainedNoteControl,
@@ -103,7 +110,8 @@ export function useRangeLoopSession(): RangeLoopSession {
     toleranceCents: preferenceToleranceCents,
     setToleranceCents,
   } = useUserPreferences();
-  const [initialToleranceCents] = useState(() => preferenceToleranceCents);
+  const preferenceToleranceRef = useRef(preferenceToleranceCents);
+  preferenceToleranceRef.current = preferenceToleranceCents;
   const [activeFamilyId, setActiveFamilyId] = useState<RangeFamilyId>("low");
   const [noteSet, setNoteSet] = useState<FamilyNoteSet>("natural");
   const [order, setOrder] = useState<RangeLoopOrder>("ascending");
@@ -125,7 +133,7 @@ export function useRangeLoopSession(): RangeLoopSession {
   );
   const dwellSession = useRealtimeSession(
     reduceNoteDwell,
-    () => createDwell(DEFAULT_BASELINE_MIDI, initialToleranceCents, 3),
+    () => createDwell(DEFAULT_BASELINE_MIDI, preferenceToleranceCents, 3),
   );
   const dwell = dwellSession.state;
   const activeToleranceCents = dwell.toleranceCents;
@@ -150,6 +158,13 @@ export function useRangeLoopSession(): RangeLoopSession {
     dwellSession.dispatch({ type: "replace", state: next });
   }, [dwellSession.dispatch]);
 
+  useLayoutEffect(() => {
+    dwellSession.dispatch({
+      type: "reconfigure-tolerance",
+      toleranceCents: preferenceToleranceCents,
+    });
+  }, [dwellSession.dispatch, preferenceToleranceCents]);
+
   const prepareTarget = useCallback((nextTarget: number) => {
     setTargetMidi(nextTarget);
     replaceDwell(createDwell(nextTarget, activeToleranceCents, holdSeconds));
@@ -169,7 +184,6 @@ export function useRangeLoopSession(): RangeLoopSession {
         stored,
         storedProfile,
         handoffMidi,
-        initialToleranceCents,
         new Date().toISOString(),
       );
       setProfile(next.profile);
@@ -178,11 +192,14 @@ export function useRangeLoopSession(): RangeLoopSession {
       setNoteSet(next.noteSet);
       setOrder(next.order);
       setHoldSeconds(next.holdSeconds);
-      setToleranceCents(next.toleranceCents);
       setTargetMidi(next.targetMidi);
       setSelectedMidi(next.targetMidi);
       setCentsOffset(0);
-      replaceDwell(createDwell(next.targetMidi, next.toleranceCents, next.holdSeconds));
+      replaceDwell(createDwell(
+        next.targetMidi,
+        preferenceToleranceRef.current,
+        next.holdSeconds,
+      ));
       setStorageReady(loopRead && profileRead);
       setPersistenceState(loopRead && profileRead ? "saved" : "error");
       setHydrated(true);
@@ -191,11 +208,9 @@ export function useRangeLoopSession(): RangeLoopSession {
     return () => persistence.dispose();
   }, [
     persistence,
-    initialToleranceCents,
     replaceDwell,
     setCentsOffset,
     setSelectedMidi,
-    setToleranceCents,
   ]);
 
   useEffect(() => {
@@ -205,7 +220,6 @@ export function useRangeLoopSession(): RangeLoopSession {
       noteSet,
       order,
       holdSeconds,
-      toleranceCents: activeToleranceCents,
       targetMidi,
       progress,
     };
@@ -215,7 +229,6 @@ export function useRangeLoopSession(): RangeLoopSession {
     ], setPersistenceState);
   }, [
     activeFamilyId,
-    activeToleranceCents,
     holdSeconds,
     hydrated,
     noteSet,
@@ -295,7 +308,10 @@ export function useRangeLoopSession(): RangeLoopSession {
 
   const changeTolerance = (nextTolerance: number) => {
     setToleranceCents(nextTolerance);
-    replaceDwell(createDwell(targetMidi, nextTolerance, holdSeconds));
+    dwellSession.dispatch({
+      type: "reconfigure-tolerance",
+      toleranceCents: nextTolerance,
+    });
   };
 
   const advanceTarget = () => {

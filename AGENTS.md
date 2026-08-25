@@ -81,12 +81,16 @@ type PitchObservation = {
 
 The shared temporal tracker is the only authority between an independently
 estimated detector candidate and musical pitch state. Fine motion up to 45 cents
-and a cold attack are immediate. A single remote candidate is published on its
-exact window as `uncertain`/`temporally-ambiguous`, with its candidate telemetry
-preserved and no stale previous note displayed; one coherent candidate on the
-next 20 ms hop confirms a real step or fast contour. Silence is immediate. This
-rule is target-, activity-, and score-independent: it rejects physically
-incoherent one-window teleports without making the requested answer sticky.
+and the first cold attack after new sample authority are immediate. A remote
+candidate is published on its exact window as `uncertain`/
+`temporally-ambiguous`, with its candidate telemetry preserved and no stale
+previous note displayed; four coherent 20 ms windows confirm a real step or
+fast contour. Ordinary silence is immediate and never clears the prior pitch as
+an internal continuity reference, so one- or two-frame false re-entry candidates
+cannot bypass confirmation as cold attacks. An actual sample-authority boundary
+does clear that reference. This rule is target-, activity-, and score-independent:
+it rejects physically incoherent transients without making the requested answer
+sticky.
 
 The pure `LiveNote` reducer derives the current nearest note, continuous F0,
 entry sample, held samples/seconds, and stability from that stream. Sustain,
@@ -190,6 +194,37 @@ one microphone source node -|
 - React subscribes to the slow monitoring preference/effective snapshot only.
   Detector observations do not publish monitoring state, and monitoring never
   becomes another RMS or pitch meter.
+
+## Global settings authority
+
+A control shown in **NoteForge settings** is a real persisted setting, not a
+component-local decoration. Each setting has one versioned storage authority,
+one validated runtime value, a visible load/save/error state, and real reload
+coverage. A feature may consume that authority; it may not copy it into private
+route storage, attempt configuration, hydration defaults, or an effect-owned
+shadow state.
+
+- Practice acceptance tolerance has one global live value: 5–50 cents in
+  five-cent steps. Range Loop, Range Simulator, Pitch Match, Pitch Tunnel, Hum,
+  Pitch Control, and Tone Map voice consume it directly. Arcade-authored lane
+  widths are game rules and must be labeled separately, never silently treated
+  as this preference.
+- Changing tolerance reconfigures every mounted Practice consumer immediately.
+  It may not Start, Finish, Stop, reset, clear, replace, or discard a live trace,
+  dwell, stream, worklet, or already retained evidence. The next sample is
+  classified under the new boundary; final scoring uses the current boundary.
+- Monitoring On/Off, monitor level, and the preferred shared-context audio
+  output are persisted audio-environment settings. A saved sink is restored
+  only where the browser supports user-mediated output routing; an unavailable
+  sink falls back visibly to System default without creating another context.
+- Remote derived-diagnostic consent is persisted but remains Off by default.
+  Hydration applies it to the one diagnostic transport; disabling it clears the
+  queue. No route may own a competing consent flag.
+- A browser acceptance proof must mutate tolerance while the same active
+  microphone stream and Practice session remain mounted, demonstrate a pitch
+  rejected by the narrower lane becoming accepted by the wider lane, and then
+  demonstrate the widened value after a true reload. A React-state assertion or
+  storage-only unit test is not sufficient proof.
 
 ## Sample authority and diagnostic boundaries
 
@@ -1046,6 +1081,49 @@ measurements. Re-profile before changing that decision.
   AudioWorklet `1645c857a4ae…`. This establishes the deployed software graph
   and continuity. It does not claim a physical microphone-to-ear latency;
   measuring that still requires an external loopback path.
+
+## Settings and pitch-authority release evidence — 2026-08-25
+
+- Physical derived-diagnostic events did reach the server under sessions
+  `5098a62fb295489199c0be59b9e81b73` and
+  `3c1be440c3474aea88b840b7ff9608f6`. Their PCM/sample counters remained
+  continuous while the admitted pitch included false low candidates near
+  58.9, 76.9, 55.2, and 56.9 Hz lasting only one or two detector windows. This
+  established a temporal pitch-authority defect, not a capture stop and not a
+  reason to weaken Range Loop scoring.
+- The target-independent tracker now requires four coherent 20 ms remote
+  candidates to replace established pitch, including after ordinary silence.
+  Silence remains immediately unvoiced and displays no stale note; it retains
+  the prior pitch only as an internal continuity reference. Persistent real
+  changes still become authoritative, while the logged one/two-window plunge
+  shape remains uncertain and cannot reset shared dwell.
+- Diagnostic schema 5 sends the estimator-selected candidate, original raw YIN
+  candidate, harmonic ambiguity, and tracking admission decision with exact
+  sample identity. The transport retains up to 4,096 derived events and drains
+  a full backlog at the server's sustained cadence instead of dropping most of
+  a 50 Hz run. Exploratory raw candidates outside the admitted 45–1,200 Hz live
+  range are bounded and recorded rather than throwing or invalidating their
+  entire observation. No raw PCM is sent or saved.
+- The built Settings proof persisted ±10 cents across a true reload, admitted
+  generated C3+9 cents, rejected C3+11 cents, and then changed the mounted live
+  session to ±15 cents. The same DOM, oscillator, MediaStream, source, and
+  worklet admitted that unchanged +11-cent signal and grew dwell from 0.08 to
+  0.30 seconds. A second true reload restored ±15. The entire run used one
+  `getUserMedia`, one source, one worklet, and 63 real detector windows.
+- The audio-output proof persisted `audio.monitoring` version 2 with a selected
+  output ID/label, restored its visible label after a true reload with zero
+  audio resources, and applied `setSinkId` only after explicit Enable on the
+  sole shared context/source/worklet. A simulated missing device visibly fell
+  back to System default and persisted `preferredOutput: null`.
+- The noisy built Range Loop proof retained 16.26 seconds of C3 through 13
+  clean/noise/transient/harmonic/dropout stages with zero contradictory C3
+  authorities or hold regressions, then admitted a persistent D3 and earned
+  3.00 seconds on the same stream and NoteInput DOM. The complete frontend
+  suite passed 1,177/1,177 tests across 125 files; typecheck, production build,
+  Go tests, Go vet, and the architecture audit passed. The audit scanned 445
+  source files and 157 JSX components, reached all 246 application modules,
+  and reported zero violations. The service worker `6edd00c68adb` precaches 74
+  production resources built from 332 transformed modules.
 
 ## Working rules
 

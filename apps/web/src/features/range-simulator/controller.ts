@@ -1,6 +1,7 @@
 import type { PitchObservation } from "@/audio/note-input";
 import {
   createNoteDwell,
+  reconfigureNoteDwellTolerance,
   updateNoteDwell,
   type NoteDwellState,
 } from "@/features/training-session/note-dwell";
@@ -44,6 +45,7 @@ export type RangeSimulatorControllerAction =
       readonly toleranceCents: number;
     }
   | { readonly type: "begin"; readonly toleranceCents: number }
+  | { readonly type: "reconfigure-tolerance"; readonly toleranceCents: number }
   | { readonly type: "observation"; readonly observation: Readonly<PitchObservation> }
   | { readonly type: "select-rating"; readonly rating: EffortRating }
   | { readonly type: "set-coordination"; readonly value: boolean }
@@ -225,6 +227,10 @@ export function reduceRangeSimulatorController(
         dwell: createDwellForSession(state.session, action.toleranceCents),
         notice: "Sing the current target. Qualified time comes only from continuous PCM sample coordinates.",
       };
+    case "reconfigure-tolerance": {
+      const dwell = reconfigureNoteDwellTolerance(state.dwell, action.toleranceCents);
+      return dwell === state.dwell ? state as RangeSimulatorControllerState : { ...state, dwell };
+    }
     case "observation": {
       if (state.status !== "tracking") return state as RangeSimulatorControllerState;
       const dwell = updateNoteDwell(state.dwell, action.observation);

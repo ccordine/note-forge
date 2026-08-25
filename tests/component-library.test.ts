@@ -171,6 +171,26 @@ describe("first-party coached-workflow component contracts", () => {
     expect(sharp).toMatchObject({ guidanceTone: "sharp", errorCents: expect.closeTo(35, 6), inBand: false });
   });
 
+  it.each([
+    [-11, false],
+    [-9, true],
+    [9, true],
+    [11, false],
+  ] as const)("renders a signed %d-cent pitch against the configured ±10-cent lane", (cents, accepted) => {
+    const view = createVoiceCoachView({
+      inputState: "running",
+      targetMidi: 48,
+      toleranceCents: 10,
+      phase: "listening",
+      frame: frame(48 + cents / 100),
+      hold: waitingHold,
+    });
+
+    expect(view.errorCents).toBeCloseTo(cents, 10);
+    expect(view.inBand).toBe(accepted);
+    expect(view.guidanceTone).toBe(accepted ? "locked" : cents < 0 ? "flat" : "sharp");
+  });
+
   it("does not present a fabricated live measurement while input is off or unavailable", () => {
     const off = createVoiceCoachView({
       inputState: "disabled",

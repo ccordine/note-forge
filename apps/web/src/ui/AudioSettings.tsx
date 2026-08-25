@@ -57,12 +57,12 @@ export function AudioSettings() {
         <span><small>Input</small><b>{info?.label?.trim() || (input.state === "running" ? "Default microphone" : "Available after voice is enabled")}</b></span>
       </div>
       <div className="audio-device-row">
-        <span><small>Audio output</small><b>{monitoring.outputLabel}</b></span>
+        <span><small>Audio output</small><b data-audio-output-label>{monitoring.outputLabel}</b></span>
         {monitoring.outputSelectionSupported && (
           <button
             type="button"
             data-audio-output-select
-            disabled={monitoring.outputState === "selecting"}
+            disabled={!monitoring.ready || monitoring.outputState === "selecting"}
             onClick={() => { void monitoring.selectOutput(); }}
           >
             {monitoring.outputState === "selecting" ? "Choosing…" : "Choose output"}

@@ -217,6 +217,37 @@ describe("Pitch Tunnel sample-time engine", () => {
     expect(state.checkpoint?.heldSeconds).toBe(0);
   });
 
+  it("reconfigures the shared lane live without crossing or erasing trace evidence", () => {
+    let state = anchored({ laneHalfWidthCents: 20 });
+    state = observeNext(state, ANCHOR_MIDI + 0.15);
+    expect(state.checkpoint?.heldSeconds).toBeCloseTo(0.02, 12);
+    const checkpoint = state.checkpoint;
+    const totals = state.totals;
+
+    state = reducePitchTunnel(state, {
+      type: "reconfigure-tolerance",
+      toleranceCents: 10,
+    });
+    expect(state).toMatchObject({
+      options: { laneHalfWidthCents: 10 },
+      currentInLane: null,
+      previousReliable: false,
+      previousInLane: false,
+      previousErrorCents: null,
+    });
+    expect(state.checkpoint).toBe(checkpoint);
+    expect(state.totals).toBe(totals);
+
+    state = observeNext(state, ANCHOR_MIDI + 0.15);
+    expect(state.checkpoint).toMatchObject({
+      heldSeconds: 0,
+      trackedSeconds: 0.02,
+      inLaneSeconds: 0.02,
+    });
+    expect(state.totals).toBe(totals);
+    expect(state.currentInLane).toBe(false);
+  });
+
   it("completes all nine checkpoints from exact sample-time dwell", () => {
     let state = anchored();
     while (!state.achievementReached) state = finishCurrentCheckpoint(state);

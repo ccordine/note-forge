@@ -7,7 +7,6 @@ import {
   toneMapVoiceAnswerMidi,
   toneMapVoiceAnswerSnapshot,
   TONE_MAP_VOICE_HOLD_SECONDS,
-  TONE_MAP_VOICE_TOLERANCE_CENTS,
   type ToneMapVoiceAnswerState,
   type ToneMapVoiceTrialContext,
 } from "../apps/web/src/features/ear-training/tone-map-voice-answer";
@@ -60,6 +59,7 @@ function context(overrides: Partial<ToneMapVoiceTrialContext> = {}): ToneMapVoic
     active: true,
     answered: false,
     promptPlaying: false,
+    toleranceCents: 20,
     ...overrides,
   };
 }
@@ -67,7 +67,10 @@ function context(overrides: Partial<ToneMapVoiceTrialContext> = {}): ToneMapVoic
 function configured(
   trial = context(),
 ): ToneMapVoiceAnswerState {
-  return configureToneMapVoiceAnswer(createToneMapVoiceAnswerState(), trial);
+  return configureToneMapVoiceAnswer(
+    createToneMapVoiceAnswerState(trial.toleranceCents),
+    trial,
+  );
 }
 
 function feedVoiced(
@@ -89,7 +92,7 @@ function feedVoiced(
 describe("Tone Map exact voice-answer evidence", () => {
   it("rejects a pre-task frame replayed after the task freshness boundary", () => {
     const oldSilence = observation(WINDOW_SIZE, "unvoiced");
-    let state = observeToneMapVoiceAnswer(createToneMapVoiceAnswerState(), oldSilence);
+    let state = observeToneMapVoiceAnswer(createToneMapVoiceAnswerState(20), oldSilence);
     state = configureToneMapVoiceAnswer(state, context());
 
     state = observeToneMapVoiceAnswer(state, oldSilence);
@@ -185,21 +188,58 @@ describe("Tone Map exact voice-answer evidence", () => {
     expect(toneMapVoiceAnswerMidi(state)).toBeNull();
   });
 
-  it("uses the canonical 20-cent lane and exact 250ms sample-time dwell", () => {
-    expect(TONE_MAP_VOICE_TOLERANCE_CENTS).toBe(20);
+  it("uses the shared acceptance lane and exact 250ms sample-time dwell", () => {
     expect(TONE_MAP_VOICE_HOLD_SECONDS).toBe(0.25);
 
-    let inside = configured();
+    let inside = configured(context({ toleranceCents: 35 }));
     inside = observeToneMapVoiceAnswer(inside, observation(WINDOW_SIZE, "unvoiced"));
-    inside = feedVoiced(inside, WINDOW_SIZE + HOP_SIZE, 14, 48.2);
+    inside = feedVoiced(inside, WINDOW_SIZE + HOP_SIZE, 14, 48.25);
     expect(inside.dwell?.heldSeconds).toBeCloseTo(0.26, 12);
     expect(toneMapVoiceAnswerMidi(inside)).toBe(48);
 
-    let outside = configured();
+    let outside = configured(context({ toleranceCents: 10 }));
     outside = observeToneMapVoiceAnswer(outside, observation(WINDOW_SIZE, "unvoiced"));
-    outside = feedVoiced(outside, WINDOW_SIZE + HOP_SIZE, 100, 48.21);
+    outside = feedVoiced(outside, WINDOW_SIZE + HOP_SIZE, 100, 48.11);
     expect(outside.dwell?.heldSeconds).toBe(0);
     expect(toneMapVoiceAnswerMidi(outside)).toBeNull();
+  });
+
+  it("reconfigures a live lane without erasing retained sample-time evidence", () => {
+    let state = configured(context({ toleranceCents: 35 }));
+    state = observeToneMapVoiceAnswer(state, observation(WINDOW_SIZE, "unvoiced"));
+    state = feedVoiced(state, WINDOW_SIZE + HOP_SIZE, 6, 48.25);
+    expect(state.dwell?.heldSeconds).toBeCloseTo(0.1, 12);
+
+    state = configureToneMapVoiceAnswer(state, context({ toleranceCents: 10 }));
+    expect(state.dwell).toMatchObject({
+      toleranceCents: 10,
+      heldSeconds: 0.1,
+      peakHeldSeconds: 0.1,
+      currentInTolerance: null,
+      previousFrameQualified: false,
+    });
+
+    state = observeToneMapVoiceAnswer(
+      state,
+      observation(WINDOW_SIZE + HOP_SIZE * 7, "voiced", 48.25),
+    );
+    expect(state.dwell).toMatchObject({
+      heldSeconds: 0,
+      peakHeldSeconds: 0.1,
+      currentInTolerance: false,
+    });
+
+    state = configureToneMapVoiceAnswer(state, context({ toleranceCents: 35 }));
+    state = observeToneMapVoiceAnswer(
+      state,
+      observation(WINDOW_SIZE + HOP_SIZE * 8, "voiced", 48.25),
+    );
+    expect(state.dwell?.heldSeconds).toBe(0);
+    state = observeToneMapVoiceAnswer(
+      state,
+      observation(WINDOW_SIZE + HOP_SIZE * 9, "voiced", 48.25),
+    );
+    expect(state.dwell?.heldSeconds).toBeCloseTo(0.02, 12);
   });
 
   it("changes candidate only from a real voiced step and rejects duplicate time credit", () => {

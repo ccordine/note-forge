@@ -178,6 +178,15 @@ func validateFrameDiagnostic(value FrameDiagnostic) error {
 	if !validPitchReason(value.Reason) {
 		return errors.New("unknown pitch reason")
 	}
+	if value.PitchCandidate == nil {
+		return errors.New("pitch candidate telemetry is missing")
+	}
+	if !diagnosticschema.ValidTrackingDecision(value.PitchTrackingDecision) {
+		return errors.New("unknown pitch tracking decision")
+	}
+	if err := validatePitchCandidate(*value.PitchCandidate); err != nil {
+		return fmt.Errorf("pitch candidate: %w", err)
+	}
 	if err := finiteRange("frame RMS", value.RMS, 0, 4); err != nil {
 		return err
 	}
@@ -245,6 +254,83 @@ func validateFrameDiagnostic(value FrameDiagnostic) error {
 		}
 		if value.Brightness != nil || *value.BrightnessConfidence != 0 {
 			return errors.New("unvoiced frame contains brightness evidence")
+		}
+	}
+	switch value.PitchTrackingDecision {
+	case "accepted-cold-attack", "accepted-continuation", "accepted-confirmed-transition":
+		if value.ObservationKind != "voiced" || !value.PitchCandidate.Voiced {
+			return errors.New("an accepted tracking decision must publish its voiced candidate")
+		}
+	case "pending-transition":
+		if value.ObservationKind != "uncertain" || value.Reason != "temporally-ambiguous" || !value.PitchCandidate.Voiced {
+			return errors.New("a pending transition must preserve one withheld voiced candidate")
+		}
+	case "no-pitch":
+		if value.PitchCandidate.Voiced {
+			return errors.New("a no-pitch decision cannot contain a voiced candidate")
+		}
+	}
+	return nil
+}
+
+func validatePitchCandidate(value PitchCandidateDiagnostic) error {
+	if !validPitchReason(value.Reason) || value.Reason == "temporally-ambiguous" {
+		return errors.New("unknown detector candidate reason")
+	}
+	if err := finiteRange("candidate confidence", value.Confidence, 0, 1); err != nil {
+		return err
+	}
+	if err := finiteRange("candidate harmonic ambiguity", value.HarmonicAmbiguity, 0, 1); err != nil {
+		return err
+	}
+	if err := optionalFloat("candidate YIN value", value.YINValue, 0, 10); err != nil {
+		return err
+	}
+	if err := optionalFloat("candidate pitch period", value.PeriodSamples, 1, 1_000_000); err != nil {
+		return err
+	}
+	if value.FrequencyHz != nil && !diagnosticSignalBounds.TransportFrequencyHz.Contains(*value.FrequencyHz) {
+		return errors.New("candidate frequency is outside the live detector transport range")
+	}
+	if err := optionalFloat("candidate continuous MIDI", value.MIDIFloat, 0, 127); err != nil {
+		return err
+	}
+	if value.NearestMIDI != nil && (*value.NearestMIDI < 0 || *value.NearestMIDI > 127) {
+		return errors.New("candidate nearest MIDI is out of range")
+	}
+	if err := optionalFloat("candidate nearest-note cents", value.CentsFromNearest, -100, 100); err != nil {
+		return err
+	}
+	coordinatesPresent := value.FrequencyHz != nil && value.MIDIFloat != nil && value.NearestMIDI != nil && value.CentsFromNearest != nil
+	coordinatesAbsent := value.FrequencyHz == nil && value.MIDIFloat == nil && value.NearestMIDI == nil && value.CentsFromNearest == nil
+	if value.Voiced {
+		if !coordinatesPresent || value.Reason != "detected" {
+			return errors.New("voiced candidate is missing detected pitch coordinates")
+		}
+		midiFromFrequency := 69 + 12*math.Log2(*value.FrequencyHz/440)
+		midiFromNearest := float64(*value.NearestMIDI) + *value.CentsFromNearest/100
+		if math.Abs(midiFromFrequency-*value.MIDIFloat) > diagnosticSignalBounds.MIDITolerance ||
+			math.Abs(*value.CentsFromNearest) > 50+diagnosticSignalBounds.CentsTolerance ||
+			math.Abs(*value.MIDIFloat-midiFromNearest) > diagnosticSignalBounds.CentsTolerance/100 {
+			return errors.New("candidate pitch coordinates disagree")
+		}
+	} else if !coordinatesAbsent || value.Reason == "detected" {
+		return errors.New("unvoiced candidate contains detected pitch coordinates")
+	}
+	if value.RawCandidate != nil {
+		raw := *value.RawCandidate
+		if raw.FrequencyHz <= 0 || raw.FrequencyHz > diagnosticSignalBounds.AnalysisSampleRateHz.Maximum ||
+			math.IsNaN(raw.FrequencyHz) || math.IsInf(raw.FrequencyHz, 0) {
+			return errors.New("raw candidate frequency is outside the finite analysis range")
+		}
+		if err := finiteRange("raw candidate period", raw.PeriodSamples, 1, 1_000_000); err != nil {
+			return err
+		}
+		if err := finiteRange("raw candidate YIN value", raw.YINValue, 0, 10); err != nil {
+			return err
+		}
+		if err := finiteRange("raw candidate confidence", raw.Confidence, 0, 1); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -332,7 +418,7 @@ func validDiagnosticFlow(value string) bool {
 
 func validPitchReason(value string) bool {
 	switch value {
-	case "detected", "below-rms-threshold", "insufficient-samples", "invalid-samples", "no-periodic-candidate", "below-confidence-threshold", "frequency-out-of-range":
+	case "detected", "below-rms-threshold", "insufficient-samples", "invalid-samples", "no-periodic-candidate", "below-confidence-threshold", "temporally-ambiguous", "frequency-out-of-range":
 		return true
 	default:
 		return false

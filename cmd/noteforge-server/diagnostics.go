@@ -61,30 +61,53 @@ type PitchDiagnostic struct {
 }
 
 type FrameDiagnostic struct {
-	ObservationKind      string   `json:"observationKind"`
-	TimeSeconds          *float64 `json:"timeSeconds"`
-	SampleRate           *float64 `json:"sampleRate"`
-	StartSample          *uint64  `json:"startSample"`
-	EndSample            *uint64  `json:"endSample"`
-	ProcessedSampleCount *uint64  `json:"processedSampleCount"`
-	CaptureEpoch         *uint64  `json:"captureEpoch"`
-	ContinuityEpoch      *uint64  `json:"continuityEpoch"`
-	GraphGeneration      *uint64  `json:"graphGeneration"`
-	Discontinuity        *bool    `json:"discontinuity"`
-	WorkletProcessCount  *uint64  `json:"workletProcessCount"`
-	Periodicity          *float64 `json:"periodicity"`
-	Voiced               bool     `json:"voiced"`
-	FrequencyHz          *float64 `json:"frequencyHz"`
-	MIDIFloat            *float64 `json:"midiFloat"`
-	NearestMIDI          *int     `json:"nearestMidi"`
-	CentsFromNearest     *float64 `json:"centsFromNearest"`
-	RMS                  float64  `json:"rms"`
-	Confidence           float64  `json:"confidence"`
-	Brightness           *float64 `json:"brightness"`
-	BrightnessConfidence *float64 `json:"brightnessConfidence"`
-	YINValue             *float64 `json:"yinValue"`
-	PeriodSamples        *float64 `json:"periodSamples"`
-	Reason               string   `json:"reason"`
+	ObservationKind       string                    `json:"observationKind"`
+	TimeSeconds           *float64                  `json:"timeSeconds"`
+	SampleRate            *float64                  `json:"sampleRate"`
+	StartSample           *uint64                   `json:"startSample"`
+	EndSample             *uint64                   `json:"endSample"`
+	ProcessedSampleCount  *uint64                   `json:"processedSampleCount"`
+	CaptureEpoch          *uint64                   `json:"captureEpoch"`
+	ContinuityEpoch       *uint64                   `json:"continuityEpoch"`
+	GraphGeneration       *uint64                   `json:"graphGeneration"`
+	Discontinuity         *bool                     `json:"discontinuity"`
+	WorkletProcessCount   *uint64                   `json:"workletProcessCount"`
+	Periodicity           *float64                  `json:"periodicity"`
+	Voiced                bool                      `json:"voiced"`
+	FrequencyHz           *float64                  `json:"frequencyHz"`
+	MIDIFloat             *float64                  `json:"midiFloat"`
+	NearestMIDI           *int                      `json:"nearestMidi"`
+	CentsFromNearest      *float64                  `json:"centsFromNearest"`
+	RMS                   float64                   `json:"rms"`
+	Confidence            float64                   `json:"confidence"`
+	Brightness            *float64                  `json:"brightness"`
+	BrightnessConfidence  *float64                  `json:"brightnessConfidence"`
+	YINValue              *float64                  `json:"yinValue"`
+	PeriodSamples         *float64                  `json:"periodSamples"`
+	Reason                string                    `json:"reason"`
+	PitchCandidate        *PitchCandidateDiagnostic `json:"pitchCandidate"`
+	PitchTrackingDecision string                    `json:"pitchTrackingDecision"`
+}
+
+type PitchCandidateDiagnostic struct {
+	FrequencyHz       *float64                     `json:"frequencyHz"`
+	MIDIFloat         *float64                     `json:"midiFloat"`
+	NearestMIDI       *int                         `json:"nearestMidi"`
+	CentsFromNearest  *float64                     `json:"centsFromNearest"`
+	Confidence        float64                      `json:"confidence"`
+	YINValue          *float64                     `json:"yinValue"`
+	PeriodSamples     *float64                     `json:"periodSamples"`
+	Voiced            bool                         `json:"voiced"`
+	Reason            string                       `json:"reason"`
+	RawCandidate      *RawPitchCandidateDiagnostic `json:"rawCandidate"`
+	HarmonicAmbiguity float64                      `json:"harmonicAmbiguity"`
+}
+
+type RawPitchCandidateDiagnostic struct {
+	FrequencyHz   float64 `json:"frequencyHz"`
+	PeriodSamples float64 `json:"periodSamples"`
+	YINValue      float64 `json:"yinValue"`
+	Confidence    float64 `json:"confidence"`
 }
 
 type InputDiagnostic struct {

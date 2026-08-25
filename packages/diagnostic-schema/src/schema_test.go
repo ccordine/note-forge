@@ -7,8 +7,8 @@ import (
 
 func TestEmbeddedDiagnosticContract(t *testing.T) {
 	t.Parallel()
-	if got := Version(); got != 4 {
-		t.Fatalf("Version() = %d, want 4", got)
+	if got := Version(); got != 5 {
+		t.Fatalf("Version() = %d, want 5", got)
 	}
 	expectedFlows := []string{"audio-input"}
 	if len(currentSchema.Flows) != len(expectedFlows) {
@@ -40,6 +40,25 @@ func TestEmbeddedDiagnosticContract(t *testing.T) {
 	for _, invalid := range []string{"", "pitch", "VOICED", "low-confidence"} {
 		if ValidObservationKind(invalid) {
 			t.Errorf("ValidObservationKind(%q) = true for an unconfigured kind", invalid)
+		}
+	}
+	expectedTrackingDecisions := []string{
+		"accepted-cold-attack",
+		"accepted-continuation",
+		"accepted-confirmed-transition",
+		"no-pitch",
+		"pending-transition",
+	}
+	if len(currentSchema.TrackingDecisions) != len(expectedTrackingDecisions) {
+		t.Fatalf(
+			"embedded schema has %d tracking decisions, want %d",
+			len(currentSchema.TrackingDecisions),
+			len(expectedTrackingDecisions),
+		)
+	}
+	for _, decision := range expectedTrackingDecisions {
+		if !ValidTrackingDecision(decision) {
+			t.Errorf("ValidTrackingDecision(%q) = false", decision)
 		}
 	}
 

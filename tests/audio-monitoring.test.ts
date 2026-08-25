@@ -16,7 +16,12 @@ describe("global audio monitoring authority", () => {
     const published = vi.fn();
     monitoring.controller.subscribe(published);
 
-    monitoring.controller.configure({ version: 1, enabled: true, level: 0.73 });
+    monitoring.controller.configure({
+      version: 2,
+      enabled: true,
+      level: 0.73,
+      preferredOutput: null,
+    });
     expect(monitoring.controller.getSnapshot()).toMatchObject({
       enabled: true,
       level: 0.73,

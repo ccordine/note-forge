@@ -133,6 +133,7 @@ export interface PitchTunnelMetrics {
 
 export type PitchTunnelAction =
   | { readonly type: "observation"; readonly observation: Readonly<PitchObservation> }
+  | { readonly type: "reconfigure-tolerance"; readonly toleranceCents: number }
   | { readonly type: "start" }
   | { readonly type: "finish" }
   | { readonly type: "reset" };

@@ -170,19 +170,21 @@ describe("Resonance PCM-to-session integration (not browser proof)", () => {
     }
     expect(state.targetDwell.heldSamples).toBeGreaterThan(0);
 
-    const transientWrongNote = detectorObservation(engine, 6, TARGET_MIDI + 3, -60);
-    expect(transientWrongNote).toMatchObject({
-      observationKind: "uncertain",
-      pitchTrackingDecision: "pending-transition",
-      pitchCandidate: { nearestMidi: TARGET_MIDI + 3 },
-    });
-    state = reduceResonanceSession(state, {
-      type: "observation",
-      observation: transientWrongNote,
-    });
-    expect(state.targetDwell.heldSamples).toBeGreaterThan(0);
+    for (let index = 6; index < 9; index += 1) {
+      const transientWrongNote = detectorObservation(engine, index, TARGET_MIDI + 3, -60);
+      expect(transientWrongNote).toMatchObject({
+        observationKind: "uncertain",
+        pitchTrackingDecision: "pending-transition",
+        pitchCandidate: { nearestMidi: TARGET_MIDI + 3 },
+      });
+      state = reduceResonanceSession(state, {
+        type: "observation",
+        observation: transientWrongNote,
+      });
+      expect(state.targetDwell.heldSamples).toBeGreaterThan(0);
+    }
 
-    const persistentWrongNote = detectorObservation(engine, 7, TARGET_MIDI + 3, -60);
+    const persistentWrongNote = detectorObservation(engine, 9, TARGET_MIDI + 3, -60);
     expect(persistentWrongNote).toMatchObject({
       observationKind: "voiced",
       nearestMidi: TARGET_MIDI + 3,

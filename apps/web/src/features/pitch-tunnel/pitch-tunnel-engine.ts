@@ -499,6 +499,28 @@ export function resetPitchTunnel(state: Readonly<PitchTunnelState>): PitchTunnel
   });
 }
 
+/** Preserve the live trace while making the next observation use a new lane. */
+export function reconfigurePitchTunnelTolerance(
+  state: Readonly<PitchTunnelState>,
+  toleranceCents: number,
+): PitchTunnelState {
+  if (state.options.laneHalfWidthCents === toleranceCents) {
+    return state as PitchTunnelState;
+  }
+  const options = resolvePitchTunnelOptions({
+    ...state.options,
+    laneHalfWidthCents: toleranceCents,
+  });
+  return freezeState({
+    ...state,
+    options,
+    currentInLane: null,
+    previousReliable: false,
+    previousInLane: false,
+    previousErrorCents: null,
+  });
+}
+
 export function reducePitchTunnel(
   state: Readonly<PitchTunnelState>,
   action: Readonly<PitchTunnelAction>,
@@ -506,6 +528,8 @@ export function reducePitchTunnel(
   switch (action.type) {
     case "observation":
       return observePitchTunnel(state, action.observation);
+    case "reconfigure-tolerance":
+      return reconfigurePitchTunnelTolerance(state, action.toleranceCents);
     case "start":
       return startPitchTunnel(state);
     case "finish":

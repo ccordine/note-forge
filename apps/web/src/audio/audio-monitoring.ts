@@ -1,9 +1,12 @@
 import type { MicrophoneCapture } from "./microphone";
 import {
   DEFAULT_AUDIO_MONITORING_SETTINGS,
+  preferredAudioOutputSettings,
   type AudioMonitoringSettings,
+  type PreferredAudioOutputSettings,
 } from "./audio-monitoring-settings";
 import {
+  routeSharedAudioOutput,
   selectSharedAudioOutput,
   supportsSharedAudioOutputSelection,
 } from "./audio-output-routing";
@@ -15,6 +18,7 @@ export interface AudioMonitoringSnapshot {
   readonly level: number;
   readonly effective: boolean;
   readonly contextInfo: AudioContextInfo | null;
+  readonly preferredOutput: PreferredAudioOutputSettings | null;
   readonly outputLabel: string;
   readonly outputSelectionSupported: boolean;
   readonly outputState: "idle" | "selecting" | "error";
@@ -22,10 +26,13 @@ export interface AudioMonitoringSnapshot {
 }
 
 type Listener = () => void;
+type PreferredOutputListener = (settings: AudioMonitoringSettings) => void;
 
 export interface AudioMonitoringController {
   readonly getSnapshot: () => AudioMonitoringSnapshot;
+  readonly getSettings: () => AudioMonitoringSettings;
   readonly subscribe: (listener: Listener) => () => void;
+  readonly subscribePreferredOutput: (listener: PreferredOutputListener) => () => void;
   readonly configure: (settings: AudioMonitoringSettings) => void;
   readonly setEnabled: (enabled: boolean) => void;
   readonly setLevel: (level: number) => void;
@@ -35,12 +42,15 @@ export interface AudioMonitoringController {
 /** Slow global audio-environment authority; never runs on detector cadence. */
 export class AudioMonitoring {
   private readonly listeners = new Set<Listener>();
+  private readonly preferredOutputListeners = new Set<PreferredOutputListener>();
   private running = false;
+  private outputOperationRevision = 0;
   private snapshot: AudioMonitoringSnapshot = Object.freeze({
     enabled: DEFAULT_AUDIO_MONITORING_SETTINGS.enabled,
     level: DEFAULT_AUDIO_MONITORING_SETTINGS.level,
     effective: false,
     contextInfo: null,
+    preferredOutput: DEFAULT_AUDIO_MONITORING_SETTINGS.preferredOutput,
     outputLabel: "System default",
     outputSelectionSupported: supportsSharedAudioOutputSelection(),
     outputState: "idle",
@@ -52,7 +62,9 @@ export class AudioMonitoring {
     const monitoring = this;
     this.controller = Object.freeze({
       getSnapshot: monitoring.getSnapshot,
+      getSettings: monitoring.getSettings,
       subscribe: monitoring.subscribe,
+      subscribePreferredOutput: monitoring.subscribePreferredOutput,
       configure: monitoring.configure,
       setEnabled: monitoring.setEnabled,
       setLevel: monitoring.setLevel,
@@ -65,7 +77,19 @@ export class AudioMonitoring {
     for (const listener of this.listeners) listener();
   }
 
-  private apply(enabled: boolean, level: number): void {
+  private publishPreferredOutput(): void {
+    const settings = this.getSettings();
+    for (const listener of this.preferredOutputListeners) listener(settings);
+  }
+
+  private apply(
+    enabled: boolean,
+    level: number,
+    output: Partial<Pick<
+      AudioMonitoringSnapshot,
+      "preferredOutput" | "outputLabel" | "outputState" | "outputError"
+    >> = {},
+  ): void {
     this.capture.setMonitoring(this.running && enabled, level);
     const captureInfo = this.capture.getInfo();
     const contextInfo = captureInfo
@@ -82,17 +106,43 @@ export class AudioMonitoring {
       level,
       effective: this.running && enabled,
       contextInfo,
+      ...output,
     });
   }
 
   readonly getSnapshot = () => this.snapshot;
+  readonly getSettings = (): AudioMonitoringSettings => Object.freeze({
+    version: 2,
+    enabled: this.snapshot.enabled,
+    level: this.snapshot.level,
+    preferredOutput: this.snapshot.preferredOutput,
+  });
   readonly subscribe = (listener: Listener) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+  readonly subscribePreferredOutput = (listener: PreferredOutputListener) => {
+    this.preferredOutputListeners.add(listener);
+    return () => this.preferredOutputListeners.delete(listener);
+  };
 
   readonly configure = (settings: AudioMonitoringSettings): void => {
-    this.apply(settings.enabled, settings.level);
+    this.outputOperationRevision += 1;
+    const preferredOutput = this.snapshot.outputSelectionSupported
+      ? settings.preferredOutput
+      : null;
+    const unsupportedSavedOutput = settings.preferredOutput !== null
+      && preferredOutput === null;
+    this.apply(settings.enabled, settings.level, {
+      preferredOutput,
+      outputLabel: preferredOutput?.label ?? "System default",
+      outputState: unsupportedSavedOutput ? "error" : "idle",
+      outputError: unsupportedSavedOutput
+        ? "The saved audio output is unavailable in this browser. Using System default."
+        : "",
+    });
+    if (unsupportedSavedOutput) this.publishPreferredOutput();
+    if (this.running && preferredOutput) void this.restorePreferredOutput(preferredOutput);
   };
 
   readonly setEnabled = (enabled: boolean): void => {
@@ -107,21 +157,60 @@ export class AudioMonitoring {
   setInputRunning(running: boolean): void {
     this.running = running;
     this.apply(this.snapshot.enabled, this.snapshot.level);
+    if (running && this.snapshot.preferredOutput) {
+      void this.restorePreferredOutput(this.snapshot.preferredOutput);
+    }
+  }
+
+  private async restorePreferredOutput(
+    preferredOutput: PreferredAudioOutputSettings,
+  ): Promise<void> {
+    const revision = ++this.outputOperationRevision;
+    try {
+      const contextInfo = await routeSharedAudioOutput(preferredOutput.deviceId);
+      if (
+        revision !== this.outputOperationRevision
+        || this.snapshot.preferredOutput?.deviceId !== preferredOutput.deviceId
+      ) return;
+      this.publish({
+        ...this.snapshot,
+        outputLabel: preferredOutput.label,
+        contextInfo,
+        outputState: "idle",
+        outputError: "",
+      });
+    } catch {
+      if (revision !== this.outputOperationRevision) return;
+      this.publish({
+        ...this.snapshot,
+        preferredOutput: null,
+        outputLabel: "System default",
+        outputState: "error",
+        outputError: "The saved audio output is no longer available. Using System default.",
+      });
+      this.publishPreferredOutput();
+    }
   }
 
   readonly selectOutput = async (): Promise<void> => {
     if (!this.snapshot.outputSelectionSupported) return;
+    const revision = ++this.outputOperationRevision;
     this.publish({ ...this.snapshot, outputState: "selecting", outputError: "" });
     try {
       const output = await selectSharedAudioOutput();
+      if (revision !== this.outputOperationRevision) return;
+      const preferredOutput = preferredAudioOutputSettings(output.deviceId, output.label);
       this.publish({
         ...this.snapshot,
-        outputLabel: output.label,
+        preferredOutput,
+        outputLabel: preferredOutput?.label ?? "System default",
         contextInfo: output.contextInfo,
         outputState: "idle",
         outputError: "",
       });
+      this.publishPreferredOutput();
     } catch (error) {
+      if (revision !== this.outputOperationRevision) return;
       this.publish({
         ...this.snapshot,
         outputState: "error",

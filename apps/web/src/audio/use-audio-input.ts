@@ -25,7 +25,6 @@ import {
 import {
   AUDIO_MONITORING_STORAGE_KEY,
   normalizeAudioMonitoringSettings,
-  type AudioMonitoringSettings,
 } from "./audio-monitoring-settings";
 import type {
   AudioMonitoringController,
@@ -105,6 +104,12 @@ export function AudioInputProvider({ children }: PropsWithChildren) {
   );
 
   useEffect(() => () => kernel.destroy(), [kernel]);
+  useEffect(() => monitoring.subscribePreferredOutput((settings) => {
+    persistence.save(
+      [{ key: AUDIO_MONITORING_STORAGE_KEY, value: settings }],
+      (state) => publishMonitoringPersistence(Object.freeze({ ready: true, state })),
+    );
+  }), [monitoring, persistence]);
   useEffect(() => {
     void persistence.load().then((stored) => {
       if (!stored) return;
@@ -128,14 +133,8 @@ export function AudioInputProvider({ children }: PropsWithChildren) {
   }, [kernel, monitoring, persistence]);
 
   const saveMonitoring = useCallback(() => {
-    const snapshot = monitoring.getSnapshot();
-    const settings: AudioMonitoringSettings = Object.freeze({
-      version: 1,
-      enabled: snapshot.enabled,
-      level: snapshot.level,
-    });
     persistence.save(
-      [{ key: AUDIO_MONITORING_STORAGE_KEY, value: settings }],
+      [{ key: AUDIO_MONITORING_STORAGE_KEY, value: monitoring.getSettings() }],
       (state) => publishMonitoringPersistence(Object.freeze({ ready: true, state })),
     );
   }, [monitoring, persistence]);

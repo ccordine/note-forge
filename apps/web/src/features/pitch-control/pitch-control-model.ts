@@ -17,7 +17,6 @@ export interface ControlTakeConfiguration {
   readonly midi: number;
   readonly centsOffset: number;
   readonly timbre: Timbre;
-  readonly toleranceCents: number;
   readonly cyclePeriodSeconds: number;
 }
 
@@ -98,6 +97,7 @@ export function pitchControlEnvelopeDisplayLevels(
 
 export function scoreControlTake(
   take: Readonly<CompletedAttempt<ControlTakeConfiguration>>,
+  toleranceCents: number,
 ): ControlResult {
   const configuration = take.configuration;
   const frames = attemptScoringFrames(take);
@@ -111,7 +111,7 @@ export function scoreControlTake(
       amplitude: 0.25,
     },
     {
-      toleranceCents: configuration.toleranceCents,
+      toleranceCents,
       promptTimeSeconds: frames[0]?.timeSeconds,
     },
   );

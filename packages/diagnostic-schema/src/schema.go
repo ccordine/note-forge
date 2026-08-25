@@ -11,10 +11,11 @@ import (
 var encodedSchema []byte
 
 type schemaDocument struct {
-	Version          int             `json:"version"`
-	Flows            map[string]bool `json:"flows"`
-	ObservationKinds map[string]bool `json:"observationKinds"`
-	LiveSignal       liveSignal      `json:"liveSignal"`
+	Version           int             `json:"version"`
+	Flows             map[string]bool `json:"flows"`
+	ObservationKinds  map[string]bool `json:"observationKinds"`
+	TrackingDecisions map[string]bool `json:"trackingDecisions"`
+	LiveSignal        liveSignal      `json:"liveSignal"`
 }
 
 type frequencyBounds struct {
@@ -80,7 +81,7 @@ var currentSchema = func() schemaDocument {
 	if err := json.Unmarshal(encodedSchema, &document); err != nil {
 		panic("invalid embedded diagnostic schema: " + err.Error())
 	}
-	if document.Version <= 0 || len(document.Flows) == 0 || len(document.ObservationKinds) == 0 {
+	if document.Version <= 0 || len(document.Flows) == 0 || len(document.ObservationKinds) == 0 || len(document.TrackingDecisions) == 0 {
 		panic("embedded diagnostic schema is empty")
 	}
 	for flow, enabled := range document.Flows {
@@ -91,6 +92,11 @@ var currentSchema = func() schemaDocument {
 	for kind, enabled := range document.ObservationKinds {
 		if kind == "" || !enabled {
 			panic("embedded diagnostic schema contains an invalid observation kind")
+		}
+	}
+	for decision, enabled := range document.TrackingDecisions {
+		if decision == "" || !enabled {
+			panic("embedded diagnostic schema contains an invalid tracking decision")
 		}
 	}
 	validateLiveSignal(document.LiveSignal)
@@ -145,6 +151,11 @@ func ValidFlow(flow string) bool {
 // ValidObservationKind reports whether kind is part of the shared wire contract.
 func ValidObservationKind(kind string) bool {
 	return currentSchema.ObservationKinds[kind]
+}
+
+// ValidTrackingDecision reports whether decision is part of the shared wire contract.
+func ValidTrackingDecision(decision string) bool {
+	return currentSchema.TrackingDecisions[decision]
 }
 
 // SignalBounds returns the named live diagnostic boundary contract by value.

@@ -262,6 +262,31 @@ describe("sample-authoritative AttemptRunner", () => {
     expect(Math.abs(metrics.driftCentsPerSecond ?? 0)).toBeLessThan(0.1);
   });
 
+  it("scores the whole active trace with the live tolerance chosen at Finish", () => {
+    let state = beginAttempt(
+      { name: "live-tolerance" },
+      "start",
+      { targetMidiFloat: 48 },
+    );
+    for (let index = 0; index < 10; index += 1) {
+      state = advanceAttempt(state, observation(WINDOW + HOP * index, {
+        midiFloat: 48.15,
+        centsFromNearest: 15,
+      }));
+    }
+    const frames = attemptScoringFrames(state);
+    const scoreAt = (toleranceCents: number) => scoreWeightedSustainedNote(
+      state,
+      frames,
+      { midi: 48, centsOffset: 0, timbre: "sine", amplitude: 0.2 },
+      { toleranceCents },
+    );
+
+    expect(state.status).toBe("tracking");
+    expect(scoreAt(10).inToleranceRatio).toBe(0);
+    expect(scoreAt(20).inToleranceRatio).toBe(1);
+  });
+
   it("scores the accumulated envelope instead of overweighting a contrary recent tail", () => {
     let state = beginAttempt(
       { name: "envelope-retention" },

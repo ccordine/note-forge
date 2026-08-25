@@ -14,6 +14,7 @@ import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import type { HumMode } from "@/navigation";
 import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
+import { ACCEPTANCE_TOLERANCE_CENTS_OPTIONS } from "@/state/user-preferences-settings";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import { saveAttempt } from "@/storage/database";
 import { ActionButton, Eyebrow, Panel, Segmented, Select } from "@/ui/Controls";
@@ -41,12 +42,6 @@ const SHAPES: Record<HumShape, { symbol: string; label: string; cue: string }> =
   n: { symbol: "N", label: "Tongue tip", cue: "Use an nnn gesture. Compare the mechanics without changing the intended pitch." },
   ng: { symbol: "NG", label: "Tongue back", cue: "Use the end of “sing.” Keep the target the same while the tract shape changes." },
 };
-
-const TOLERANCES = [
-  { value: "35", label: "Beginner ±35¢" },
-  { value: "20", label: "Developing ±20¢" },
-  { value: "10", label: "Precise ±10¢" },
-];
 
 function Metric({ label, value, unit, tone }: { label: string; value?: number; unit?: string; tone?: string }) {
   const signedUnit = unit === "¢" || unit === "¢/s";
@@ -77,7 +72,7 @@ export function HumLab() {
 
   const completeAttempt = (completed: Readonly<CompletedAttempt<HumTakeConfiguration>>) => {
     const configuration = completed.configuration;
-    const nextResult = scoreHumTake(completed);
+    const nextResult = scoreHumTake(completed, toleranceCents);
     setResult(nextResult);
     if (!nextResult.metrics) {
       setEvidenceError("This trace contained fewer than three voiced observations. PCM still flowed; try another hum when ready.");
@@ -107,7 +102,6 @@ export function HumLab() {
   const attempt = useAttemptRunner<HumTakeConfiguration>({
     scoringProfile: (configuration) => configuration.mode === "anchor" ? null : ({
       targetMidiFloat: configuration.midi + configuration.centsOffset / 100,
-      toleranceCents: configuration.toleranceCents,
       minimumConfidence: 0.5,
       maximumVoicedGapSeconds: 0.24,
     }),
@@ -125,7 +119,6 @@ export function HumLab() {
   const activeMidi = attemptConfiguration?.midi ?? selectedMidi;
   const activeCentsOffset = attemptConfiguration?.centsOffset ?? centsOffset;
   const activeTimbre = attemptConfiguration?.timbre ?? timbre;
-  const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
   const liveFrames = attemptRecentScoringFrames(attempt.state);
   const sessionFrames = attemptScoringFrames(attempt.state);
   const targetMidiFloat = activeMidi + activeCentsOffset / 100;
@@ -142,7 +135,7 @@ export function HumLab() {
   const ribbonFrames = result?.frames ?? liveFrames;
   const metrics = result?.metrics ?? null;
   const anchor = result?.anchor ?? null;
-  const centered = Math.abs(metrics?.medianErrorCents ?? Number.POSITIVE_INFINITY) <= activeToleranceCents;
+  const centered = Math.abs(metrics?.medianErrorCents ?? Number.POSITIVE_INFINITY) <= toleranceCents;
   const resetAttempt = attempt.reset;
 
   useEffect(() => {
@@ -160,7 +153,7 @@ export function HumLab() {
   };
   const begin = () => {
     clearTake();
-    attempt.begin({ mode, shape, midi: selectedMidi, centsOffset, timbre, toleranceCents });
+    attempt.begin({ mode, shape, midi: selectedMidi, centsOffset, timbre });
   };
   const noteInputTarget = activeMode === "anchor" ? undefined : targetMidiFloat;
   let orbLabel = "TARGET";
@@ -213,7 +206,7 @@ export function HumLab() {
           <div className="hum-config-fields">
             <Select label="Target" value={selectedMidi} disabled={mode === "anchor"} onChange={(event) => { clearTake(); setSelectedMidi(Number(event.target.value)); setCentsOffset(0); }}>{Array.from({ length: 36 }, (_, index) => 43 + index).map((midi) => <option value={midi} key={midi}>{noteLabel(midi)}</option>)}</Select>
             <Select label="Timbre" value={timbre} onChange={(event) => { clearTake(); setTimbre(event.target.value as typeof timbre); }}><option>sine</option><option>triangle</option><option>piano</option><option>guitar</option><option>bass</option><option>flute</option><option>voice</option><option>rich synth</option></Select>
-            <Select label="Tolerance" value={toleranceCents} onChange={(event) => { clearTake(); setToleranceCents(Number(event.target.value)); }}>{TOLERANCES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</Select>
+            <Select label="Tolerance" value={toleranceCents} onChange={(event) => setToleranceCents(Number(event.target.value))}>{ACCEPTANCE_TOLERANCE_CENTS_OPTIONS.map((cents) => <option value={cents} key={cents}>±{cents} cents</option>)}</Select>
             <button className="randomize-button" disabled={mode === "anchor"} onClick={() => { clearTake(); setSelectedMidi(45 + Math.floor(Math.random() * 28)); setCentsOffset(0); }}><Icon name="spark" size={16} /> Randomize</button>
           </div>
         </Panel>
@@ -234,7 +227,7 @@ export function HumLab() {
           <div className="hum-orb sounding"><small>{orbLabel}</small><strong>{orbNote}</strong><span>{orbDetail}</span><i>m</i><i>m</i><i>m</i></div>
           <div className="hum-stage-copy"><span>{statusText(attempt.state.status, input.state)}</span><strong>{attempt.state.elapsedSeconds.toFixed(2)} s</strong><small>{SHAPES[activeShape].cue}</small></div>
         </div>
-        <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
+        <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={toleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
         <div className="stage-actions">
           <ActionButton onClick={attempt.finish}>Finish trace</ActionButton>
         </div>
@@ -245,7 +238,7 @@ export function HumLab() {
       <div className="mirror-results-grid hum-results" data-workflow-step="complete">
         <Panel className="metrics-panel">
           <div className="panel-heading"><div><Eyebrow>Hum evidence</Eyebrow><h2>{metricsTitle}</h2></div><span className="attempt-badge">measured</span></div>
-          <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
+          <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={toleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
           <div className="metrics-grid">
             <Metric label={primaryMetricLabel} value={primaryMetricValue} unit="¢" tone="coral" />
             <Metric label={centerMetricLabel} value={centerMetricValue} unit={centerMetricUnit} tone="lime" />
@@ -275,7 +268,7 @@ export function HumLab() {
       {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
       {evidenceError && <div className="error-banner"><strong>No voiced center in this trace.</strong><span>{evidenceError}</span></div>}
 
-      <NoteInput variant="scope" input={input} title="Hum input scope" targetMidiFloat={noteInputTarget} toleranceCents={activeToleranceCents} />
+      <NoteInput variant="scope" input={input} title="Hum input scope" targetMidiFloat={noteInputTarget} toleranceCents={toleranceCents} />
       {(activeMode !== "anchor" || targetPlayback.playing) && <div className="practice-reference-control"><NotePlaybackToggle playback={targetPlayback} label={noteLabel(activeMidi)} /></div>}
       <section className="practice-current-step">{currentStep}</section>
     </div>

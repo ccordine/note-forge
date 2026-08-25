@@ -55,10 +55,18 @@ export interface NoteDwellState {
 
 export type NoteDwellAction =
   | { readonly type: "observation"; readonly observation: Readonly<PitchObservation> }
+  | { readonly type: "reconfigure-tolerance"; readonly toleranceCents: number }
   | { readonly type: "replace"; readonly state: Readonly<NoteDwellState> };
 
 function requireFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
+}
+
+function requireTolerance(toleranceCents: number): void {
+  requireFinite(toleranceCents, "Tolerance");
+  if (toleranceCents <= 0 || toleranceCents > 100) {
+    throw new RangeError("Tolerance must be greater than zero and no greater than 100 cents.");
+  }
 }
 
 function freezeState(state: NoteDwellState): NoteDwellState {
@@ -155,10 +163,7 @@ export function createNoteDwell(
   if (options.targetMidi < 0 || options.targetMidi > 127) {
     throw new RangeError("Target MIDI must be from 0 through 127.");
   }
-  requireFinite(options.toleranceCents, "Tolerance");
-  if (options.toleranceCents <= 0 || options.toleranceCents > 100) {
-    throw new RangeError("Tolerance must be greater than zero and no greater than 100 cents.");
-  }
+  requireTolerance(options.toleranceCents);
   requireFinite(options.requiredHoldSeconds, "Required hold duration");
   if (options.requiredHoldSeconds <= 0) {
     throw new RangeError("Required hold duration must be greater than zero.");
@@ -190,6 +195,27 @@ export function createNoteDwell(
     currentInTolerance: null,
     observedFrameCount: 0,
     lastAuthority: null,
+    previousFrameQualified: false,
+  });
+}
+
+/**
+ * Apply an explicitly chosen lane width without rewriting retained evidence.
+ * The previous frame was classified under the old lane, so it cannot bound a
+ * credited interval under the new one. The next authoritative observation
+ * establishes qualification for the new lane; a following contiguous frame
+ * may then add sample time. Current and peak occupancy remain exact.
+ */
+export function reconfigureNoteDwellTolerance(
+  state: Readonly<NoteDwellState>,
+  toleranceCents: number,
+): NoteDwellState {
+  requireTolerance(toleranceCents);
+  if (state.toleranceCents === toleranceCents) return state as NoteDwellState;
+  return freezeState({
+    ...state,
+    toleranceCents,
+    currentInTolerance: null,
     previousFrameQualified: false,
   });
 }
@@ -253,12 +279,16 @@ export function updateNoteDwell(
   });
 }
 
-/** Reduce realtime observations and explicit target replacement through one owner. */
+/** Reduce realtime observations and explicit configuration through one owner. */
 export function reduceNoteDwell(
   state: Readonly<NoteDwellState>,
   action: Readonly<NoteDwellAction>,
 ): NoteDwellState {
-  return action.type === "observation"
-    ? updateNoteDwell(state, action.observation)
-    : action.state as NoteDwellState;
+  switch (action.type) {
+    case "observation": return updateNoteDwell(state, action.observation);
+    case "reconfigure-tolerance": {
+      return reconfigureNoteDwellTolerance(state, action.toleranceCents);
+    }
+    case "replace": return action.state as NoteDwellState;
+  }
 }

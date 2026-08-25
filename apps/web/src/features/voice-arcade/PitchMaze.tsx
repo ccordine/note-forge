@@ -1,10 +1,12 @@
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone, playToneSequence } from "@/audio/synth";
+import { playToneSequence } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { useSessionEffectScope } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import { resolveArcadeCurriculum } from "./curriculum";
@@ -61,16 +63,6 @@ function compassReference(level: Readonly<PitchMazeLevel>) {
   })));
 }
 
-function directionReference(level: Readonly<PitchMazeLevel>, direction: CardinalDirection) {
-  return playTone({
-    frequencyHz: continuousMidiToHz(level.directionNotes[direction]),
-    duration: 0.32,
-    amplitude: 0.17,
-    timbre: "sine",
-    release: 0.05,
-  });
-}
-
 function MazeBoard({ level }: { readonly level: Readonly<PitchMazeLevel> }) {
   return (
     <section className="pitch-maze-map-panel" aria-label="Pitch Maze map">
@@ -122,11 +114,18 @@ function MazeBoard({ level }: { readonly level: Readonly<PitchMazeLevel> }) {
 interface CompassProps {
   readonly level: Readonly<PitchMazeLevel>;
   readonly activeDirection: CardinalDirection;
+  readonly referenceDirection: CardinalDirection;
   readonly allowReferenceReplay: boolean;
-  readonly onPlayDirection: (direction: CardinalDirection) => void;
+  readonly onSelectReference: (direction: CardinalDirection) => void;
 }
 
-function PitchCompass({ level, activeDirection, allowReferenceReplay, onPlayDirection }: CompassProps) {
+function PitchCompass({
+  level,
+  activeDirection,
+  referenceDirection,
+  allowReferenceReplay,
+  onSelectReference,
+}: CompassProps) {
   const currentCell = getPitchMazeCell(level);
   return (
     <div className="pitch-maze-compass" aria-label="Four-note voice compass">
@@ -135,9 +134,10 @@ function PitchCompass({ level, activeDirection, allowReferenceReplay, onPlayDire
           type="button"
           key={direction}
           className={`pitch-maze-direction ${direction} ${activeDirection === direction ? "active" : ""} ${currentCell.walls[direction] ? "blocked" : "open"}`}
-          aria-label={`${direction}, ${noteLabel(level.directionNotes[direction])}, ${currentCell.walls[direction] ? "wall" : "open"}${allowReferenceReplay ? ", play short reference" : ""}`}
+          aria-label={`${direction}, ${noteLabel(level.directionNotes[direction])}, ${currentCell.walls[direction] ? "wall" : "open"}${allowReferenceReplay ? ", select playback note" : ""}`}
+          aria-pressed={allowReferenceReplay ? referenceDirection === direction : undefined}
           onClick={allowReferenceReplay
-            ? () => onPlayDirection(direction)
+            ? () => onSelectReference(direction)
             : undefined}
         >
           <span>{DIRECTION_GLYPHS[direction]}</span>
@@ -202,7 +202,7 @@ function SetupControls({
       </div>
       <div className="pitch-maze-loadout-actions">
         <ActionButton onClick={onPlayCompass}>
-          <Icon name="headphones" size={17} /> Hear short compass
+          <Icon name="headphones" size={17} /> Play compass
         </ActionButton>
         <ActionButton className="primary wide" disabled={!rangeReady} onClick={onStart}>
           Start Pitch Maze <Icon name="arrow" size={18} />
@@ -315,6 +315,7 @@ export function PitchMaze({
   );
   const session = realtime.state;
   const reference = useSessionEffectScope();
+  const [referenceDirection, setReferenceDirection] = useState<CardinalDirection>("north");
   const curriculum = resolveArcadeCurriculum("maze", curriculumStage);
   const previewLevel = useMemo(() => createPitchMazeLevel({
     seed: "pitch-maze-setup-preview",
@@ -327,17 +328,14 @@ export function PitchMaze({
   const controller = session.controller;
   const activeDirection = controller?.activeDirection ?? session.selectedDirection;
   const activeTargetMidi = displayLevel.directionNotes[activeDirection];
+  const referenceMidi = displayLevel.directionNotes[referenceDirection];
+  const directionPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(referenceMidi),
+    timbre: "sine",
+    amplitude: 0.17,
+  });
   const holdSeconds = controller?.dwell?.heldSeconds ?? 0;
   const input = useAudioInput({
-    diagnostics: {
-      flow: "voice-arcade",
-      phase: session.phase,
-      targetMidi: activeTargetMidi,
-      toleranceCents: displayLevel.config.toleranceCents,
-      stableMs: holdSeconds * 1_000,
-      requiredHoldMs: displayLevel.config.holdDurationSeconds * 1_000,
-      resetReason: null,
-    },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const rangeReady = voiceRange.highMidi - voiceRange.lowMidi >= 3;
@@ -415,7 +413,7 @@ export function PitchMaze({
                 curriculumFocus={curriculum.focus}
                 rangeReady={rangeReady}
                 onMappingChange={(mappingMode) => realtime.dispatch({ type: "set-mapping", mappingMode })}
-                onPlayCompass={() => reference.playReference(
+                onPlayCompass={() => reference.playGesture(
                   "Pitch Maze compass reference",
                   () => compassReference(previewLevel),
                 )}
@@ -428,17 +426,24 @@ export function PitchMaze({
           <section className="pitch-maze-controller-panel" aria-label="Continuous voice controller">
             <div className="pitch-maze-controller-heading">
               <span>ONE LIVE NOTE STREAM · FOUR DIRECTIONS</span>
-              <b>{curriculum.feedback.allowReferenceReplay ? "DIRECTIONS PLAY SHORT REFERENCES" : "REFERENCE LABELS ONLY"}</b>
+              <b>{curriculum.feedback.allowReferenceReplay ? "SELECT DIRECTION · PLAY OR STOP BELOW" : "REFERENCE LABELS ONLY"}</b>
             </div>
             <PitchCompass
               level={displayLevel}
               activeDirection={activeDirection}
+              referenceDirection={referenceDirection}
               allowReferenceReplay={curriculum.feedback.allowReferenceReplay}
-              onPlayDirection={(direction) => reference.playReference(
-                `Pitch Maze ${direction} reference`,
-                () => directionReference(displayLevel, direction),
-              )}
+              onSelectReference={setReferenceDirection}
             />
+            {(curriculum.feedback.allowReferenceReplay || directionPlayback.playing) && (
+              <div className="arcade-persistent-note-control">
+                <NotePlaybackToggle
+                  playback={directionPlayback}
+                  label={`${noteLabel(referenceMidi)} ${referenceDirection}`}
+                />
+                <small>Selected direction · user-owned playback</small>
+              </div>
+            )}
             <NoteInput
               variant="target"
               input={input}
@@ -454,7 +459,6 @@ export function PitchMaze({
                 ? `Hold ${noteLabel(activeTargetMidi)} for ${activeDirection}`
                 : "Sing any displayed direction note"}
               guidanceDetail="Every detector window stays visible. Game commands derive from continuous sample-time occupancy."
-              diagnosticsFlow="voice-arcade"
               feedbackLevel={curriculum.feedback.level}
             />
             <div className={`pitch-maze-command-state ${session.lastCommandResult ?? ""}`} role="status" aria-live="polite">

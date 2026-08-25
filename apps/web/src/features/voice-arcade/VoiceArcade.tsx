@@ -227,16 +227,18 @@ export function VoiceArcade() {
   const activeCurriculum = mode ? resolveArcadeCurriculum(mode, curriculumStage) : null;
   const ActiveGame = activeCopy?.component ?? null;
 
-  // IndexedDB is the authority for range, difficulty, and curriculum. A deep
-  // link must not construct a game from placeholder values and then mutate its
-  // surrounding props after the real settings arrive.
+  // IndexedDB owns the saved vocal profile, difficulty, and curriculum. The
+  // cabinet range begins from that profile, while the two visible range
+  // selectors are deliberately a temporary loadout for this visit. A deep
+  // link must not construct a game from placeholders before those saved
+  // authorities have loaded.
   if (!hydrated) {
     return (
       <div className="page arcade-page" data-arcade-hydration="pending">
         <Panel className="arcade-loadout" role="status" aria-live="polite">
           <Eyebrow>Voice Arcade</Eyebrow>
           <h1>Loading your cabinet settings…</h1>
-          <p>Your saved voice range, control stage, and difficulty are being restored before any game runtime starts.</p>
+          <p>Your saved vocal map, control stage, and difficulty are being restored before any game runtime starts.</p>
         </Panel>
       </div>
     );
@@ -288,7 +290,7 @@ export function VoiceArcade() {
         <div>
           <Eyebrow>Cabinet loadout</Eyebrow>
           <h2>Fit the games to today’s voice.</h2>
-          <p>{notice}</p>
+          <p>{notice} Controller floor and ceiling are temporary for this visit; they never overwrite your saved Vocal Map.</p>
         </div>
         <div className="arcade-difficulty" role="radiogroup" aria-label="Arcade difficulty">
           {(Object.keys(DIFFICULTY_COPY) as ArcadeDifficultyId[]).map((id) => (

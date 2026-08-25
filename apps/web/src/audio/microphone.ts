@@ -1,5 +1,5 @@
 import { ensureAudioReady } from "./audio-context";
-import { NOTE_INPUT_DEFAULTS } from "./note-input";
+import { NOTE_INPUT_DEFAULTS, NOTE_INPUT_SAMPLE_RATE_BOUNDS } from "./note-input";
 
 export interface CapturedSamples {
   readonly samples: Float32Array;
@@ -85,9 +85,14 @@ export function analysisWindowSizes(
   if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
     throw new RangeError("sampleRate must be a finite positive number.");
   }
-  if (sampleRate <= NOTE_INPUT_DEFAULTS.maxFrequency * 2) {
+  if (sampleRate <= NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.exclusiveMinimum) {
     throw new RangeError(
-      `sampleRate must exceed ${NOTE_INPUT_DEFAULTS.maxFrequency * 2} Hz to cover the canonical detector range.`,
+      `sampleRate must exceed ${NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.exclusiveMinimum} Hz to cover the canonical detector range.`,
+    );
+  }
+  if (sampleRate > NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.maximum) {
+    throw new RangeError(
+      `sampleRate must be no greater than ${NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.maximum} Hz.`,
     );
   }
   requirePositiveInteger(requestedWindowSize, "requestedWindowSize");
@@ -340,8 +345,13 @@ export class MicrophoneCapture {
         return;
       }
       const data = event.data;
+      // A message is not a PCM heartbeat merely because it arrived. Only a
+      // strictly newer sample coordinate is new capture evidence. Duplicate or
+      // regressing protocol data stays out of the authoritative stream and lets
+      // the existing heartbeat repair the processing attachment if necessary.
+      if (data.processedSampleCount <= this.processedSampleCount) return;
       this.processCount = Math.max(this.processCount, data.processCount);
-      this.processedSampleCount = Math.max(this.processedSampleCount, data.processedSampleCount);
+      this.processedSampleCount = data.processedSampleCount;
       this.lastPcmProgressAt = nowMilliseconds();
       this.recoveryAttempts = 0;
       this.nextRecoveryAt = 0;

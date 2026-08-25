@@ -1,5 +1,10 @@
 import type { PitchObservation } from "@/audio/note-input";
-import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "@/audio/microphone";
+import { clamp } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import type { SongLaneAnalysis, SongTargetLane } from "./song-lane-types";
 
 export interface LoadedSongTrack {
@@ -15,15 +20,6 @@ export interface SongLaneMetrics {
   absoluteErrorCentSeconds: number;
 }
 
-interface ObservationAuthority {
-  readonly sampleRate: number;
-  readonly startSample: number;
-  readonly graphGeneration: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly endSample: number;
-}
-
 export interface SongScoreRuntime {
   readonly laneMetrics: Map<string, SongLaneMetrics>;
   readonly settledLaneIds: Set<string>;
@@ -33,7 +29,7 @@ export interface SongScoreRuntime {
   combo: number;
   bestCombo: number;
   nextLaneToSettle: number;
-  authority: ObservationAuthority | null;
+  authority: ObservationSampleAuthority | null;
 }
 
 export interface SongHud {
@@ -220,10 +216,6 @@ export function createSongScoreRuntime(): SongScoreRuntime {
   };
 }
 
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
 export function songLaneAtTime(
   lanes: readonly SongTargetLane[],
   timeSeconds: number,
@@ -244,32 +236,9 @@ function creditedObservationSeconds(
   runtime: SongScoreRuntime,
   observation: Readonly<PitchObservation>,
 ): number {
-  const previous = runtime.authority;
-  runtime.authority = {
-    sampleRate: observation.sampleRate,
-    startSample: observation.startSample,
-    graphGeneration: observation.graphGeneration,
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    endSample: observation.endSample,
-  };
-  if (
-    observation.discontinuity
-    || !previous
-    || previous.sampleRate !== observation.sampleRate
-    || previous.graphGeneration !== observation.graphGeneration
-    || previous.captureEpoch !== observation.captureEpoch
-    || previous.continuityEpoch !== observation.continuityEpoch
-  ) return 0;
-  const advancedSamples = observation.endSample - previous.endSample;
-  const previousWindow = previous.endSample - previous.startSample;
-  const currentWindow = observation.endSample - observation.startSample;
-  const expectedHop = Math.round(observation.sampleRate * MICROPHONE_ANALYSIS_HOP_SECONDS);
-  const isNextOverlappingWindow = advancedSamples === expectedHop
-    && previousWindow === currentWindow
-    && observation.startSample - previous.startSample === advancedSamples
-    && advancedSamples < currentWindow;
-  return isNextOverlappingWindow ? advancedSamples / observation.sampleRate : 0;
+  const continuity = observationContinuity(runtime.authority, observation);
+  if (continuity.accepted) runtime.authority = continuity.authority;
+  return continuity.deltaSeconds;
 }
 
 /**
@@ -280,7 +249,6 @@ export function observeSongLane(
   runtime: SongScoreRuntime,
   lane: Readonly<SongTargetLane> | null,
   observation: Readonly<PitchObservation>,
-  minimumConfidence = 0.55,
 ): void {
   const seconds = creditedObservationSeconds(runtime, observation);
   if (!lane || seconds === 0) return;
@@ -291,10 +259,7 @@ export function observeSongLane(
     absoluteErrorCentSeconds: 0,
   };
   metrics.observedSeconds += seconds;
-  const reliable = observation.voiced
-    && observation.midiFloat !== null
-    && Number.isFinite(observation.midiFloat)
-    && observation.confidence >= minimumConfidence;
+  const reliable = isAuthoritativeVoicedPitch(observation);
   if (reliable) {
     const errorCents = Math.abs((observation.midiFloat! - lane.targetMidi) * 100);
     metrics.voicedSeconds += seconds;

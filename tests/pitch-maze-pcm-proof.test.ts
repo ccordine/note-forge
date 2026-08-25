@@ -26,8 +26,6 @@ const WINDOW_SIZE = 4_096;
 const WINDOW_SECONDS = WINDOW_SIZE / SAMPLE_RATE;
 const HOP_SIZE = 960;
 const HOP_SECONDS = HOP_SIZE / SAMPLE_RATE;
-const MINIMUM_CONFIDENCE = 0.58;
-
 const LEVEL_OPTIONS = Object.freeze({
   seed: "pitch-maze-pcm-proof",
   voiceRange: Object.freeze({ lowMidi: 43, highMidi: 64, baselineMidi: 49 }),
@@ -171,7 +169,6 @@ class PitchMazePcmHarness {
       directionNotes: level.directionNotes,
       requiredHoldSeconds: level.config.holdDurationSeconds,
       toleranceCents: level.config.toleranceCents,
-      minimumConfidence: MINIMUM_CONFIDENCE,
       acquisitionCorridorCents: 48,
       directionSwitchHysteresisCents: 10,
     });

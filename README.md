@@ -28,7 +28,10 @@ npm run test:coverage
 npm run typecheck
 npm run build
 npm run proof:note-input:browser
+npm run proof:range-loop-noisy:browser
+npm run proof:user-owned-traces:browser
 npm run proof:sustained-note:browser
+npm run proof:mobile-note-playback:layout
 npm run proof:pitch-tunnel:browser
 npm run proof:voice-draw:browser
 npm run proof:vocal-flight:browser
@@ -38,7 +41,7 @@ npm run proof:offline:browser
 
 ## WorkNet deployment
 
-NoteForge runs as an unprivileged Go application container on the external `worknet_net` network. The Go binary serves the built React application, health checks, SPA fallbacks, and the bounded derived-pitch diagnostics endpoint. It publishes no host port; WorkNet's Published Apps flow owns DNS, trusted HTTPS, and edge routing for `https://noteforge.worknet`.
+NoteForge runs as an unprivileged Go application container on the external `worknet_net` network. The Go binary serves the built React application, health checks, SPA fallbacks, and the explicitly opted-in bounded derived-pitch diagnostics endpoint. It publishes no host port; WorkNet's Published Apps flow owns DNS, trusted HTTPS, and edge routing for `https://noteforge.worknet`.
 
 ```bash
 docker --context default compose up -d --build
@@ -46,18 +49,19 @@ docker --context default compose up -d --build
 
 Register or update the running `noteforge-app` container through WorkNet's **Published Apps** flow. Use Docker-network ingress, upstream `noteforge-app:8080`, hostname `noteforge.worknet`, and the WorkNet CA. Trusted HTTPS is required because browsers do not allow microphone capture or service workers on an insecure custom hostname.
 
-The Compose deployment uses Docker's bounded `local` log driver with three 10 MB files. Derived pitch diagnostics therefore cannot grow the host log store without limit.
+The Compose deployment uses Docker's bounded `local` log driver with three 10 MB files. When explicitly enabled, derived pitch diagnostics therefore cannot grow the host log store without limit.
 
 ## What is working
 
 - **Sound Laboratory:** playable keyboard, chromatic wheel, continuous frequency and one-cent detuning, note/dyad/chord playback, drone, multiple synthesized timbres, label hiding, major/minor/pentatonic/blues contexts, and non-prescriptive tension/resolution analysis.
-- **Pitch Mirror:** glide, delayed match, cold attack, memory anchor, and silent-preparation modes; minimally processed microphone requests; AudioWorklet capture; continuous YIN tracking; time-history ribbon; separate attack, center, MAE, in-band, stability, drift, duration, confidence, volume, and vibrato evidence.
-- **Pitch Tunnel:** one exact live-F0 anchor drives a 0 → +25 → +50 → +75 → +100-cent round trip and return through disjoint ±10-cent walls. Each checkpoint requires one continuous sample-timed second in lane; silence or uncertainty pauses the hold, a credible wrong pitch resets only the current hold, and completion freezes the score while the same live point keeps following the sensor. It owns no microphone lifecycle, reference playback, alternate tuner, wall clock, or amplitude/confidence gate, and reports only what fundamental-pitch evidence can establish.
+- **Pitch Mirror:** glide, delayed match, cold attack, memory anchor, and silent-preparation modes consume the shared app-owned AudioWorklet/YIN telemetry; its time-history ribbon derives separate attack, center, MAE, in-band, stability, drift, duration, confidence, volume, and vibrato evidence without owning capture.
+- **Pitch Tunnel:** one exact live-F0 anchor drives a 0 → +25 → +50 → +75 → +100-cent round trip and return through disjoint ±10-cent walls. Each checkpoint requires one continuous sample-timed second in lane; silence or uncertainty pauses the hold, a credible wrong pitch resets only the current hold, and reaching the authored trajectory is nonterminal. Scoring and the live point continue until the user chooses **Finish**. It owns no microphone lifecycle, reference playback, alternate tuner, wall clock, or amplitude/confidence gate, and reports only what fundamental-pitch evidence can establish.
 - **Continuous voice workflows:** Range Loop, Range Simulator, Pitch Maze, and Resonance consume the same app-owned observation stream through one stable feature surface and one canonical tuner. Setup, current action, and results no longer stack into a scrolling substitute for navigation.
-- **Universal Input Scope:** every live-listening workflow reads the same direct detector result: target-relative cents, detected note and frequency, confidence, and opt-in diagnostics. Level is diagnostic only; there is no sensitivity, calibration, or amplitude gate in front of pitch. Once enabled, one app-scoped input session survives prompts and navigation. Every AudioWorklet pitch window is processed even when React consumers change, and the microphone track remains enabled until the user explicitly chooses **Disable voice**, the stream fails, or the application is torn down.
+- **Universal Input Scope:** every live-listening workflow reads the same authoritative voiced/unvoiced/uncertain observation, continuous frequency, confidence, and sample authority, then derives target-relative error and scoring downstream. The per-window estimator candidate remains inspectable, but one target-independent shared temporal tracker—not an exercise or scorer—decides whether contradictory evidence is authoritative. Level is diagnostic only; there is no sensitivity, calibration, or amplitude gate in front of pitch. Remote derived diagnostics are off by default and visibly opt-in. Once enabled, one app-scoped input session survives prompts and navigation. Every AudioWorklet pitch window is processed even when React consumers change, and the microphone track remains enabled until the user explicitly chooses **Disable voice**, the stream fails, or the application is torn down.
+- **Isolated-note playback:** every user-facing target, tonic, and individual reference uses one centralized sustained **Play / Stop** toggle. It has no duration, decay, quieter continuation, or automatic cutoff. Target and timbre changes retune the running lane in place; training Start/Finish/reset/scoring transitions cannot stop it. Authored intervals, chords, melodies, songs, and other temporal gestures remain a separate transport.
 - **Hum Laboratory:** comfortable-anchor discovery plus target matching, glide landing, and sustained-hum practice across M, N, and NG gestures, with voiced continuity and pitch evidence kept distinct from unmeasured resonance or placement.
 - **Range Simulator:** a subjective-first guided map that compares up to five nearby pitches to choose a comfortable baseline, probes outward chromatically, collects the singer's 1 effortless → 5 unreliable rating on every attempt, expands lower and upper directions independently, rechecks one unstable edge, and saves a conservative current-range profile without assigning a voice type or physiological limit. Comfort ratings remain separate from detector-backed pitch evidence and explicit clean-phonation claims.
-- **Range Loop:** one stable target surface with one live tuner and one sample-coordinate hold. A brief reference is a user-requested 0.5-second action; it never gates detection, starts accompaniment, clears earned time, or opens an isolation workflow. Unvoiced and uncertain observations pause credited dwell without erasing it; only a credible wrong pitch resets an unfinished hold. Natural or chromatic sequences span the complete detector-backed F♯1–D6 curriculum and advance only when the user chooses the next target.
+- **Range Loop:** one stable target surface with one live tuner and one sample-coordinate hold. Its target note uses the shared sustained **Play / Stop** toggle and remains entirely independent of Start, Finish, scoring, and live detection. Unvoiced and uncertain observations pause credited dwell without erasing it; a credible wrong pitch resets only the current uninterrupted hold while retained aggregate evidence remains. Dwell continues beyond the achievement threshold and freezes only when the user chooses **Finish**. Natural or chromatic sequences span the complete detector-backed F♯1–D6 curriculum and advance only when the user chooses the next target.
 - **Voice Arcade:** seven game workflows driven by the same retained microphone: Pitch Pong trains continuous pitch-to-position control through a shared analog axis; Pitch Maze trains nearby-note selection and route planning; Vocal Canvas maps eight notes to eight drawing directions; Echo Run combines memory and rhythmic pitch entry; Song Rail uses locally derived target lanes; Resonance turns each continuous voiced pitch observation into a stylized deterministic field; and Vocal Flight calibrates an asymmetric pitch/brightness control surface around a personal neutral vocal center. Flight physics advance only from exact observation sample time while canvas presentation runs independently on `requestAnimationFrame`. Uploaded audio and raw microphone audio remain local.
 - **Pitch & Dynamics:** steady, crescendo, decrescendo, diamond, pulse, and free-volume envelopes with pitch and loudness scored independently.
 - **Note Recognition:** same/different, direction, reference-backed navigation, pitch class, octave-only, complete note, octave family, and cross-timbre practice. Pitch-class and octave answers remain separate.
@@ -83,7 +87,7 @@ apps/web
 cmd/noteforge-server    Go static server, health endpoint, diagnostic validation/logging
 
 packages/music-core     Browser-independent pitch and harmony meaning
-packages/pitch-engine   Deterministic YIN detector and smoothing
+packages/pitch-engine   Deterministic YIN and acoustic harmonic-family selection
 packages/trainer-core   Scoring, skill graph, progression, scheduling
 packages/diagnostic-schema  Shared client/server diagnostic version and flow allowlist
 ```
@@ -92,13 +96,14 @@ The dependency direction is deliberate:
 
 ```text
 MediaStream → AudioWorklet ring buffer → overlapping PCM window → NoteInputEngine
-            → pitch-engine YIN → immutable observation → app-lifetime AudioKernel
+            → anti-aliased analysis copy → YIN/harmonic-family candidate
+            → target-independent temporal tracker → immutable observation → AudioKernel
             → pure LiveNote/session reducers → granular React view or game loop
 ```
 
 - `music-core` has no browser dependency.
 - `pitch-engine` consumes generated or captured `Float32Array` samples and never snaps continuous pitch before reporting it.
-- `trainer-core` consumes observations and knows nothing about microphone capture or React.
+- `trainer-core` consumes observations and knows nothing about microphone capture or React. Its skill graph, progression, and scheduler are domain machinery; they are not yet wired to one persisted cross-activity learner model or adaptive Practice default. Arcade XP/mastery remains feature progress, not canonical skill evidence.
 - the app-lifetime `AudioKernel` owns permissions, capture, detection, bounded
   history, and granular subscriptions outside the React render clock;
 - activities receive observations and describe rules; they cannot control capture.
@@ -108,7 +113,7 @@ and Back/Forward behavior. The application shell dispatches only Home plus the
 five product surfaces; the Practice surface owns its activity selector and lazy
 activity rendering. Old capability-level hashes are not compatibility aliases.
 
-At 48 kHz the worklet keeps a monotonic PCM ring, emits 4,096-sample pitch windows every 960 samples (20 ms), and independently emits lightweight 1,024-sample level telemetry. Window sizes scale with the AudioContext rate. `NoteInputEngine` normalizes only high-rate analysis copies to at most 48 kHz and returns one voiced, unvoiced, or uncertain observation for every exact half-open sample interval across the canonical 45–1,200 Hz range. Capture epochs, continuity epochs, graph generations, process counts, and processed-sample counts remain attached to the evidence. A pure `LiveNote` reducer derives the current nearest note and same-note occupancy; features derive scoring from the same stream and cannot control capture.
+At 48 kHz the worklet keeps a monotonic PCM ring, emits 4,096-sample pitch windows every 960 samples (20 ms), and independently emits lightweight 1,024-sample level telemetry. Window sizes scale with the AudioContext rate. For capture above 48 kHz, `NoteInputEngine` sends an analysis copy through allocation-stable 129-tap Kaiser half-band FIR stages until its rate is at most 48 kHz; it never uses stride-only decimation, and published sample coordinates remain in the original capture domain. YIN plus acoustic harmonic-family evidence produces an inspectable candidate. When noise makes YIN prefer a doubled period, octave raising requires measured support from at least three even-grid partials and little off-grid/odd-harmonic energy; genuine low fundamentals with odd-grid evidence remain low. Fine motion and cold attacks are immediate; a lone remote candidate is published on its exact frame as `uncertain`/`temporally-ambiguous`, and a coherent candidate on the next 20 ms hop establishes the new authoritative pitch. Silence is immediate and no stale prior note is substituted. The tracker has no target, tolerance, or exercise input. Every exact half-open capture interval still produces one immutable voiced, unvoiced, or uncertain observation across 45–1,200 Hz. A pure `LiveNote` reducer derives the current nearest note and same-note occupancy; features derive scoring from the same stream and cannot control capture.
 
 ## Measurement proof
 
@@ -116,27 +121,39 @@ The primary executable proof builds the stamped production bundle, serves that e
 
 ```bash
 npm run proof:note-input:browser
+npm run proof:range-loop-noisy:browser
 npm run proof:sustained-note:browser
+npm run proof:mobile-note-playback:layout
 ```
 
-The final checked-in run detected all 57 semitones F♯1–D6, both literal 45/1,200 Hz boundaries, and all 18 quiet low notes at a measured -60.0 dBFS median. Digital silence remained unvoiced for 56 detector observations; loud seeded broadband noise remained unvoiced for 189/189 observations and note-free in the rendered UI. The proof matched 1,946/1,946 native AudioWorklet windows to detector observations by exact `(captureEpoch, endSample)`, matched the first C3, E3, and G3 detector transitions to exact DOM sample identity, proved every bounded React occupancy publication retained exact sample authority, and forced a real AudioContext suspension that recovered on the same stream with an explicit discontinuity. Chromium detector time was 2.1 ms median, 2.8 ms p95, and 10.3 ms maximum; every call completed within the 20 ms hop budget, so current measurements do not justify WASM.
+The final checked-in run detected all 57 semitones F♯1–D6, both literal 45/1,200 Hz boundaries, and all 18 quiet low notes near -60 dBFS. Loud seeded broadband noise remained unvoiced for 196/196 observations. The proof paired 2,177/2,177 native AudioWorklet windows with authoritative observations by exact sample identity. C3 entered as an immediate cold attack at `endSample=85,696`. The remote E3 and G3 candidates appeared on exact frames 120,256 and 153,856 as uncertainty with no stale note; coherent next-hop candidates became authoritative at 121,216 and 154,816. This proves both transient rejection and bounded real-transition latency without pretending the raw candidate disappeared. Chromium detector time was 2.5 ms median, 3.9 ms p95, and 13.0 ms maximum; every call completed within the 20 ms hop.
 
-The separate 38-second sustain proof paired 2,533/2,533 worklet windows and detector frames while F♯1, quiet C3, C4, and D6 each remained continuously detected for more than 8.4 seconds. Range Loop retained one tuner, stopped its single 0.5-second reference without a quieter replacement, and credited exactly three seconds of quiet C3 without rebuilding capture. Vocal Canvas consumed all 452 native observations while React emitted 202 bounded publications, drew Up/Right/Down/Left from C3/D3/E3/F♯3, stayed stationary through silence, and returned exactly to origin. A headless kernel stress also advances 30,000 silence windows—ten minutes of sample time—with no feature or React subscriber and zero capture stops.
+The separate sustained-note proof paired 2,602/2,602 worklet windows and authoritative observations. F♯1, quiet C3, C4, and D6 each remained continuously detected for 8.42–8.48 seconds. Range Loop kept one tuner, crossed its three-second achievement threshold, continued from 3.04 to 3.54 seconds, and froze only on visible **Finish** while live telemetry continued. Its target reference remained one four-oscillator sustained lane: one full attack, no automatic stop, no gain reduction after any former cutoff, and no stop caused by Start, achievement, or Finish. The shared live-trace proof kept Pitch Match, Hum Lab, and Pitch Control active for 4.80, 8.80, and 12.84 sample-seconds respectively; only their visible **Finish** actions ended feature accumulation. Unit lifetime proofs advance shared traces and holds for an hour without automatic completion, while a headless kernel stress advances 30,000 silence windows—ten minutes of sample time—with no feature or React subscriber and zero capture stops.
 
-Pitch Tunnel's independent production-browser gate consumed 784/784 post-anchor observations in exact order while React emitted 351 bounded publications across 15.66 sample-seconds. It reconstructed all nine exact 1.00-second sample-time dwells, matched every checkpoint and completion transition to its exact detector frame, retained 0.44 seconds through silence, reset only current dwell on credible wrong pitch, kept one lane and one capture graph, played no audio, and continued rendering live F0 after completion.
+The noisy Range Loop browser proof is deliberately a different claim from clean-tone and standalone-noise tests. It feeds one continuous C3 through the real fake-microphone, MediaStream, worklet, detector, shared tracker, shared `NoteInput`, and `/practice/range-loop` UI while applying clean intervals, broadband noise at +30, +20, +10, +6, and +3 dB SNR, deterministic impulses, dominant second and third harmonics, brief amplitude drops, changing noise, and clean recovery. Across 13 stages and 16.32 seconds of C3, no contradictory note received authority, no earned hold regressed, and the real C3 gate enabled **Next target**. Uncertain observations were allowed to pause new credit; they did not erase credit or become a different note. A persistent real D3 then became authoritative and earned 3.10 seconds in the same DOM component, proving the correction is not a sticky-C3 scorer exception. A supplemental unit matrix also covers +0 dB; the browser fixture intentionally stops at +3 dB and must not be documented as a +0 dB browser result.
 
-Vocal Flight's production-browser gate operated all six visible calibration
-steps, then consumed all 1,734 pre-exit worklet observations while React emitted
-718 exact bounded publications. At stable C3 the shared derived brightness
-coordinate separated `0.00428` dark from `0.26584` bright without moving F0;
-isolated and combined control drove the deterministic aircraft, silence zeroed
-control force, the first resumed voiced frame advanced zero time, and canvas
-presentation continued on rAF. Maximum detector-plus-brightness work was 9.8 ms.
-The same run passed calibration and flight containment/reachability/hit testing
-at 1440, 760, 430, 390, and 320 CSS pixels and retained the one microphone after
-route exit.
+Vocal Canvas consumed all 641 native observations while React emitted 294 bounded publications, stayed stationary through five silence runs, drew Up/Right/Down/Left from C3/D3/E3/F♯3, and returned exactly to origin. Pitch Tunnel consumed 976/976 post-anchor observations while React emitted 447 bounded publications across 19.50 sample-seconds. It reconstructed all nine exact 1.00-second dwells, kept achievement nonterminal, continued scoring from 9.38 to 10.12 seconds, and froze only after visible **Finish**.
 
-Detector unit tests remain supplemental. They exercise every enclosed semitone from F♯1 through D6 and the literal 45/1,200 Hz boundaries, immediate note changes, very quiet low-register harmonics, weak-fundamental/dominant-second bass spectra, pure-high and mains-noise octave confounders, all production capture sizes from 44.1 through 192 kHz, silence, deterministic broadband noise, and measured processing time. Missing, unvoiced, wrong-note, and wrong-octave output all fail a pitched-note trial.
+Vocal Flight consumed 1,735 worklet observations before route exit and 1,852
+by the final capture check while React emitted 715 bounded publications. Isolated and combined pitch/brightness
+control drove the deterministic aircraft; silence applied no vocal force. After
+visible **Finish**, observations advanced 1,788→1,818 while simulation remained
+at exactly 970 frames. Calibration and flight passed containment, scrolling,
+reachability, and hit testing at 1440, 760, 430, 390, and 320 CSS pixels.
+
+The mobile note-playback proof covers 11 production routes at 320×568 and
+390×844. All 22 route/viewport cases reach the page end with no document
+overflow or unreachable control, and each canonical note control completes the
+visible **Play → Stop → Play** interaction without changing implementations.
+
+The realtime detector now reuses private instance-owned lag, Hann, harmonic,
+and high-rate normalization scratch. After one-time growth, steady 48 kHz A3,
+C3, and marginal-confidence processing allocated zero new YIN typed arrays; the
+deleted path generated about 49 MiB/minute of scratch garbage. Controlled p95
+times remained 3.55, 3.41, and 7.31 ms respectively, so current measurements do
+not justify WASM.
+
+Detector and engine unit tests remain supplemental. They exercise all 57 enclosed semitones at six standard capture rates, the literal 45/1,200 Hz boundaries, quiet low-register harmonics, weak-fundamental/dominant-second bass spectra, true low notes with odd-grid evidence, and noisy doubled-period/octave confounders. High-rate cases cover the public contract through 768 kHz, reject image-frequency aliases, and retain real fundamentals down to -126 dBFS beneath out-of-band interference. The adversarial tracker matrices vary noise seeds and strength through +0 dB and require both transient contradictory evidence to remain non-authoritative and a persistent noisy C3→C2 change to become authoritative. These tests establish DSP and tracker semantics, not browser integration.
 
 `npm run proof:offline:browser` performs a separate fresh-profile production Chromium proof. It installs the service worker online once, forces the browser offline, reloads the rendered React application, loads the actual pitch worklet from Cache Storage, and verifies that API, health, and missing-asset requests never receive the HTML shell as a fallback.
 
@@ -148,7 +165,7 @@ The [verification authority guide](docs/verification.md) states what each test l
 - Audio input requests mono capture with echo cancellation, noise suppression, and automatic gain control ideally disabled, then exposes the negotiated device settings in Expert view.
 - Navigating between tools does not request permission again or leave departed detector callbacks active. The retained track and detector stay live across navigation; **Disable voice** explicitly closes them.
 - Microphone input stores no sensitivity threshold or calibration profile. Derived pitch and level diagnostics are bounded and contain no PCM.
-- Standard training stores pitch contours and derived metrics—not raw recordings. Bounded allowlisted pitch, input, and workflow diagnostics are sent to the same NoteForge origin and written as structured server logs; the structured diagnostic endpoint and log lines neither accept nor include PCM, waveform samples, device IDs/labels, IP-address fields, or user-agent fields.
+- Standard training stores pitch contours and derived metrics—not raw recordings. Remote diagnostic sharing is off by default and requires the visible **Share derived pitch diagnostics** setting. When explicitly enabled, bounded allowlisted detector-frame and input-level events go only to the same NoteForge origin; they contain no workflow target, hold, phase, reset reason, PCM, waveform samples, device IDs/labels, IP-address fields, or user-agent fields. Turning sharing off clears the unsent client queue.
 - Song Lab voice takes are explicit, temporary, and held in browser memory in this milestone.
 - Local song files are decoded in the browser and never uploaded.
 

@@ -4,10 +4,12 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useReducer,
   useRef,
   useSyncExternalStore,
   type PropsWithChildren,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   AudioKernel,
   type AudioCounterSnapshot,
@@ -23,7 +25,6 @@ export {
   type AudioCounterSnapshot,
   type AudioHistorySnapshot,
   type AudioInputController,
-  type AudioInputDiagnosticContext,
   type AudioInputState,
   type AudioPitchSnapshot,
   type AudioTelemetrySnapshot,
@@ -105,11 +106,22 @@ export function useAudioPitchSnapshot(
   input?: AudioInputController,
 ): AudioPitchSnapshot {
   const controller = selectedController(input, useContext(AudioKernelContext));
-  return useSyncExternalStore(
-    controller.subscribePitch,
-    controller.getPitchSnapshot,
-    controller.getPitchSnapshot,
+  const [snapshot, publish] = useReducer(
+    (_current: AudioPitchSnapshot, next: AudioPitchSnapshot) => next,
+    controller,
+    (source) => source.getPitchSnapshot(),
   );
+  useLayoutEffect(() => {
+    publish(controller.getPitchSnapshot());
+    return controller.subscribePitch((next, immediate) => {
+      if (immediate) {
+        flushSync(() => publish(next));
+      } else {
+        publish(next);
+      }
+    });
+  }, [controller]);
+  return snapshot;
 }
 
 export function useAudioCounterSnapshot(

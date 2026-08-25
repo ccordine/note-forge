@@ -66,15 +66,31 @@ describe("Song Ride continuous-input architecture guard", () => {
   });
 
   it("uses sample-coordinate authority and bounded source ownership", () => {
-    expect(session).toContain("observation.endSample - previous.endSample");
-    expect(session).toContain("observation.sampleRate");
-    expect(session).toContain("observation.discontinuity");
+    expect(session).toContain("observationContinuity(runtime.authority, observation)");
+    expect(session).toContain("if (continuity.accepted) runtime.authority = continuity.authority");
+    expect(session).toContain("return continuity.deltaSeconds");
+    expect(session).not.toMatch(/endSample\s*-\s*previous\.endSample/);
     expect(session).not.toMatch(/performance\.now|Date\.now|setTimeout|requestAnimationFrame/);
     expect(runtime).not.toMatch(/performance\.now|Date\.now|setTimeout|requestAnimationFrame/);
     expect(component.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);
     expect(hook.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);
     expect(session.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);
     expect(runtime.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(600);
+  });
+
+  it("uses full-depth pitch projection, exact authority attributes, and no retained silence cursor", () => {
+    expect(component).toContain("pitchMeterPositionPercent(");
+    expect(component).toContain("view.liveMidi !== null && view.liveTop !== null");
+    expect(component).not.toContain('view.liveMidi === null ? "silent"');
+    for (const attribute of [
+      "data-start-sample",
+      "data-end-sample",
+      "data-processed-sample-count",
+      "data-worklet-process-count",
+      "data-capture-epoch",
+      "data-continuity-epoch",
+      "data-graph-generation",
+    ]) expect(component).toContain(attribute);
   });
 
   it("uses one external session authority and a coalesced detector bridge", () => {

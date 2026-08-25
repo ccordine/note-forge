@@ -22,8 +22,6 @@ import {
   toDiagnosticToken,
   toFrameDiagnostic,
   toInputDiagnostic,
-  type DiagnosticFlow,
-  type TrackingDiagnostic,
 } from "@/diagnostics/pitch-diagnostics";
 
 export type AudioInputState = "disabled" | "opening" | "running" | "error";
@@ -34,19 +32,8 @@ export type InputTelemetry = Readonly<CapturedLevel> & {
   readonly headroomDb: number;
 };
 
-export interface AudioInputDiagnosticContext {
-  readonly flow: DiagnosticFlow;
-  readonly phase: string;
-  readonly targetMidi?: number | null;
-  readonly toleranceCents?: number | null;
-  readonly stableMs?: number | null;
-  readonly requiredHoldMs?: number | null;
-  readonly resetReason?: string | null;
-}
-
 export interface UseAudioInputOptions {
   readonly onFrame?: (observation: Readonly<VocalObservation>) => void;
-  readonly diagnostics?: AudioInputDiagnosticContext;
 }
 
 export interface AudioTransportSnapshot {
@@ -80,6 +67,10 @@ export interface AudioHistorySnapshot {
 }
 
 type StoreListener = () => void;
+type PitchStoreListener = (
+  snapshot: AudioPitchSnapshot,
+  immediate: boolean,
+) => void;
 type OptionsReader = () => UseAudioInputOptions;
 
 export interface AudioInputController {
@@ -100,7 +91,7 @@ export interface AudioInputController {
   readonly disable: () => void;
   readonly createRecorder: (options?: MediaRecorderOptions) => MediaRecorder;
   readonly subscribeTransport: (listener: StoreListener) => () => void;
-  readonly subscribePitch: (listener: StoreListener) => () => void;
+  readonly subscribePitch: (listener: PitchStoreListener) => () => void;
   readonly subscribeCounters: (listener: StoreListener) => () => void;
   readonly subscribeTelemetry: (listener: StoreListener) => () => void;
   readonly subscribeHistory: (listener: StoreListener) => () => void;
@@ -152,6 +143,14 @@ function notify(set: ReadonlySet<StoreListener>): void {
   for (const listener of set) listener();
 }
 
+function notifyPitch(
+  set: ReadonlySet<PitchStoreListener>,
+  snapshot: AudioPitchSnapshot,
+  immediate: boolean,
+): void {
+  for (const listener of set) listener(snapshot, immediate);
+}
+
 function observationRequiresImmediatePublication(
   previous: Readonly<PitchObservation> | undefined,
   next: Readonly<PitchObservation>,
@@ -172,7 +171,7 @@ export class AudioKernel {
   private readonly reactPublication: AudioReactPublication;
   private readonly optionReaders = new Map<symbol, OptionsReader>();
   private readonly transportListeners = new Set<StoreListener>();
-  private readonly pitchListeners = new Set<StoreListener>();
+  private readonly pitchListeners = new Set<PitchStoreListener>();
   private readonly counterListeners = new Set<StoreListener>();
   private readonly telemetryListeners = new Set<StoreListener>();
   private readonly historyListeners = new Set<StoreListener>();
@@ -250,28 +249,23 @@ export class AudioKernel {
     };
   }
 
-  private currentOptions(): UseAudioInputOptions {
-    const options = [...this.optionReaders.values()].map((reader) => reader());
-    const diagnostics = options.slice().reverse().find((value) => value.diagnostics)?.diagnostics;
-    const consumers = options.flatMap((value) => value.onFrame ? [value.onFrame] : []);
-    return {
-      ...(diagnostics ? { diagnostics } : {}),
-      ...(consumers.length > 0 ? {
-        onFrame: (observation) => {
-          for (const consume of consumers) {
-            try {
-              consume(observation);
-            } catch (error) {
-              console.error("NoteForge AudioKernel observation consumer failed.", error);
-            }
-          }
-        },
-      } : {}),
-    };
+  private notifyObservationConsumers(observation: Readonly<VocalObservation>): void {
+    for (const readOptions of this.optionReaders.values()) {
+      const consume = readOptions().onFrame;
+      if (!consume) continue;
+      try {
+        consume(observation);
+      } catch (error) {
+        console.error("NoteForge AudioKernel observation consumer failed.", error);
+      }
+    }
   }
 
   readonly subscribeTransport = (listener: StoreListener) => subscribeTo(this.transportListeners, listener);
-  readonly subscribePitch = (listener: StoreListener) => subscribeTo(this.pitchListeners, listener);
+  readonly subscribePitch = (listener: PitchStoreListener) => {
+    this.pitchListeners.add(listener);
+    return () => this.pitchListeners.delete(listener);
+  };
   readonly subscribeCounters = (listener: StoreListener) => subscribeTo(this.counterListeners, listener);
   readonly subscribeTelemetry = (listener: StoreListener) => subscribeTo(this.telemetryListeners, listener);
   readonly subscribeHistory = (listener: StoreListener) => subscribeTo(this.historyListeners, listener);
@@ -289,9 +283,9 @@ export class AudioKernel {
     return this.historySnapshot;
   };
 
-  private readonly publishPitch = (): void => {
+  private readonly publishPitch = (immediate: boolean): void => {
     this.publishedPitch = this.pitch;
-    notify(this.pitchListeners);
+    notifyPitch(this.pitchListeners, this.publishedPitch, immediate);
   };
 
   private readonly publishAuxiliary = (): void => {
@@ -332,7 +326,7 @@ export class AudioKernel {
     this.historyNeedsPublication = false;
     this.lastTelemetry = null;
     this.levelSequence = 0;
-    notify(this.pitchListeners);
+    notifyPitch(this.pitchListeners, this.publishedPitch, true);
     notify(this.counterListeners);
     notify(this.telemetryListeners);
     notify(this.historyListeners);
@@ -366,8 +360,7 @@ export class AudioKernel {
 
   private handleStreamEnded = (): void => {
     if (this.transport.state === "disabled") return;
-    const options = this.currentOptions();
-    pitchDiagnostics.record(options.diagnostics?.flow ?? "audio-input", {
+    pitchDiagnostics.record({
       kind: "microphone-state",
       microphone: { state: "stream-ended", errorCode: "media-track-ended" },
     });
@@ -410,38 +403,23 @@ export class AudioKernel {
       this.reactPublication.schedulePitch();
     }
 
-    const options = this.currentOptions();
-    const context = options.diagnostics;
-    const targetMidi = context?.targetMidi;
-    const toleranceCents = context?.toleranceCents;
-    const errorCents = observation.voiced
-      && observation.midiFloat !== null
-      && targetMidi != null
-      && Number.isFinite(targetMidi)
-      ? (observation.midiFloat - targetMidi) * 100
-      : null;
-    const tracking: TrackingDiagnostic | undefined = context ? {
-      phase: context.phase,
-      targetMidi: targetMidi ?? null,
-      toleranceCents: toleranceCents ?? null,
-      errorCents,
-      inBand: errorCents === null || toleranceCents == null
-        ? null
-        : Math.abs(errorCents) <= toleranceCents,
-      stableMs: context.stableMs ?? null,
-      requiredHoldMs: context.requiredHoldMs ?? null,
-      resetReason: context.resetReason ?? null,
-    } : undefined;
-    pitchDiagnostics.record(context?.flow ?? "audio-input", {
-      kind: "pitch-frame",
-      pitch: {
-        frame: toFrameDiagnostic(observation),
-        processingMs,
-        ...(this.lastTelemetry ? { input: toInputDiagnostic(this.lastTelemetry) } : {}),
-        ...(tracking ? { tracking } : {}),
-      },
-    });
-    options.onFrame?.(observation);
+    // Realtime consumers receive the immutable observation before optional,
+    // deliberately lossy diagnostics are converted or queued. A diagnostic
+    // schema/clock/transport fault must never gate voice consequences.
+    this.notifyObservationConsumers(observation);
+    if (!pitchDiagnostics.isEnabled()) return;
+    try {
+      pitchDiagnostics.record({
+        kind: "pitch-frame",
+        pitch: {
+          frame: toFrameDiagnostic(observation),
+          processingMs,
+          ...(this.lastTelemetry ? { input: toInputDiagnostic(this.lastTelemetry) } : {}),
+        },
+      });
+    } catch (error) {
+      console.error("NoteForge pitch diagnostics discarded an invalid event.", error);
+    }
   }
 
   readonly enable = (): Promise<MicrophoneInfo | null> => {
@@ -463,8 +441,7 @@ export class AudioKernel {
       microphoneInfo: null,
       transportRepairCount: 0,
     });
-    const diagnostics = this.currentOptions().diagnostics;
-    pitchDiagnostics.record(diagnostics?.flow ?? "audio-input", {
+    pitchDiagnostics.record({
       kind: "microphone-state",
       microphone: {
         state: "starting",
@@ -500,7 +477,7 @@ export class AudioKernel {
           microphoneInfo: info,
           transportRepairCount: 0,
         });
-        pitchDiagnostics.record(this.currentOptions().diagnostics?.flow ?? "audio-input", {
+        pitchDiagnostics.record({
           kind: "microphone-state",
           microphone: {
             state: "ready",
@@ -523,7 +500,7 @@ export class AudioKernel {
           microphoneInfo: null,
           transportRepairCount: 0,
         });
-        pitchDiagnostics.record(this.currentOptions().diagnostics?.flow ?? "audio-input", {
+        pitchDiagnostics.record({
           kind: "microphone-state",
           microphone: { state: "error", errorCode: diagnosticErrorCode(error) },
         });
@@ -538,7 +515,7 @@ export class AudioKernel {
   };
 
   readonly disable = (): void => {
-    pitchDiagnostics.record(this.currentOptions().diagnostics?.flow ?? "audio-input", {
+    pitchDiagnostics.record({
       kind: "microphone-state",
       microphone: { state: "off" },
     });

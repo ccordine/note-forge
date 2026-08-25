@@ -1,13 +1,17 @@
 import type { YinPitchFrame } from "@noteforge/pitch-engine";
 import diagnosticSchema from "../../../../packages/diagnostic-schema/src/schema.json";
+import {
+  serializeLivePitchCoordinates,
+  validateMicrophoneSignalContract,
+  validateSerializedFrameSignalContract,
+} from "./live-signal-contract";
+
+export { LIVE_DIAGNOSTIC_SIGNAL_BOUNDS } from "./live-signal-contract";
 
 export const PITCH_DIAGNOSTIC_VERSION = diagnosticSchema.version;
-export const PITCH_DIAGNOSTICS_ENABLED = true;
-
-export type DiagnosticFlow = keyof typeof diagnosticSchema.flows;
-export const DIAGNOSTIC_FLOWS = Object.freeze(
-  Object.keys(diagnosticSchema.flows) as DiagnosticFlow[],
-);
+export const DIAGNOSTIC_FLOW = "audio-input" as const;
+export type DiagnosticFlow = typeof DIAGNOSTIC_FLOW;
+export const DIAGNOSTIC_FLOWS: readonly DiagnosticFlow[] = Object.freeze([DIAGNOSTIC_FLOW]);
 
 export type DiagnosticObservationKind = keyof typeof diagnosticSchema.observationKinds;
 export const DIAGNOSTIC_OBSERVATION_KINDS = Object.freeze(
@@ -91,23 +95,11 @@ interface InputDiagnosticSource {
   sampleCount: number;
 }
 
-export interface TrackingDiagnostic {
-  phase: string;
-  targetMidi?: number | null;
-  toleranceCents?: number | null;
-  errorCents?: number | null;
-  inBand?: boolean | null;
-  stableMs?: number | null;
-  requiredHoldMs?: number | null;
-  resetReason?: string | null;
-}
-
 export interface PitchDiagnostic {
   frame: FrameDiagnostic;
   /** Synchronous production detector time for this PCM window. */
   processingMs: number;
   input?: InputDiagnostic;
-  tracking?: TrackingDiagnostic;
 }
 
 export interface MicrophoneDiagnostic {
@@ -124,26 +116,15 @@ export interface MicrophoneDiagnostic {
   errorCode?: string | null;
 }
 
-export interface WorkflowDiagnostic {
-  phase: string;
-  state: string;
-  targetMidi?: number | null;
-  attemptId?: number | null;
-  holdMs?: number | null;
-  requiredHoldMs?: number | null;
-  resetReason?: string | null;
-}
-
 export type DiagnosticEvent =
   | { elapsedMs: number; kind: "microphone-state"; microphone: MicrophoneDiagnostic }
-  | { elapsedMs: number; kind: "pitch-frame"; pitch: PitchDiagnostic }
-  | { elapsedMs: number; kind: "workflow"; workflow: WorkflowDiagnostic };
+  | { elapsedMs: number; kind: "pitch-frame"; pitch: PitchDiagnostic };
 
 export interface DiagnosticBatch {
   version: typeof PITCH_DIAGNOSTIC_VERSION;
   sessionId: string;
   sequence: number;
-  flow: DiagnosticFlow;
+  flow: typeof DIAGNOSTIC_FLOW;
   droppedEvents?: number;
   events: DiagnosticEvent[];
 }
@@ -155,6 +136,7 @@ type EventWithoutElapsed = DiagnosticEvent extends infer Event
   : never;
 
 interface DiagnosticTransportOptions {
+  enabled?: boolean;
   endpoint?: string;
   sessionId?: string;
   now?: () => number;
@@ -166,7 +148,7 @@ interface DiagnosticTransportOptions {
   maximumBufferedEvents?: number;
 }
 
-interface FlowBuffer {
+interface DiagnosticBuffer {
   events: DiagnosticEvent[];
   sequence: number;
   droppedEvents: number;
@@ -320,6 +302,14 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
     throw new RangeError("Missing brightness must carry zero brightness confidence.");
   }
 
+  const {
+    sampleRate,
+    frequencyHz,
+    midiFloat,
+    nearestMidi,
+    centsFromNearest,
+  } = serializeLivePitchCoordinates(frame);
+
   return {
     observationKind: frame.observationKind,
     timeSeconds: diagnosticNumber(
@@ -329,7 +319,7 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
       Number.MAX_SAFE_INTEGER,
       6,
     ),
-    sampleRate: diagnosticNumber(frame.sampleRate, "Frame sampleRate", 8_000, 768_000, 4),
+    sampleRate,
     startSample,
     endSample,
     processedSampleCount,
@@ -343,18 +333,10 @@ export function toFrameDiagnostic(frame: Readonly<FrameDiagnosticSource>): Frame
     ),
     periodicity: diagnosticNumber(frame.periodicity, "Frame periodicity", 0, 1, 4),
     voiced: frame.voiced,
-    frequencyHz: optionalDiagnosticNumber(frame.frequencyHz, "Frame frequencyHz", 10, 20_000, 4),
-    midiFloat: optionalDiagnosticNumber(frame.midiFloat, "Frame midiFloat", 0, 127, 4),
-    nearestMidi: frame.nearestMidi === null
-      ? null
-      : diagnosticInteger(frame.nearestMidi, "Frame nearestMidi", 127),
-    centsFromNearest: optionalDiagnosticNumber(
-      frame.centsFromNearest,
-      "Frame centsFromNearest",
-      -100,
-      100,
-      4,
-    ),
+    frequencyHz,
+    midiFloat,
+    nearestMidi,
+    centsFromNearest,
     rms: diagnosticNumber(frame.rms, "Frame rms", 0, 4, 6),
     confidence: diagnosticNumber(frame.confidence, "Frame confidence", 0, 1, 4),
     brightness: optionalDiagnosticNumber(
@@ -404,8 +386,11 @@ export class PitchDiagnosticTransport {
   private readonly batchDelayMs: number;
   private readonly maximumBatchEvents: number;
   private readonly maximumBufferedEvents: number;
-  private readonly startedAtMs: number;
-  private readonly flows = new Map<DiagnosticFlow, FlowBuffer>();
+  private startedAtMs: number;
+  private enabled: boolean;
+  private readonly buffer: DiagnosticBuffer = {
+    events: [], sequence: 0, droppedEvents: 0, timer: null, sending: false,
+  };
 
   constructor(options: DiagnosticTransportOptions = {}) {
     this.endpoint = options.endpoint ?? "/api/diagnostics/pitch";
@@ -432,11 +417,34 @@ export class PitchDiagnosticTransport {
       4_096,
     );
     this.startedAtMs = finiteClockValue(this.now(), "Diagnostic clock start");
+    this.enabled = options.enabled ?? false;
   }
 
-  record(flow: DiagnosticFlow, event: EventWithoutElapsed): void {
-    if (!PITCH_DIAGNOSTICS_ENABLED) return;
-    const buffer = this.bufferFor(flow);
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    if (enabled) {
+      this.startedAtMs = finiteClockValue(this.now(), "Diagnostic clock start");
+      return;
+    }
+    if (this.buffer.timer !== null) this.clearTimer(this.buffer.timer);
+    this.buffer.events.length = 0;
+    this.buffer.droppedEvents = 0;
+    this.buffer.timer = null;
+  }
+
+  record(event: EventWithoutElapsed): void {
+    if (!this.enabled) return;
+    if (event.kind === "microphone-state") {
+      validateMicrophoneSignalContract(event.microphone);
+    } else if (event.kind === "pitch-frame") {
+      validateSerializedFrameSignalContract(event.pitch.frame);
+    }
+    const buffer = this.buffer;
     const currentMs = finiteClockValue(this.now(), "Diagnostic clock value");
     const elapsed = currentMs - this.startedAtMs;
     const elapsedMs = Math.max(0, Math.round(finiteClockValue(elapsed, "Diagnostic elapsed time")));
@@ -447,20 +455,20 @@ export class PitchDiagnosticTransport {
       buffer.droppedEvents += overflow;
     }
     if (buffer.events.length >= this.maximumBatchEvents) {
-      void this.flush(flow);
+      void this.flush();
       return;
     }
     if (buffer.timer === null) {
       buffer.timer = this.setTimer(() => {
         buffer.timer = null;
-        void this.flush(flow);
+        void this.flush();
       }, this.batchDelayMs);
     }
   }
 
-  async flush(flow: DiagnosticFlow): Promise<void> {
-    const buffer = this.bufferFor(flow);
-    if (buffer.sending || buffer.events.length === 0 || this.fetcher === null) return;
+  async flush(): Promise<void> {
+    const buffer = this.buffer;
+    if (!this.enabled || buffer.sending || buffer.events.length === 0 || this.fetcher === null) return;
     if (buffer.timer !== null) {
       this.clearTimer(buffer.timer);
       buffer.timer = null;
@@ -472,7 +480,7 @@ export class PitchDiagnosticTransport {
       version: PITCH_DIAGNOSTIC_VERSION,
       sessionId: this.sessionId,
       sequence: buffer.sequence,
-      flow,
+      flow: DIAGNOSTIC_FLOW,
       ...(droppedEvents > 0 ? { droppedEvents } : {}),
       events,
     };
@@ -496,27 +504,18 @@ export class PitchDiagnosticTransport {
       if (buffer.events.length > 0 && buffer.timer === null) {
         buffer.timer = this.setTimer(() => {
           buffer.timer = null;
-          void this.flush(flow);
+          void this.flush();
         }, this.batchDelayMs);
       }
     }
   }
 
   flushAll(): void {
-    for (const flow of DIAGNOSTIC_FLOWS) void this.flush(flow);
-  }
-
-  private bufferFor(flow: DiagnosticFlow): FlowBuffer {
-    const existing = this.flows.get(flow);
-    if (existing) return existing;
-    const created: FlowBuffer = { events: [], sequence: 0, droppedEvents: 0, timer: null, sending: false };
-    this.flows.set(flow, created);
-    return created;
+    void this.flush();
   }
 }
 
 export const pitchDiagnostics = new PitchDiagnosticTransport();
-export const pitchDiagnosticSessionId = pitchDiagnostics.sessionId;
 
 if (typeof window === "object") {
   window.addEventListener("pagehide", () => {

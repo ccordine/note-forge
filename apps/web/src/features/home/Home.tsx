@@ -5,13 +5,15 @@ import {
   useAudioTransportSnapshot,
   type AudioInputController,
 } from "@/audio/use-audio-input";
-import { playSafely, playTone } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { recentAttempts, type LocalAttempt } from "@/storage/database";
 import { useMusicalState } from "@/state/MusicalContext";
 import { DEFAULT_ROUTES, appRoutePath, type AppRoute } from "@/navigation";
 import { continuousMidiToHz, noteLabel, pitchClassLabel } from "@/lib/music-display";
-import { Eyebrow, Panel, PlayButton, RouteLink } from "@/ui/Controls";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import { Eyebrow, Panel, RouteLink } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 
 const modes: { route: AppRoute; icon: Parameters<typeof Icon>[0]["name"]; title: string; detail: string; accent: string }[] = [
   { route: DEFAULT_ROUTES.pitchMatch, icon: "mirror", title: "Practice", detail: "Pitch match, sustain, recognize, and connect musical structures.", accent: "coral" },
@@ -25,9 +27,7 @@ function SignalGlyph({ input }: { input: AudioInputController }) {
   const transport = useAudioTransportSnapshot(input);
   const pitch = useAudioPitchSnapshot(input);
   const frame = transport.state === "running" ? pitch.liveFrame : undefined;
-  const detectedFrame = frame?.voiced === true && frame.nearestMidi !== null && frame.frequencyHz !== null
-    ? frame
-    : null;
+  const detectedFrame = frame && isAuthoritativeVoicedPitch(frame) ? frame : null;
   const detectedNote = detectedFrame?.nearestMidi ?? null;
   const detectedFrequency = detectedFrame?.frequencyHz ?? null;
   const detected = detectedNote !== null && detectedFrequency !== null;
@@ -96,6 +96,11 @@ export function Home() {
   const input = useAudioInputStatus();
   const [attempts, setAttempts] = useState<LocalAttempt[]>([]);
   const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
+  const notePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(selectedMidi, centsOffset),
+    timbre,
+    amplitude: 0.22,
+  });
 
   useEffect(() => {
     let active = true;
@@ -120,7 +125,7 @@ export function Home() {
           <p>Forge one shared coordinate system between sound, body, name, and harmonic purpose.</p>
           <div className="hero-actions">
             <RouteLink className="action-button primary" route={{ surface: "practice", activity: "pitch-match", mode: "cold" }}><Icon name="mic" size={18} /> Open cold attacks</RouteLink>
-            <PlayButton label={`Hear ${noteLabel(selectedMidi)}`} onClick={() => playSafely(playTone({ frequencyHz: continuousMidiToHz(selectedMidi, centsOffset), timbre }), "Home reference tone")} />
+            <NotePlaybackToggle playback={notePlayback} label={noteLabel(selectedMidi)} />
           </div>
         </div>
         <SignalGlyph input={input} />

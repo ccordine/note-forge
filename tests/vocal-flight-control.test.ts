@@ -56,9 +56,11 @@ function observation(
     sampleRate,
     startSample: endSample - 4_096,
     endSample,
+    processedSampleCount: endSample,
     captureEpoch: options.captureEpoch ?? 1,
     continuityEpoch: options.continuityEpoch ?? 0,
     graphGeneration: options.graphGeneration ?? 0,
+    workletProcessCount: Math.floor(endSample / 128),
     discontinuity: options.discontinuity ?? index === 0,
     frequencyHz,
     midiFloat: frequencyHz === null ? null : 69 + 12 * Math.log2(frequencyHz / 440),
@@ -116,6 +118,25 @@ describe("Vocal Flight personalized control adapter", () => {
       cents: 200,
       brightness: null,
       brightnessConfidence: 0,
+    }));
+    expect(update.vector.pitchAxis).toBeGreaterThan(0);
+    expect(update.vector.brightnessAxis).toBe(0);
+    expect(update.vector.active).toBe(true);
+  });
+
+  it("keeps pitch control live while the shared brightness policy neutralizes only unqualified roll", () => {
+    let state = fastControl();
+    state = updateVocalControl(state, observation(0, {
+      cents: 200,
+      brightness: 0.8,
+      brightnessConfidence: 0.54,
+      confidence: 0.01,
+    })).state;
+    const update = updateVocalControl(state, observation(1, {
+      cents: 200,
+      brightness: 0.8,
+      brightnessConfidence: 0.54,
+      confidence: 0.01,
     }));
     expect(update.vector.pitchAxis).toBeGreaterThan(0);
     expect(update.vector.brightnessAxis).toBe(0);

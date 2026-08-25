@@ -1,6 +1,11 @@
 import type { PitchObservation } from "@/audio/note-input";
-import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "@/audio/microphone";
 import { noteLabel } from "@/lib/music-display";
+import { clamp, clampPercent } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import { resolveArcadeCurriculum } from "./curriculum";
 import { gradeChallengeScore } from "./model";
 import {
@@ -18,7 +23,6 @@ import type {
 import {
   advanceVoiceAxisController,
   createVoiceAxisController,
-  isVoiceAxisFrameReliable,
   updateVoiceAxisFromFrame,
   type VoiceAxisControllerOptions,
   type VoiceAxisControllerState,
@@ -57,15 +61,6 @@ export interface PongRoundResult {
   readonly winner: PongState["winner"];
 }
 
-interface ObservationAuthority {
-  readonly sampleRate: number;
-  readonly startSample: number;
-  readonly endSample: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-}
-
 export interface PitchPongSpec {
   readonly difficulty: ArcadeDifficultyId;
   readonly curriculumStage: ArcadeCurriculumStage;
@@ -89,7 +84,7 @@ export interface PitchPongState {
   readonly achievementCount: number;
   readonly voiceAxis: VoiceAxisControllerState;
   readonly stats: PongRoundStats;
-  readonly lastAuthority: ObservationAuthority | null;
+  readonly lastAuthority: ObservationSampleAuthority | null;
   readonly roundNumber: number;
   readonly spec: PitchPongSpec;
 }
@@ -103,10 +98,6 @@ export type PitchPongAction =
   | { readonly type: "reset" };
 
 const SCORE_FLASH_SECONDS = 0.72;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 function difficultyConfig(difficulty: ArcadeDifficultyId): Readonly<Partial<PongConfig>> {
   if (difficulty === "easy") {
@@ -192,15 +183,13 @@ function scoreRound(
   const observedSpan = stats.lowestPitchMidi === null || stats.highestPitchMidi === null
     ? 0
     : stats.highestPitchMidi - stats.lowestPitchMidi;
-  const rangeCoveragePercent = clamp(observedSpan / rangeSpan * 100, 0, 100);
-  const rallyPercent = clamp(stats.maximumRally / 10 * 100, 0, 100);
-  const scorePercent = Math.round(clamp(
+  const rangeCoveragePercent = clampPercent(observedSpan / rangeSpan * 100);
+  const rallyPercent = clampPercent(stats.maximumRally / 10 * 100);
+  const scorePercent = Math.round(clampPercent(
     returnRatePercent * 0.5
       + matchSharePercent * 0.25
       + rallyPercent * 0.15
       + rangeCoveragePercent * 0.1,
-    0,
-    100,
   ));
   const { grade } = gradeChallengeScore(scorePercent);
   return Object.freeze({
@@ -220,37 +209,6 @@ function scoreRound(
     highestPitchMidi: stats.highestPitchMidi,
     winner: game.winner,
   });
-}
-
-function authorityOf(observation: Readonly<PitchObservation>): ObservationAuthority {
-  return Object.freeze({
-    sampleRate: observation.sampleRate,
-    startSample: observation.startSample,
-    endSample: observation.endSample,
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-  });
-}
-
-function continuousDelta(
-  previous: Readonly<ObservationAuthority> | null,
-  observation: Readonly<PitchObservation>,
-): number {
-  if (previous === null || observation.discontinuity) return 0;
-  const sameAuthority = previous.sampleRate === observation.sampleRate
-    && previous.captureEpoch === observation.captureEpoch
-    && previous.continuityEpoch === observation.continuityEpoch
-    && previous.graphGeneration === observation.graphGeneration;
-  const previousWindow = previous.endSample - previous.startSample;
-  const currentWindow = observation.endSample - observation.startSample;
-  const hop = observation.endSample - previous.endSample;
-  const expectedHop = Math.round(observation.sampleRate * MICROPHONE_ANALYSIS_HOP_SECONDS);
-  const overlapping = hop === expectedHop
-    && previousWindow === currentWindow
-    && observation.startSample - previous.startSample === hop
-    && hop < currentWindow;
-  return sameAuthority && overlapping ? hop / observation.sampleRate : 0;
 }
 
 function finishState(
@@ -297,10 +255,12 @@ function consumeObservation(
   observation: Readonly<PitchObservation>,
 ): PitchPongState {
   if (state.phase !== "playing") return state as PitchPongState;
-  const deltaSeconds = continuousDelta(state.lastAuthority, observation);
-  const boundary = deltaSeconds === 0;
+  const continuity = observationContinuity(state.lastAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as PitchPongState;
+  const deltaSeconds = continuity.deltaSeconds;
+  const boundary = continuity.boundary;
   const previousAxis = boundary ? resetAxis(state.voiceAxis) : state.voiceAxis;
-  const reliable = isVoiceAxisFrameReliable(observation);
+  const reliable = isAuthoritativeVoicedPitch(observation);
   const advancedAxis = reliable && previousAxis.status === "steering" && deltaSeconds > 0
     ? advanceVoiceAxisController(previousAxis, { deltaSeconds })
     : previousAxis;
@@ -378,7 +338,7 @@ function consumeObservation(
       achievementCount,
       voiceAxis: axisUpdate.state,
       stats,
-      lastAuthority: authorityOf(observation),
+      lastAuthority: continuity.authority,
     });
   }
   return Object.freeze({
@@ -389,7 +349,7 @@ function consumeObservation(
     scoreFlashUntilSeconds,
     voiceAxis: axisUpdate.state,
     stats,
-    lastAuthority: authorityOf(observation),
+    lastAuthority: continuity.authority,
   });
 }
 

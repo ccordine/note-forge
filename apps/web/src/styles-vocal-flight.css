@@ -180,11 +180,6 @@
   stroke: #5ee8ff;
   stroke-width: 2;
   filter: drop-shadow(0 0 7px rgba(94, 232, 255, .95));
-  transition: opacity .1s ease;
-}
-
-.vocal-control-reticle[data-active="false"] .vocal-control-current {
-  opacity: .46;
 }
 
 .vocal-control-label {

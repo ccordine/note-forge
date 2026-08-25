@@ -1,31 +1,26 @@
 import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "../../audio/microphone";
 import {
-  NOTE_INPUT_DEFAULTS,
   type PitchObservation,
   type PitchObservationKind,
 } from "../../audio/note-input";
+import { clampUnit } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 
 export const RANGE_DWELL_DEFAULTS = Object.freeze({
-  minimumConfidence: NOTE_INPUT_DEFAULTS.minConfidence,
   /** One missing 20 ms detector hop cannot be credited as observed dwell. */
   maximumCreditedIntervalSeconds: MICROPHONE_ANALYSIS_HOP_SECONDS * 1.5,
 });
 
-export interface RangeDwellAuthority {
-  readonly sampleRate: number;
-  readonly endSample: number;
-  readonly processedSampleCount: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly workletProcessCount: number;
-}
+export type RangeDwellAuthority = ObservationSampleAuthority;
 
 export interface CreateRangeDwellOptions {
   readonly targetMidi: number;
   readonly toleranceCents: number;
   readonly requiredHoldSeconds: number;
-  readonly minimumConfidence?: number;
   readonly maximumCreditedIntervalSeconds?: number;
 }
 
@@ -33,7 +28,6 @@ export interface RangeDwellState {
   readonly targetMidi: number;
   readonly toleranceCents: number;
   readonly requiredHoldSeconds: number;
-  readonly minimumConfidence: number;
   readonly maximumCreditedIntervalSeconds: number;
   /** A threshold milestone. It never stops or freezes observation processing. */
   readonly achievementReached: boolean;
@@ -75,49 +69,6 @@ function finiteOrNull(value: number | null): number | null {
   return value !== null && Number.isFinite(value) ? value : null;
 }
 
-function validObservationAuthority(observation: Readonly<PitchObservation>): boolean {
-  return Number.isFinite(observation.sampleRate)
-    && observation.sampleRate > 0
-    && Number.isSafeInteger(observation.startSample)
-    && observation.startSample >= 0
-    && Number.isSafeInteger(observation.endSample)
-    && observation.endSample > observation.startSample
-    && Number.isSafeInteger(observation.processedSampleCount)
-    && observation.processedSampleCount === observation.endSample
-    && Number.isSafeInteger(observation.captureEpoch)
-    && observation.captureEpoch >= 0
-    && Number.isSafeInteger(observation.continuityEpoch)
-    && observation.continuityEpoch >= 0
-    && Number.isSafeInteger(observation.graphGeneration)
-    && observation.graphGeneration >= 0
-    && Number.isSafeInteger(observation.workletProcessCount)
-    && observation.workletProcessCount >= 0;
-}
-
-function authorityFromObservation(
-  observation: Readonly<PitchObservation>,
-): Readonly<RangeDwellAuthority> {
-  return Object.freeze({
-    sampleRate: observation.sampleRate,
-    endSample: observation.endSample,
-    processedSampleCount: observation.processedSampleCount,
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-    workletProcessCount: observation.workletProcessCount,
-  });
-}
-
-function sameStreamAuthority(
-  previous: Readonly<RangeDwellAuthority>,
-  observation: Readonly<PitchObservation>,
-): boolean {
-  return previous.sampleRate === observation.sampleRate
-    && previous.captureEpoch === observation.captureEpoch
-    && previous.continuityEpoch === observation.continuityEpoch
-    && previous.graphGeneration === observation.graphGeneration;
-}
-
 interface CurrentObservation {
   readonly currentObservationKind: PitchObservationKind;
   readonly currentMidiFloat: number | null;
@@ -147,12 +98,9 @@ function readCurrentObservation(
     : null;
   const frequencyHz = finiteOrNull(observation.frequencyHz);
   const confidence = Number.isFinite(observation.confidence)
-    ? Math.min(1, Math.max(0, observation.confidence))
+    ? clampUnit(observation.confidence)
     : 0;
-  const reliableVoiced = observation.observationKind === "voiced"
-    && observation.voiced
-    && midiFloat !== null
-    && confidence >= state.minimumConfidence;
+  const reliableVoiced = isAuthoritativeVoicedPitch(observation);
   const centsFromTarget = midiFloat === null ? null : (midiFloat - state.targetMidi) * 100;
   return Object.freeze({
     currentObservationKind: observation.observationKind,
@@ -170,7 +118,7 @@ function readCurrentObservation(
 
 function observeWithoutCredit(
   state: Readonly<RangeDwellState>,
-  observation: Readonly<PitchObservation>,
+  authority: Readonly<ObservationSampleAuthority>,
   current: Readonly<CurrentObservation>,
   previousFrameQualified: boolean,
 ): RangeDwellState {
@@ -178,14 +126,14 @@ function observeWithoutCredit(
     ...state,
     ...currentStateFields(current),
     observedFrameCount: state.observedFrameCount + 1,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: authority,
     previousFrameQualified,
   });
 }
 
 function resetFromObservation(
   state: Readonly<RangeDwellState>,
-  observation: Readonly<PitchObservation>,
+  authority: Readonly<ObservationSampleAuthority>,
   current: Readonly<CurrentObservation>,
 ): RangeDwellState {
   return freezeState({
@@ -195,7 +143,7 @@ function resetFromObservation(
     heldSeconds: 0,
     progress: 0,
     observedFrameCount: state.observedFrameCount + 1,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: authority,
     previousFrameQualified: false,
   });
 }
@@ -215,12 +163,6 @@ export function createRangeDwell(
   if (options.requiredHoldSeconds <= 0) {
     throw new RangeError("Required hold duration must be greater than zero.");
   }
-  const minimumConfidence = options.minimumConfidence
-    ?? RANGE_DWELL_DEFAULTS.minimumConfidence;
-  requireFinite(minimumConfidence, "Minimum confidence");
-  if (minimumConfidence < 0 || minimumConfidence > 1) {
-    throw new RangeError("Minimum confidence must be from 0 through 1.");
-  }
   const maximumCreditedIntervalSeconds = options.maximumCreditedIntervalSeconds
     ?? RANGE_DWELL_DEFAULTS.maximumCreditedIntervalSeconds;
   requireFinite(maximumCreditedIntervalSeconds, "Maximum credited interval");
@@ -232,7 +174,6 @@ export function createRangeDwell(
     targetMidi: options.targetMidi,
     toleranceCents: options.toleranceCents,
     requiredHoldSeconds: options.requiredHoldSeconds,
-    minimumConfidence,
     maximumCreditedIntervalSeconds,
     achievementReached: false,
     heldSamples: 0,
@@ -264,49 +205,33 @@ export function updateRangeDwell(
   state: Readonly<RangeDwellState>,
   observation: Readonly<PitchObservation>,
 ): RangeDwellState {
-  if (!validObservationAuthority(observation)) return state as RangeDwellState;
   const previous = state.lastAuthority;
-
-  // Duplicates and reordered observations have no authority to replace a newer
-  // current reading or make a later interval include already processed samples.
-  if (
-    previous !== null
-    && sameStreamAuthority(previous, observation)
-    && (
-      observation.endSample <= previous.endSample
-      || observation.workletProcessCount <= previous.workletProcessCount
-    )
-  ) {
-    return state as RangeDwellState;
-  }
+  const continuity = observationContinuity(previous, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as RangeDwellState;
+  const authority = continuity.authority;
 
   const current = readCurrentObservation(state, observation);
   const qualified = current.reliableVoiced && current.currentInTolerance === true;
-  const boundary = previous === null
-    || observation.discontinuity
-    || !sameStreamAuthority(previous, observation);
-
   if (
     current.reliableVoiced
     && current.currentInTolerance === false
   ) {
-    return resetFromObservation(state, observation, current);
+    return resetFromObservation(state, authority, current);
   }
 
-  if (boundary) {
-    return observeWithoutCredit(state, observation, current, qualified);
+  if (continuity.boundary) {
+    return observeWithoutCredit(state, authority, current, qualified);
   }
 
-  const deltaSamples = observation.endSample - previous.endSample;
-  const deltaSeconds = deltaSamples / observation.sampleRate;
-  const missingEvidence = deltaSamples <= 0
-    || deltaSeconds > state.maximumCreditedIntervalSeconds + Number.EPSILON;
+  const deltaSamples = continuity.deltaSamples;
+  const deltaSeconds = continuity.deltaSeconds;
+  const missingEvidence = deltaSeconds > state.maximumCreditedIntervalSeconds + Number.EPSILON;
   if (missingEvidence) {
-    return observeWithoutCredit(state, observation, current, qualified);
+    return observeWithoutCredit(state, authority, current, qualified);
   }
 
   if (!qualified || !state.previousFrameQualified) {
-    return observeWithoutCredit(state, observation, current, qualified);
+    return observeWithoutCredit(state, authority, current, qualified);
   }
 
   const heldSamples = state.heldSamples + deltaSamples;
@@ -323,7 +248,7 @@ export function updateRangeDwell(
     peakHeldSeconds: Math.max(state.peakHeldSeconds, heldSeconds),
     progress: Math.min(1, heldSeconds / state.requiredHoldSeconds),
     observedFrameCount: state.observedFrameCount + 1,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: authority,
     previousFrameQualified: qualified,
   });
 }

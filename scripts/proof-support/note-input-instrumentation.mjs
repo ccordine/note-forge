@@ -8,6 +8,8 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
     oscillators: 0,
     oscillatorStarts: [],
     oscillatorStops: [],
+    gainNodes: 0,
+    gainParamEvents: [],
     audioContextSuspendRequests: 0,
     audioContextSuspendRequestedAt: null,
     workletModuleUrls: [],
@@ -16,6 +18,8 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
     workletLevelMessages: 0,
     workletSampleEvents: [],
     domFrameMutations: [],
+    pitchPresentationClaims: [],
+    ribbonMutations: [],
     trackInitialStates: [],
     trackEnabledWrites: [],
     trackStopCalls: [],
@@ -57,6 +61,33 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
           const context = Reflect.construct(target, args, target);
           capturedAudioContext = context;
           proof.audioContexts += 1;
+          const nativeCreateGain = context.createGain.bind(context);
+          context.createGain = (...gainArgs) => {
+            const gain = nativeCreateGain(...gainArgs);
+            const gainNodeId = ++proof.gainNodes;
+            const parameter = gain.gain;
+            for (const method of [
+              'setValueAtTime',
+              'linearRampToValueAtTime',
+              'exponentialRampToValueAtTime',
+              'cancelScheduledValues',
+            ]) {
+              const nativeMethod = parameter[method].bind(parameter);
+              parameter[method] = (...methodArgs) => {
+                proof.gainParamEvents.push({
+                  gainNodeId,
+                  method,
+                  at: performance.now(),
+                  contextTime: context.currentTime,
+                  value: method === 'cancelScheduledValues' ? null : methodArgs[0],
+                  when: method === 'cancelScheduledValues' ? methodArgs[0] : methodArgs[1],
+                });
+                if (proof.gainParamEvents.length > 4096) proof.gainParamEvents.shift();
+                return nativeMethod(...methodArgs);
+              };
+            }
+            return gain;
+          };
           const nativeCreateOscillator = context.createOscillator.bind(context);
           context.createOscillator = (...oscillatorArgs) => {
             const oscillator = nativeCreateOscillator(...oscillatorArgs);
@@ -176,13 +207,75 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
       proof.instrumentationErrors.push('AudioWorkletNode instrumentation: ' + String(error));
     }
   }
+  const recordPitchPresentationClaims = (mutations) => {
+    const records = mutations.filter((mutation) =>
+      mutation.type === 'attributes'
+        && mutation.attributeName === 'data-pitch-presentation-claim'
+        && mutation.target instanceof Element);
+    for (const [index, mutation] of records.entries()) {
+      const following = records.slice(index + 1).find((candidate) =>
+        candidate.target === mutation.target);
+      const serialized = following?.oldValue
+        ?? mutation.target.getAttribute('data-pitch-presentation-claim');
+      if (!serialized) continue;
+      try {
+        const values = JSON.parse(serialized);
+        const observation = {
+          at: performance.now(),
+          endSample: values[0],
+          captureEpoch: values[1],
+          continuityEpoch: values[2],
+          graphGeneration: values[3],
+          observationKind: values[4],
+          trackingDecision: values[5],
+          candidateMidi: values[6],
+          candidateFrequencyHz: values[7],
+          candidateRawFrequencyHz: values[8],
+          displayedMidi: values[9],
+          inputState: values[10],
+        };
+        if (!Number.isSafeInteger(observation.endSample)) continue;
+        const previous = proof.pitchPresentationClaims.at(-1);
+        if (previous
+          && previous.captureEpoch === observation.captureEpoch
+          && previous.endSample === observation.endSample) continue;
+        proof.pitchPresentationClaims.push(observation);
+        if (proof.pitchPresentationClaims.length > 8192) {
+          proof.pitchPresentationClaims.shift();
+        }
+      } catch (error) {
+        proof.instrumentationErrors.push('pitch presentation claim: ' + String(error));
+      }
+    }
+  };
   const recordRenderedFrame = () => {
     const scope = document.querySelector('[data-note-input]');
     const pitch = document.querySelector('[data-detected-note]');
+    const pitchMeter = scope?.querySelector('[data-live-pitch-meter]');
+    const pitchMarker = pitchMeter?.querySelector('[data-live-pitch-marker]');
     const rawEndSample = scope?.getAttribute('data-end-sample');
     const rawHeldSamples = scope?.getAttribute('data-held-samples');
     const rawHeldSeconds = scope?.getAttribute('data-held-seconds');
     if (!scope || !pitch || rawEndSample === null || rawEndSample === '') return;
+    const optionalNumberAttribute = (name) => {
+      const raw = scope.getAttribute(name);
+      return raw === null || raw === '' ? null : Number(raw);
+    };
+    const meterRectangle = pitchMeter?.getBoundingClientRect();
+    const markerRectangle = pitchMarker?.getBoundingClientRect();
+    const markerComputedLeft = pitchMarker
+      ? Number.parseFloat(getComputedStyle(pitchMarker).left)
+      : Number.NaN;
+    const markerInlineLeft = pitchMarker
+      ? Number.parseFloat(pitchMarker.style.left)
+      : Number.NaN;
+    const rawMeterLiveMidi = pitchMeter?.getAttribute('data-live-midi');
+    const rawMeterPosition = pitchMeter?.getAttribute('data-pitch-position');
+    const markerCenterPercent = meterRectangle && markerRectangle
+      && meterRectangle.width > 0
+      ? (markerRectangle.left + markerRectangle.width / 2 - meterRectangle.left)
+        / meterRectangle.width * 100
+      : Number.NaN;
     const observation = {
       at: performance.now(),
       note: pitch.getAttribute('data-detected-note') || null,
@@ -197,8 +290,34 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
       heldSeconds: rawHeldSeconds === null || rawHeldSeconds === ''
         ? null
         : Number(rawHeldSeconds),
+      observationKind: scope.getAttribute('data-observation-kind') || null,
+      trackingDecision: scope.getAttribute('data-pitch-tracking-decision') || null,
+      candidateMidi: optionalNumberAttribute('data-pitch-candidate-midi'),
+      candidateFrequencyHz: optionalNumberAttribute('data-pitch-candidate-frequency'),
+      candidateRawFrequencyHz: optionalNumberAttribute('data-pitch-candidate-raw-frequency'),
       inputState: scope.getAttribute('data-input-state'),
       hash: location.hash,
+      meter: pitchMeter ? {
+        scale: pitchMeter.getAttribute('data-pitch-scale'),
+        liveMidi: rawMeterLiveMidi === null || rawMeterLiveMidi === ''
+          ? null
+          : Number(rawMeterLiveMidi),
+        declaredPositionPercent: rawMeterPosition === null || rawMeterPosition === ''
+          ? null
+          : Number(rawMeterPosition),
+        markerInlinePositionPercent: Number.isFinite(markerInlineLeft)
+          ? markerInlineLeft
+          : null,
+        markerComputedLeftPixels: Number.isFinite(markerComputedLeft)
+          ? markerComputedLeft
+          : null,
+        markerCenterPercent: Number.isFinite(markerCenterPercent)
+          ? markerCenterPercent
+          : null,
+        widthPixels: meterRectangle && Number.isFinite(meterRectangle.width)
+          ? meterRectangle.width
+          : null,
+      } : null,
     };
     if (!Number.isSafeInteger(observation.endSample) || observation.endSample < 0) return;
     const previous = proof.domFrameMutations.at(-1);
@@ -209,21 +328,75 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
     proof.domFrameMutations.push(observation);
     if (proof.domFrameMutations.length > 8192) proof.domFrameMutations.shift();
   };
-  const renderedFrameObserver = new MutationObserver(recordRenderedFrame);
+  const recordPitchRibbon = () => {
+    const ribbon = document.querySelector('[data-full-depth-pitch-ribbon]');
+    const segments = ribbon
+      ? [...ribbon.querySelectorAll('[data-pitch-trace-segment]')]
+      : [];
+    const latestSegment = segments.at(-1);
+    const latestPath = latestSegment?.getAttribute('d') ?? '';
+    const points = [...latestPath.matchAll(/[ML]\\s+(-?[\\d.]+)\\s+(-?[\\d.]+)/gu)];
+    const lastPoint = points.at(-1);
+    const numberAttribute = (name) => {
+      const raw = latestSegment?.getAttribute(name);
+      return raw === null || raw === undefined || raw === '' ? null : Number(raw);
+    };
+    if (!ribbon || !latestSegment || !lastPoint) return;
+    const observation = {
+      at: performance.now(),
+      startSample: numberAttribute('data-start-sample'),
+      endSample: numberAttribute('data-end-sample'),
+      captureEpoch: numberAttribute('data-capture-epoch'),
+      continuityEpoch: numberAttribute('data-continuity-epoch'),
+      graphGeneration: numberAttribute('data-graph-generation'),
+      liveMidi: numberAttribute('data-live-midi'),
+      segmentCount: segments.length,
+      latestX: Number(lastPoint[1]),
+      latestY: Number(lastPoint[2]),
+      hash: location.hash,
+    };
+    if (!Number.isSafeInteger(observation.endSample)
+      || !Number.isFinite(observation.latestX)
+      || !Number.isFinite(observation.latestY)) return;
+    const previous = proof.ribbonMutations.at(-1);
+    if (previous
+      && previous.endSample === observation.endSample
+      && previous.latestX === observation.latestX
+      && previous.latestY === observation.latestY
+      && previous.hash === observation.hash) return;
+    proof.ribbonMutations.push(observation);
+    if (proof.ribbonMutations.length > 4096) proof.ribbonMutations.shift();
+  };
+  const renderedFrameObserver = new MutationObserver((mutations) => {
+    recordPitchPresentationClaims(mutations);
+    recordRenderedFrame();
+    recordPitchRibbon();
+  });
   renderedFrameObserver.observe(document, {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: true,
     attributeFilter: [
       'data-detected-note',
       'data-frame-count',
+      'data-observation-kind',
       'data-end-sample',
       'data-capture-epoch',
       'data-continuity-epoch',
       'data-graph-generation',
       'data-held-samples',
       'data-held-seconds',
+      'data-pitch-tracking-decision',
+      'data-pitch-candidate-midi',
+      'data-pitch-candidate-frequency',
+      'data-pitch-candidate-raw-frequency',
+      'data-pitch-presentation-claim',
       'data-input-state',
+      'data-live-midi',
+      'data-pitch-position',
+      'data-pitch-scale',
+      'd',
     ],
   });
   const devices = navigator.mediaDevices;

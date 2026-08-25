@@ -1,14 +1,7 @@
 import type { ResonanceVector } from "./resonance-types";
+export { clamp, clampUnit as clamp01 } from "@/lib/numeric";
 
 export const RESONANCE_EPSILON = 1e-9;
-
-export function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-export function clamp01(value: number): number {
-  return clamp(value, 0, 1);
-}
 
 export function vector(x: number, y: number): ResonanceVector {
   return { x, y };

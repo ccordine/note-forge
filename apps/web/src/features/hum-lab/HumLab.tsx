@@ -1,14 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import "../../styles-hum.css";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import {
   attemptRecentScoringFrames,
+  attemptScoringFrames,
   type AttemptRunnerStatus,
   type CompletedAttempt,
 } from "@/features/training-session/attempt-runner";
 import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
-import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import type { HumMode } from "@/navigation";
@@ -16,11 +16,12 @@ import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import { saveAttempt } from "@/storage/database";
-import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import {
-  median,
+  humRibbonAnchorMidi,
   scoreHumTake,
   type HumResult,
   type HumShape,
@@ -29,7 +30,7 @@ import {
 
 const MODES: Record<HumMode, { label: string; headline: string; detail: string }> = {
   anchor: { label: "Find anchor", headline: "Find the note inside your natural hum.", detail: "Hum without aiming; finish when the trace contains the center you want measured." },
-  match: { label: "Target match", headline: "Keep a brief target in memory.", detail: "Play the reference if useful, then measure for as long as you choose." },
+  match: { label: "Target match", headline: "Keep a target in memory.", detail: "Toggle the reference off when you are ready, then measure for as long as you choose." },
   glide: { label: "Glide", headline: "Slide the hum into the target lane.", detail: "The guide never accompanies you; the landing portion of your own trace is scored." },
   sustain: { label: "Long sustain", headline: "Keep the center while the breath moves.", detail: "Keep the trace live for as long as you want; finish only when you choose." },
 };
@@ -126,11 +127,15 @@ export function HumLab() {
   const activeTimbre = attemptConfiguration?.timbre ?? timbre;
   const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
   const liveFrames = attemptRecentScoringFrames(attempt.state);
+  const sessionFrames = attemptScoringFrames(attempt.state);
   const targetMidiFloat = activeMidi + activeCentsOffset / 100;
   const targetFrequency = continuousMidiToHz(activeMidi, activeCentsOffset);
-  const anchorPreview = median(liveFrames.flatMap((frame) => (
-    frame.voiced && frame.confidence >= 0.55 && frame.midiFloat !== null ? [frame.midiFloat] : []
-  )));
+  const targetPlayback = useSustainedNote({
+    frequencyHz: targetFrequency,
+    timbre: activeTimbre,
+    amplitude: 0.22,
+  });
+  const anchorPreview = humRibbonAnchorMidi(sessionFrames);
   const ribbonTarget = activeMode === "anchor"
     ? result?.anchor?.midiFloat ?? anchorPreview ?? targetMidiFloat
     : targetMidiFloat;
@@ -157,12 +162,6 @@ export function HumLab() {
     clearTake();
     attempt.begin({ mode, shape, midi: selectedMidi, centsOffset, timbre, toleranceCents });
   };
-  const hearTarget = () => attempt.playReference("Hum Lab reference", () => playTone({
-    frequencyHz: targetFrequency,
-    timbre: activeTimbre,
-    duration: BRIEF_REFERENCE_SECONDS,
-    amplitude: 0.22,
-  }));
   const noteInputTarget = activeMode === "anchor" ? undefined : targetMidiFloat;
   let orbLabel = "TARGET";
   let orbNote = noteLabel(activeMidi);
@@ -223,7 +222,6 @@ export function HumLab() {
           <div className="hum-shapes">{shapeOptions.map(([value, item]) => <button key={value} className={shape === value ? "active" : ""} onClick={() => { clearTake(); setShape(value); }}><strong>{item.symbol}</strong><span>{item.label}</span></button>)}</div>
           <div className="shape-cue"><span>{SHAPES[shape].symbol}</span><p>{SHAPES[shape].cue}</p></div>
           <div className="stage-actions">
-            {mode !== "anchor" && <PlayButton label="Hear brief target" onClick={hearTarget} />}
             <ActionButton className="primary attempt-button" disabled={input.state !== "running"} onClick={begin}><Icon name="hum" size={18} /> {beginLabel}</ActionButton>
           </div>
         </Panel>
@@ -238,7 +236,6 @@ export function HumLab() {
         </div>
         <PitchRibbon frames={ribbonFrames} targetMidiFloat={ribbonTarget} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
         <div className="stage-actions">
-          {activeMode !== "anchor" && <PlayButton label="Hear brief target" onClick={hearTarget} />}
           <ActionButton onClick={attempt.finish}>Finish trace</ActionButton>
         </div>
       </Panel>
@@ -279,6 +276,7 @@ export function HumLab() {
       {evidenceError && <div className="error-banner"><strong>No voiced center in this trace.</strong><span>{evidenceError}</span></div>}
 
       <NoteInput variant="scope" input={input} title="Hum input scope" targetMidiFloat={noteInputTarget} toleranceCents={activeToleranceCents} />
+      {(activeMode !== "anchor" || targetPlayback.playing) && <div className="practice-reference-control"><NotePlaybackToggle playback={targetPlayback} label={noteLabel(activeMidi)} /></div>}
       <section className="practice-current-step">{currentStep}</section>
     </div>
   );

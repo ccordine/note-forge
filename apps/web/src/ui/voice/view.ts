@@ -1,6 +1,7 @@
-import type { YinPitchFrame } from "@noteforge/pitch-engine";
+import type { PitchObservation } from "../../audio/note-input";
 import type { AudioInputState } from "../../audio/use-audio-input";
 import { noteLabel } from "../../lib/music-display";
+import { isAuthoritativeVoicedPitch } from "../../realtime/authoritative-voiced-pitch";
 
 export type VoiceCoachPhase = "idle" | "listening" | "complete";
 
@@ -16,7 +17,7 @@ export interface VoiceCoachViewInput {
   targetMidi: number;
   toleranceCents: number;
   phase: VoiceCoachPhase;
-  frame?: Readonly<YinPitchFrame>;
+  frame?: Readonly<PitchObservation>;
   hold: VoiceCoachHold;
   guidanceTitle?: string;
   guidanceDetail?: string;
@@ -58,9 +59,8 @@ export function createVoiceCoachView({
 }: VoiceCoachViewInput): VoiceCoachView {
   const inputRunning = inputState === "running";
   const measuredFrame = inputRunning
-    && frame?.voiced === true
-    && frame.midiFloat !== null
-    && Number.isFinite(frame.midiFloat)
+    && frame
+    && isAuthoritativeVoicedPitch(frame)
     ? frame
     : null;
   const measuredMidi = measuredFrame?.midiFloat ?? null;

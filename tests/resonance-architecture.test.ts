@@ -83,18 +83,20 @@ describe("Resonance continuous-input architecture guard", () => {
   });
 
   it("advances only from exact PCM hops and treats gaps as fresh authority", () => {
-    expect(SESSION_SOURCE).toContain("frame.endSample - previous.endSample");
-    expect(SESSION_SOURCE).toContain("Math.round(frame.sampleRate * ANALYSIS_HOP_SECONDS)");
-    expect(SESSION_SOURCE).toContain("if (delta !== expectedHop) return { samples: 0, boundary: true }");
+    expect(SESSION_SOURCE).toContain("observationContinuity(previousAuthority, observation)");
+    expect(SESSION_SOURCE).toContain("samples: continuity.deltaSamples");
+    expect(SESSION_SOURCE).toContain("boundary: continuity.boundary");
+    expect(SESSION_SOURCE).not.toMatch(/endSample\s*-\s*previous\.endSample|expectedHop/);
     expect(SESSION_SOURCE).toContain("delta.samples / observation.sampleRate");
     expect(SESSION_SOURCE).not.toMatch(/performance|Date\.now|requestAnimationFrame/);
   });
 
-  it("keeps references brief and state-neutral", () => {
-    expect(UI_SOURCE).toContain("const REFERENCE_SECONDS = 0.32");
-    expect(UI_SOURCE).toContain("useSessionEffectScope");
-    expect(UI_SOURCE).toContain("reference.playReference(");
-    expect(UI_SOURCE).not.toContain("playSafely");
+  it("keeps the resonator target on the app-owned sustained toggle", () => {
+    expect(UI_SOURCE).toContain("useSustainedNote");
+    expect(UI_SOURCE).toContain("<NotePlaybackToggle");
+    expect(UI_SOURCE).toContain("playback={targetPlayback}");
+    expect(UI_SOURCE).not.toMatch(/REFERENCE_SECONDS|BRIEF_REFERENCE_SECONDS|useSessionEffectScope|reference\.playReference|\bplayTone\s*\(|\bDrone\b|playSafely/);
+    expect(UI_SOURCE).not.toMatch(/targetPlayback\.(?:toggle|release)\s*\(/);
     expect(UI_SOURCE).not.toMatch(/prompt|exclude|releaseRequired|previewing/i);
   });
 

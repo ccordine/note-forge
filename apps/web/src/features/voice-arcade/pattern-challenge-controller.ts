@@ -1,4 +1,10 @@
 import type { PitchObservation } from "../../audio/note-input";
+import { clamp } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import {
   createChallengeSession,
   createChallengeSteps,
@@ -22,15 +28,11 @@ export interface PatternChallengeControllerOptions {
   readonly lowMidi: number;
   readonly highMidi: number;
   readonly baselineMidi: number;
-  readonly minimumConfidence?: number;
 }
 
 interface PatternSampleClock {
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly sampleRate: number;
-  readonly lastEndSample: number;
+  readonly authority: Readonly<ObservationSampleAuthority>;
+  readonly observationKind: PitchObservation["observationKind"];
 }
 
 export interface PatternChallengeScoreAggregate {
@@ -71,7 +73,6 @@ export type PatternChallengeAction =
   | { readonly type: "change-loadout" }
   | { readonly type: "next-round" };
 
-const DEFAULT_MINIMUM_CONFIDENCE = 0.55;
 const EPSILON = 1e-9;
 const EMPTY_SCORE_AGGREGATE: PatternChallengeScoreAggregate = Object.freeze({
   score: 0,
@@ -83,10 +84,6 @@ const EMPTY_SCORE_AGGREGATE: PatternChallengeScoreAggregate = Object.freeze({
   pitchQualityTotal: 0,
   maxCombo: 0,
 });
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 function markStepMissed(step: Readonly<ChallengeStepProgress>): ChallengeStepProgress {
   return {
@@ -100,15 +97,8 @@ function markStepMissed(step: Readonly<ChallengeStepProgress>): ChallengeStepPro
 
 function reliableVoicedObservation(
   observation: Readonly<PitchObservation>,
-  minimumConfidence: number,
 ): observation is Readonly<PitchObservation> & { midiFloat: number } {
-  return observation.observationKind === "voiced"
-    && observation.detector === "yin"
-    && observation.reason === "detected"
-    && observation.voiced
-    && observation.midiFloat !== null
-    && Number.isFinite(observation.midiFloat)
-    && observation.confidence >= minimumConfidence;
+  return isAuthoritativeVoicedPitch(observation);
 }
 
 /**
@@ -169,7 +159,7 @@ export function scorePatternObservation(
     };
   }
 
-  if (!reliableVoicedObservation(observation, session.minimumConfidence)) {
+  if (!reliableVoicedObservation(observation)) {
     return {
       ...session,
       status: "running",
@@ -371,9 +361,7 @@ function nextPhraseSession(
     mode: state.mode,
     difficulty: state.options.difficulty,
     startAtSeconds: elapsedSeconds + .001,
-  }), {
-    minimumConfidence: state.options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
-  });
+  }));
 }
 
 function preparePatternChallenge(
@@ -397,9 +385,7 @@ function preparePatternChallenge(
     ...state,
     phase: "preview",
     pattern,
-    session: createChallengeSession(steps, {
-      minimumConfidence: state.options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
-    }),
+    session: createChallengeSession(steps),
     scoreAggregate: EMPTY_SCORE_AGGREGATE,
     achievementCount: 0,
     achievementResult: null,
@@ -427,21 +413,6 @@ function finishPatternChallenge(
   };
 }
 
-function observationStartsNewSegment(
-  clock: Readonly<PatternSampleClock> | null,
-  observation: Readonly<PitchObservation>,
-): boolean {
-  if (!clock || observation.discontinuity) return true;
-  if (
-    observation.captureEpoch !== clock.captureEpoch
-    || observation.continuityEpoch !== clock.continuityEpoch
-    || observation.graphGeneration !== clock.graphGeneration
-    || observation.sampleRate !== clock.sampleRate
-  ) return true;
-  const expectedHopSamples = Math.max(1, Math.round(observation.sampleRate * 0.02));
-  return observation.endSample - clock.lastEndSample > expectedHopSamples * 1.5;
-}
-
 function advancePatternChallenge(
   state: Readonly<PatternChallengeControllerState>,
   observation: Readonly<PitchObservation>,
@@ -449,38 +420,23 @@ function advancePatternChallenge(
   if (state.phase !== "playing" || !state.session) {
     return state as PatternChallengeControllerState;
   }
-  if (
-    state.clock
-    && observation.captureEpoch === state.clock.captureEpoch
-    && observation.continuityEpoch === state.clock.continuityEpoch
-    && observation.graphGeneration === state.clock.graphGeneration
-    && observation.sampleRate === state.clock.sampleRate
-    && observation.endSample <= state.clock.lastEndSample
-  ) return state as PatternChallengeControllerState;
-
-  const startsNewSegment = observationStartsNewSegment(state.clock, observation);
-  const liveMidi = observation.observationKind === "voiced"
-    && observation.voiced
-    && observation.midiFloat !== null
-    && Number.isFinite(observation.midiFloat)
+  const continuity = observationContinuity(state.clock?.authority ?? null, observation);
+  if (!continuity.accepted || continuity.authority === null) {
+    return state as PatternChallengeControllerState;
+  }
+  const liveMidi = reliableVoicedObservation(observation)
     ? observation.midiFloat
     : null;
-  const elapsedSeconds = startsNewSegment || !state.clock
-    ? state.elapsedSeconds
-    : state.elapsedSeconds
-      + (observation.endSample - state.clock.lastEndSample) / observation.sampleRate;
+  const elapsedSeconds = state.elapsedSeconds + continuity.deltaSeconds;
   const clock: PatternSampleClock = {
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-    sampleRate: observation.sampleRate,
-    lastEndSample: observation.endSample,
+    authority: continuity.authority,
+    observationKind: observation.observationKind,
   };
   const session = scorePatternObservation(
     state.session,
     observation,
     elapsedSeconds,
-    !startsNewSegment,
+    continuity.contiguous,
   );
   if (session.status !== "complete") {
     return { ...state, session, liveMidi, elapsedSeconds, clock };

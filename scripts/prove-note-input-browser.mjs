@@ -6,12 +6,15 @@ import { fileURLToPath } from "node:url";
 
 import {
   amplitudeToDbfs,
+  analyzeImmediatePitchTransitions,
   browserProofSnapshot,
   canonicalFrameKey,
   collectRenderedNotes,
   expectedRenderedTransitions,
+  formatImmediatePitchTransitions,
   includesContiguousSequence,
   includesOrderedSequence,
+  immediatePitchTransitionFailures,
   lastWorkletSample,
   longestMatchingRun,
   maximumElapsedGap,
@@ -29,6 +32,7 @@ import {
   captureProcessOutput,
   delay,
   DevToolsSession,
+  enableRemotePitchDiagnostics,
   evaluate,
   stopProcessGroup,
   waitForBrowser,
@@ -57,6 +61,10 @@ import {
   SUPPORTED_MIN_FREQUENCY_HZ,
 } from "./proof-support/note-input-fixture.mjs";
 import { BROWSER_INSTRUMENTATION_SOURCE } from "./proof-support/note-input-instrumentation.mjs";
+import {
+  analyzePitchMeterProof,
+  pitchMeterProofFailures,
+} from "./proof-support/pitch-meter-proof.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
@@ -168,6 +176,7 @@ async function main() {
       loadedEntryScripts.every((path) => !path.includes('/@vite/') && !path.includes('/src/')),
       `The browser loaded a Vite development/source module: ${JSON.stringify(loadedEntryScripts)}`,
     );
+    await enableRemotePitchDiagnostics(session);
     const clicked = await evaluate(session, `(() => {
       const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
@@ -190,7 +199,7 @@ async function main() {
     assert(delayedModeClicked, "Pitch Mirror's real Delayed mode control was not clickable.");
     await waitForBrowser(
       session,
-      "document.querySelector('.pitch-mirror-page h1')?.textContent?.includes('Hold the sound')",
+      "document.querySelector('[role=\"radiogroup\"][aria-label=\"Mode\"] [role=\"radio\"][aria-checked=\"true\"]')?.textContent?.trim() === 'Delayed' && document.querySelector('.pitch-mirror-page [data-note-playback-toggle=\"true\"][aria-pressed=\"false\"]')?.textContent?.trim() === 'Play C4'",
       "Pitch Mirror Delayed mode",
     );
     const attemptClicked = await evaluate(session, `(() => {
@@ -371,6 +380,8 @@ async function main() {
       Math.max(0, Math.ceil(sortedProcessingMilliseconds.length * 0.95) - 1)
     ];
     const processingMaximumMs = sortedProcessingMilliseconds.at(-1);
+    const processingMaximumIndex = processingMilliseconds.indexOf(processingMaximumMs);
+    const processingMaximumFrame = allFrames[processingMaximumIndex] ?? null;
     const workletEvents = settledProof.workletSampleEvents;
     const diagnosticByFrame = new Map();
     const duplicateDiagnosticKeys = [];
@@ -458,6 +469,31 @@ async function main() {
           `${key}: DOM ${observation.note}/${observation.continuityEpoch}/${observation.graphGeneration}; detector ${expectedNote}/${diagnostic.continuityEpoch}/${diagnostic.graphGeneration}`,
         );
       }
+      if (diagnostic.voiced && diagnostic.midiFloat !== null) {
+        const meter = observation.meter;
+        const meterMatches = meter
+          && meter.scale?.startsWith("full-")
+          && Number.isFinite(meter.liveMidi)
+          // The diagnostics transport intentionally rounds midiFloat to four
+          // decimal places; sample identity remains exact.
+          && Math.abs(meter.liveMidi - diagnostic.midiFloat) <= 1e-4
+          && Number.isFinite(meter.declaredPositionPercent)
+          && meter.declaredPositionPercent >= 0
+          && meter.declaredPositionPercent <= 100
+          && Number.isFinite(meter.markerInlinePositionPercent)
+          && Math.abs(
+            meter.markerInlinePositionPercent - meter.declaredPositionPercent,
+          ) <= 1e-3
+          && Number.isFinite(meter.markerComputedLeftPixels)
+          && Number.isFinite(meter.markerCenterPercent)
+          && Number.isFinite(meter.widthPixels)
+          && meter.widthPixels > 0;
+        if (!meterMatches) {
+          domFrameClaimFailures.push(
+            `${key}: voiced detector frame omitted its exact full-depth rendered meter coordinate ${JSON.stringify(meter)}`,
+          );
+        }
+      }
       const expectedOccupancy = expectedOccupancyByFrame.get(key);
       const occupancyMatches = expectedOccupancy === null
         ? observation.heldSamples === null && observation.heldSeconds === null
@@ -526,34 +562,32 @@ async function main() {
       }
     }
 
-    let immediateSearchIndex = 0;
-    let previousImmediateEndSample = null;
-    const immediateChangeProof = IMMEDIATE_CHANGE_MIDIS.map((midi) => {
-      const relativeFrameIndex = diagnosticFrames.slice(immediateSearchIndex).findIndex((frame) =>
-        frame.voiced && frame.nearestMidi === midi);
-      const frameIndex = relativeFrameIndex < 0
-        ? -1
-        : immediateSearchIndex + relativeFrameIndex;
-      const detectorFrame = frameIndex < 0 ? null : diagnosticFrames[frameIndex];
-      const previousDetectorFrame = frameIndex <= 0 ? null : diagnosticFrames[frameIndex - 1];
-      const transitionGapSamples = detectorFrame === null || previousImmediateEndSample === null
-        ? null
-        : detectorFrame.endSample - previousImmediateEndSample;
-      const rendered = detectorFrame === null ? null : settledProof.domFrameMutations.find((observation) =>
-        observation.captureEpoch === detectorFrame.captureEpoch
-          && observation.endSample === detectorFrame.endSample
-          && observation.note === noteLabel(midi));
-      if (frameIndex >= 0) immediateSearchIndex = frameIndex + 1;
-      if (detectorFrame !== null) previousImmediateEndSample = detectorFrame.endSample;
-      return {
-        midi,
-        label: noteLabel(midi),
-        detectorFrame,
-        previousDetectorFrame,
-        transitionGapSamples,
-        rendered,
-      };
+    const immediateChangeProof = analyzeImmediatePitchTransitions({
+      diagnosticFrames,
+      presentationClaims: settledProof.pitchPresentationClaims,
+      renderedFrames: settledProof.domFrameMutations,
+      expectedMidis: IMMEDIATE_CHANGE_MIDIS,
+      labelForMidi: noteLabel,
     });
+    const immediateChangeFailures = immediatePitchTransitionFailures(
+      immediateChangeProof,
+      {
+        hopSamples: CAPTURE_HOP_SAMPLES,
+        maximumSegmentSamples:
+          IMMEDIATE_CHANGE_SEGMENT_SAMPLES + CAPTURE_WINDOW_SAMPLES,
+      },
+    );
+    const meterPresentationProof = analyzePitchMeterProof({
+      settledProof,
+      diagnosticFrames,
+      diagnosticByFrame,
+      immediateChangeProof,
+    });
+    const {
+      meterSweepProof,
+      computedMeterPositions,
+      ribbonProof,
+    } = meterPresentationProof;
     const occupancyEntryProof = immediateChangeProof[0];
     const occupancyEntryIndex = occupancyEntryProof?.rendered
       ? settledProof.domFrameMutations.findIndex((observation) =>
@@ -806,7 +840,7 @@ async function main() {
     assert(settledProof.domFrameMutations.length >= 100 && domFrameClaimFailures.length === 0,
       `Rendered note claims diverged from their exact production frames: observations=${settledProof.domFrameMutations.length}, failures=${JSON.stringify(domFrameClaimFailures)}.`);
     assert(processingMaximumMs < CAPTURE_HOP_BUDGET_MS,
-      `Production detector exceeded its ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms capture-hop budget: median=${processingMedianMs.toFixed(3)}ms, p95=${processingP95Ms.toFixed(3)}ms, max=${processingMaximumMs.toFixed(3)}ms.`);
+      `Production detector exceeded its ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms capture-hop budget: median=${processingMedianMs.toFixed(3)}ms, p95=${processingP95Ms.toFixed(3)}ms, max=${processingMaximumMs.toFixed(3)}ms at ${JSON.stringify(processingMaximumFrame)}.`);
     assert(promptStartCounter && promptEndCounter
       && promptEndCounter.processCount > promptStartCounter.processCount
       && promptEndCounter.processedSampleCount > promptStartCounter.processedSampleCount,
@@ -815,18 +849,8 @@ async function main() {
       && noConsumerEndCounter.processCount > noConsumerStartCounter.processCount
       && noConsumerEndCounter.processedSampleCount > noConsumerStartCounter.processedSampleCount,
     `Worklet counters did not advance with no React microphone consumer: ${JSON.stringify({ noConsumerStartCounter, noConsumerEndCounter })}.`);
-    assert(immediateChangeProof.every(({ midi, detectorFrame, previousDetectorFrame, transitionGapSamples, rendered }, index) =>
-      detectorFrame?.voiced
-        && detectorFrame.nearestMidi === midi
-        && previousDetectorFrame?.nearestMidi !== midi
-        && (index === 0 || (transitionGapSamples > 0
-          && transitionGapSamples <= IMMEDIATE_CHANGE_SEGMENT_SAMPLES + CAPTURE_WINDOW_SAMPLES))
-        && rendered?.endSample === detectorFrame.endSample
-        && rendered.captureEpoch === detectorFrame.captureEpoch
-        && rendered.continuityEpoch === detectorFrame.continuityEpoch
-        && rendered.graphGeneration === detectorFrame.graphGeneration
-        && rendered.inputState === "running"),
-    `A changed note was not rendered on the detector's first exact endSample: ${JSON.stringify(immediateChangeProof)}.`);
+    assert(immediateChangeFailures.length === 0,
+      `Candidate-to-authoritative pitch transitions violated the causal one-hop contract: ${JSON.stringify(immediateChangeFailures)}.`);
     assert(stableOccupancyProgression.length >= 6
       && stableOccupancyProgression[0].heldSamples === 0
       && stableOccupancyProgression[0].heldSeconds === 0
@@ -887,6 +911,9 @@ async function main() {
       `Production diagnostics did not preserve the complete MIDI 30-86 sweep order: ${diagnosticTransitions.join(", ")}.`);
     assert(includesOrderedSequence(quietDiagnosticTransitions, QUIET_LOW_NOTES.map(({ midi }) => midi)),
       `Production diagnostics did not preserve the quiet MIDI 30-47 sweep order: ${quietDiagnosticTransitions.join(", ")}.`);
+    const meterPresentationFailures = pitchMeterProofFailures(meterPresentationProof);
+    assert(meterPresentationFailures.length === 0,
+      `Built pitch presentation failed full-depth geometry: ${meterPresentationFailures.join("; ")}.`);
     assert(missingRenderedRange.length === 0,
       `The real UI missed supported notes from the full sweep: ${missingRenderedRange.join(", ")}.`);
     assert(missingQuietRendered.length === 0,
@@ -919,7 +946,9 @@ async function main() {
     console.log(`  negative controls: silence unvoiced for ${silenceRun} detector frames; loud seeded broadband noise unvoiced for ${noiseFrames.length}/${noiseFrames.length} frames; rendered note-free runs ${browserSilenceRun} silence samples and ${browserNoiseRun} noise samples`);
     console.log(`  independent accounting: exact ${workletEvents.length}/${allFrames.length} AudioWorklet→detector endSample pairs; hop=${CAPTURE_HOP_SAMPLES} samples`);
     console.log(`  build identity: requested ${workletRequestPaths[0]} and matched the sole stamped service-worker precache worklet`);
-    console.log(`  immediate changes: ${immediateChangeProof.map(({ label, detectorFrame }) => `${label}@${detectorFrame.endSample}`).join(", ")} rendered on each first detector frame`);
+    console.log(`  causal changes: ${formatImmediatePitchTransitions(immediateChangeProof)}; singleton remote candidates rendered uncertain with no stale note`);
+    console.log(`  full-depth meter: ${meterSweepProof.length}/${EXPECTED_NOTES.length} supported notes mapped to distinct computed positions ${computedMeterPositions[0].toFixed(2)}%→${computedMeterPositions.at(-1).toFixed(2)}%; no non-boundary edge aliases`);
+    console.log(`  full-depth ribbon: ${ribbonProof.map(({ label, latestY, endSample }) => `${label}@${endSample}:y=${latestY.toFixed(1)}`).join(", ")} remained distinct and matched the live meter projection`);
     console.log(`  rendered occupancy: ${occupancyEntryProof.label} entered at ${stableOccupancyProgression[0].endSample}:0, then ${stableOccupancyProgression.slice(1, 6).map(({ endSample, heldSamples }) => `${endSample}:${heldSamples}`).join(", ")} as bounded exact projections; departure reset=0; silence cleared`);
     console.log(`  transport recovery: AudioContext suspended→running; continuity ${recoveryBeforeCounter.continuityEpoch}->${recoveryFirstWindow.continuityEpoch} with discontinuity=true; getUserMedia/track/worklet remained 1/1/1`);
     console.log(`  detector processing: median ${processingMedianMs.toFixed(3)}ms, p95 ${processingP95Ms.toFixed(3)}ms, max ${processingMaximumMs.toFixed(3)}ms; every frame below ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms capture-hop budget`);

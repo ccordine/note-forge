@@ -1,11 +1,5 @@
-/* Anticipated shared Pong and Song Rail primitives ---------------------- */
-.song-ride-stage {
-  min-width: 0;
-}
-
 .pong-paddle,
-.pong-ball,
-.song-voice-cursor {
+.pong-ball {
   position: absolute;
   z-index: 3;
   transition: top 95ms linear, left 95ms linear;
@@ -135,156 +129,6 @@
   font: 7px var(--mono);
 }
 
-.pong-input-scope {
-  margin-top: 10px;
-}
-
-.pong-voice-readout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: stretch;
-  gap: 7px;
-  margin-bottom: 8px;
-}
-
-.pong-voice-readout > div,
-.pong-silence-cue {
-  min-height: 68px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 11px 15px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: linear-gradient(145deg, #171b18, #101310);
-}
-
-.pong-voice-readout span,
-.pong-voice-readout small {
-  color: var(--dim);
-  font: 6px var(--mono);
-  letter-spacing: .75px;
-}
-
-.pong-voice-readout strong,
-.pong-detected-note b,
-.pong-range-readout b {
-  margin: 4px 0 2px;
-  color: var(--blue);
-  font: 20px/1 var(--mono);
-}
-
-.pong-range-readout {
-  min-width: min(390px, 38vw);
-  display: grid !important;
-  grid-template-columns: auto minmax(100px, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: center;
-  gap: 5px 11px;
-  text-align: center;
-}
-
-.pong-range-readout > span:first-child {
-  grid-column: 3;
-  grid-row: 1;
-}
-
-.pong-range-readout > span:last-child {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.pong-range-readout > b {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  margin: 0;
-  color: var(--muted);
-  font-size: 8px;
-}
-
-.pong-background-cue {
-  min-width: min(390px, 38vw);
-  align-items: center;
-  color: var(--muted);
-  text-align: center;
-}
-
-.pong-background-cue > strong {
-  margin: 5px 0 3px;
-  color: var(--blue);
-  font-size: 13px;
-}
-
-.pong-range-track {
-  grid-column: 2;
-  grid-row: 1;
-  height: 9px;
-  position: relative;
-  border: 1px solid rgba(99, 215, 255, .2);
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(99, 215, 255, .1), rgba(216, 255, 62, .1));
-}
-
-.pong-range-track::before {
-  content: "";
-  position: absolute;
-  top: -4px;
-  bottom: -4px;
-  left: 50%;
-  border-left: 1px solid rgba(240, 241, 231, .25);
-}
-
-.pong-range-track > i {
-  position: absolute;
-  top: 50%;
-  left: calc(100% - var(--pong-voice-y));
-  width: 13px;
-  height: 13px;
-  transform: translate(-50%, -50%);
-  border: 2px solid #0b0f0e;
-  border-radius: 50%;
-  background: var(--blue);
-  box-shadow: 0 0 12px rgba(99, 215, 255, .72);
-  transition: left 95ms linear;
-}
-
-.pong-silence-cue {
-  min-width: 210px;
-  align-items: center;
-  color: var(--muted);
-  text-align: center;
-}
-
-.pong-silence-cue.is-steering {
-  border-color: rgba(216, 255, 62, .34);
-  color: var(--lime);
-  background: rgba(216, 255, 62, .045);
-}
-
-.pong-silence-cue.is-frozen {
-  border-style: dashed;
-}
-
-.pong-silence-cue > strong {
-  margin: 5px 0 8px;
-  font-size: 9px;
-}
-
-.pong-mic-meter {
-  width: 100%;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #080b09;
-}
-
-.pong-mic-meter > i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--blue), var(--lime), var(--coral));
-}
-
 .pong-court {
   height: clamp(380px, 56vh, 660px);
   position: relative;
@@ -356,13 +200,8 @@
   background: rgba(8, 13, 13, .83);
   font: 7px var(--mono);
   pointer-events: none;
+  transform: translateY(-50%);
 }
-
-.pong-range-high { top: 13px; }
-.pong-range-low { bottom: 13px; }
-.pong-range-label:nth-of-type(2) { top: 25%; transform: translateY(-50%); }
-.pong-range-label:nth-of-type(3) { top: 50%; transform: translateY(-50%); }
-.pong-range-label:nth-of-type(4) { top: 75%; transform: translateY(-50%); }
 
 .pong-court .pong-paddle {
   position: absolute;

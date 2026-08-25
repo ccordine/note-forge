@@ -1,4 +1,5 @@
 import type { VocalControlVector } from "./types";
+import { clampSignedUnit, clampUnit } from "@/lib/numeric";
 
 export interface VocalControlGeometry {
   readonly pitchLowerCents: number;
@@ -41,7 +42,7 @@ const DEFAULT_GEOMETRY: ReticleGeometry = Object.freeze({
 
 function scaledExtent(value: number, maximum: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(maximum) || maximum <= 0) return 0;
-  return 78 * Math.min(1, Math.max(0, value / maximum));
+  return 78 * clampUnit(value / maximum);
 }
 
 function geometryFor(
@@ -77,7 +78,7 @@ function boundaryPath(geometry: Readonly<ReticleGeometry>): string {
 }
 
 function pointCoordinate(axis: number, negativeExtent: number, positiveExtent: number): number {
-  const boundedAxis = Number.isFinite(axis) ? Math.min(1, Math.max(-1, axis)) : 0;
+  const boundedAxis = Number.isFinite(axis) ? clampSignedUnit(axis) : 0;
   return 100 + boundedAxis * (boundedAxis < 0 ? negativeExtent : positiveExtent);
 }
 
@@ -121,12 +122,14 @@ export function VocalControlReticle({
         <line x1="14" y1="100" x2="186" y2="100" />
         <line x1="100" y1="14" x2="100" y2="186" />
         <circle className="vocal-control-neutral" cx="100" cy="100" r="3" />
-        <circle
-          className="vocal-control-current"
-          cx={pointX}
-          cy={pointY}
-          r={expanded ? 7 : 6}
-        />
+        {vector.active && (
+          <circle
+            className="vocal-control-current"
+            cx={pointX}
+            cy={pointY}
+            r={expanded ? 7 : 6}
+          />
+        )}
       </svg>
       <span className="vocal-control-label label-up">higher</span>
       <span className="vocal-control-label label-down">lower</span>

@@ -9,6 +9,7 @@ import {
   captureProcessOutput,
   delay,
   DevToolsSession,
+  enableRemotePitchDiagnostics,
   evaluate,
   stopProcessGroup,
   waitForBrowser,
@@ -226,6 +227,7 @@ async function main() {
     assert(assets.some((path) => /^\/assets\/index-[A-Za-z0-9_-]+\.js$/u.test(path))
       && assets.every((path) => !path.includes('/@vite/') && !path.includes('/src/')),
     `Pitch Tunnel proof did not load the built application: ${JSON.stringify(assets)}`);
+    await enableRemotePitchDiagnostics(session);
     const enabled = await evaluate(session, `(() => {
       const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
@@ -383,7 +385,7 @@ async function main() {
     )), "Post-anchor worklet authority was not one monotonic overlapping-window sequence.");
     assert(detectorByKey.size >= postAnchorWorkletFrames.length
       && postAnchorWorkletFrames.every((frame) => detectorByKey.has(frameKey(frame))),
-    `Production diagnostics omitted worklet windows after the anchor: detector=${detectorByKey.size}, postAnchor=${postAnchorWorkletFrames.length}.`);
+    `Production diagnostics omitted worklet windows after the anchor: detector=${detectorByKey.size}, postAnchor=${postAnchorWorkletFrames.length}, missing=${JSON.stringify(postAnchorWorkletFrames.filter((frame) => !detectorByKey.has(frameKey(frame))).map((frame) => frameKey(frame)))}, browserErrors=${JSON.stringify(browserErrors)}.`);
 
     const publicationFailures = [];
     for (let index = 0; index < snapshots.length; index += 1) {
@@ -488,7 +490,7 @@ async function main() {
       && frame.targetOffsetCents === 50 && frame.observationKind === "unvoiced");
     assert(silenceFrames.length >= 3
       && silenceFrames[0].checkpointHeldSeconds > 0.1
-      && silenceFrames.every((frame) => frame.liveMidi === null && frame.pointOpacity === 0
+      && silenceFrames.every((frame) => frame.liveMidi === null && frame.pointOpacity === null
         && frame.checkpointIndex === silenceFrames[0].checkpointIndex
         && Math.abs(frame.checkpointHeldSeconds - silenceFrames[0].checkpointHeldSeconds) <= 1e-9),
     `Silence did not clear the point and pause retained dwell: ${JSON.stringify(silenceFrames)}`);
@@ -539,9 +541,19 @@ async function main() {
       && frameKey(firstVoicedAfterSilence) === frameKey(firstDomAfterSilence),
     `Voiced F0 after silence was not published on its first exact frame: ${JSON.stringify({ firstVoicedAfterSilence, firstDomAfterSilence })}`);
 
-    const achievementVoiced = achievementSnapshots.find((frame) => frame.liveMidi !== null
+    // Preserve transient presentation evidence here. `canonicalSnapshots`
+    // intentionally keeps only the final render for one detector frame, so an
+    // explicit Finish render can replace the last still-tracking silence render
+    // at the same sample identity even though the browser observed both.
+    const rawAchievementSnapshots = feature.tunnelSnapshots.filter((frame) => (
+      frame.workflowStep === "tracking"
+        && frame.traceLifetime === "user-owned"
+        && frame.achievementReached
+        && frame.completedCheckpointCount === CHECKPOINT_OFFSETS.length
+    ));
+    const achievementVoiced = rawAchievementSnapshots.find((frame) => frame.liveMidi !== null
       && Math.abs(frame.liveMidi - (ANCHOR_MIDI + 1)) <= 0.08);
-    const achievementSilence = achievementSnapshots.find((frame) => frame.observationKind === "unvoiced"
+    const achievementSilence = rawAchievementSnapshots.find((frame) => frame.observationKind === "unvoiced"
       && frame.liveMidi === null && frame.endSample > (achievementVoiced?.endSample ?? 0));
     assert(achievementVoiced && achievementSilence
       && achievementSilence.observedFrameCount > achievementVoiced.observedFrameCount,

@@ -3,6 +3,7 @@ import {
   resampleMonoPcm,
   validateSongPcm,
 } from "./song-analysis-pcm";
+import { clamp } from "@/lib/numeric";
 import { resolveSongLaneOptions } from "./song-lane-options";
 import type {
   ResolvedSongLaneOptions,
@@ -133,10 +134,6 @@ function transposeForRange(
 function midiRange(values: readonly number[]): VocalMidiRange | null {
   if (values.length === 0) return null;
   return { minMidi: Math.min(...values), maxMidi: Math.max(...values) };
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function targetLanesFromRuns(

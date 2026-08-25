@@ -3,6 +3,7 @@ import type {
   VocalFlightControlMode,
   VocalFlightScoreResult,
 } from "./types";
+import { clamp, clampPercent, clampSignedUnit, clampUnit } from "@/lib/numeric";
 
 export interface VocalFlightScoreState {
   readonly parSeconds: number | null;
@@ -37,10 +38,6 @@ export interface VocalFlightScoringSample {
   readonly desiredPitchAxis: number;
   readonly desiredBrightnessAxis: number;
   readonly pitchDeltaCents: number | null;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function finite(value: number, fallback = 0): number {
@@ -84,7 +81,7 @@ function crossedPast(previousError: number | null, nextError: number): boolean {
 }
 
 function efficiencyFor(actual: number, desired: number): number {
-  if (desired <= 0.08) return 1 - clamp(actual / 0.4, 0, 1);
+  if (desired <= 0.08) return 1 - clampUnit(actual / 0.4);
   return Math.min(actual, desired) / Math.max(actual, desired, 1e-9);
 }
 
@@ -105,10 +102,10 @@ export function advanceVocalFlightScore(
   if (sample.pathTolerance <= 0 || !Number.isFinite(sample.pathTolerance)) {
     throw new RangeError("Flight scoring path tolerance must be positive.");
   }
-  const pitchAxis = clamp(finite(sample.control.pitchAxis), -1, 1);
-  const brightnessAxis = clamp(finite(sample.control.brightnessAxis), -1, 1);
-  const desiredPitch = clamp(finite(sample.desiredPitchAxis), -1, 1);
-  const desiredBrightness = clamp(finite(sample.desiredBrightnessAxis), -1, 1);
+  const pitchAxis = clampSignedUnit(finite(sample.control.pitchAxis));
+  const brightnessAxis = clampSignedUnit(finite(sample.control.brightnessAxis));
+  const desiredPitch = clampSignedUnit(finite(sample.desiredPitchAxis));
+  const desiredBrightness = clampSignedUnit(finite(sample.desiredBrightnessAxis));
   const pitchError = pitchAxis - desiredPitch;
   const brightnessError = brightnessAxis - desiredBrightness;
   const demandMagnitude = Math.hypot(desiredPitch, desiredBrightness);
@@ -215,11 +212,11 @@ export function summarizeVocalFlightScore(
   const seconds = Math.max(1e-9, state.scoredSeconds);
   const activeSeconds = state.activeControlSeconds;
   const normalizedPathError = state.pathErrorIntegral / seconds;
-  const courseAccuracyPercent = clamp((1 - normalizedPathError) * 100, 0, 100);
+  const courseAccuracyPercent = clampPercent((1 - normalizedPathError) * 100);
   const variationPerSecond = activeSeconds <= 0 ? Number.POSITIVE_INFINITY : state.controlVariation / activeSeconds;
   const smoothnessPercent = activeSeconds <= 0
     ? 0
-    : clamp(Math.exp(-variationPerSecond * 0.38) * 100, 0, 100);
+    : clampPercent(Math.exp(-variationPerSecond * 0.38) * 100);
   const averageCenterRecoverySeconds = state.recoveryCompleted === 0
     ? null
     : state.recoveryTotalSeconds / state.recoveryCompleted;
@@ -231,7 +228,7 @@ export function summarizeVocalFlightScore(
     : Math.exp(-averageCenterRecoverySeconds / 1.2);
   const centerRecoveryPercent = completionShare === null
     ? null
-    : clamp(completionShare * recoverySpeed * 100, 0, 100);
+    : clampPercent(completionShare * recoverySpeed * 100);
   const pitchTaskBrightnessLeak = state.pitchOnlySeconds <= 0
     ? null
     : state.pitchTaskBrightnessLeakIntegral / state.pitchOnlySeconds;
@@ -240,7 +237,7 @@ export function summarizeVocalFlightScore(
     : state.brightnessTaskPitchDriftIntegral / state.brightnessOnlySeconds;
   const pitchIndependence = state.pitchOnlySeconds <= 0
     ? null
-    : clamp(1 - pitchTaskBrightnessLeak! / 0.35, 0, 1);
+    : clampUnit(1 - pitchTaskBrightnessLeak! / 0.35);
   const brightnessIndependence = state.brightnessOnlySeconds <= 0
     ? null
     : clamp(
@@ -256,10 +253,10 @@ export function summarizeVocalFlightScore(
       / independenceScores.length * 100;
   const controlEfficiencyPercent = activeSeconds <= 0
     ? 0
-    : clamp(state.efficiencyIntegral / activeSeconds * 100, 0, 100);
+    : clampPercent(state.efficiencyIntegral / activeSeconds * 100);
   const timeEfficiencyPercent = state.parSeconds === null
     ? null
-    : clamp(state.parSeconds / seconds * 100, 0, 100);
+    : clampPercent(state.parSeconds / seconds * 100);
   const weighted = [
     { value: courseAccuracyPercent, weight: 0.35 },
     { value: smoothnessPercent, weight: 0.15 },
@@ -272,7 +269,7 @@ export function summarizeVocalFlightScore(
   const rawScore = weighted.reduce((total, item) => total + item.value * item.weight, 0)
     / weight
     - Math.min(20, state.overshootCount * 2);
-  const score = Math.round(clamp(rawScore, 0, 100));
+  const score = Math.round(clampPercent(rawScore));
   return Object.freeze({
     score,
     grade: grade(score),

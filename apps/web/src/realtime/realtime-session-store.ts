@@ -91,6 +91,17 @@ export class RealtimeSessionStore<State, Action> {
     this.schedulePresentation();
   };
 
+  /**
+   * Publishes the latest fully reduced state at an explicit presentation
+   * boundary. This is not a sensor or session transition: it only prevents a
+   * pre-boundary observation that was already reduced from appearing later as
+   * though it occurred after the user's command.
+   */
+  readonly flushPresentation = (): void => {
+    this.cancelPending();
+    this.publish(this.scheduler.now());
+  };
+
   /** Cancels presentation work only; authoritative state is preserved. */
   cancelPending(): void {
     if (this.scheduledHandle === null) return;

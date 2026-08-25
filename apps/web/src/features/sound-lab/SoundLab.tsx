@@ -7,19 +7,27 @@ import {
   createHarmonicContext,
   intervalBetweenMidi,
   normalizePitchClass,
-  splitMidiPitch,
 } from "@noteforge/music-core";
-import { Drone, playFrequencies, playSafely, playTone, TIMBRES } from "@/audio/synth";
+import { Drone, playFrequencies, playSafely, TIMBRES } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import type { SoundMode } from "@/navigation";
 import {
-  CHORD_PRESETS, continuousMidiToHz, isChordPresetId, isScalePresetId, noteLabel, pitchClassLabel, SCALE_PRESETS, signed
+  CHORD_PRESETS, continuousMidiToHz, isChordPresetId, isScalePresetId, nearestNoteCentsPositionPercent, noteLabel, pitchClassLabel, SCALE_PRESETS, signed
 } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select, Switch } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { PianoKeyboard } from "@/ui/PianoKeyboard";
+import {
+  SOUND_LAB_MAXIMUM_MIDI,
+  SOUND_LAB_MINIMUM_MIDI,
+  SOUND_LAB_SLIDER_MAXIMUM,
+  soundLabPitch,
+  soundLabSliderValue,
+} from "./sound-lab-pitch";
 
 function contextNoteClass(
   pitchClass: number,
@@ -49,16 +57,17 @@ function NoteWheel({ tonic, selected, scalePcs, chordPcs, onSelect }: { tonic: n
 }
 
 function FrequencyReadout({ midi, cents, onChange }: { midi: number; cents: number; onChange: (midi: number, cents: number) => void }) {
-  const frequency = continuousMidiToHz(midi, cents);
-  const sliderValue = (midi + cents / 100 - 36) * 100;
+  const normalized = soundLabPitch(midi, cents);
+  const frequency = continuousMidiToHz(normalized.midiFloat);
+  const sliderValue = soundLabSliderValue(midi, cents);
   const changeFrequency = (nextValue: number) => {
-    const pitch = splitMidiPitch(36 + nextValue / 100);
+    const pitch = soundLabPitch(SOUND_LAB_MINIMUM_MIDI, nextValue);
     onChange(pitch.nearestMidi, pitch.centsFromNearest);
   };
   return (
     <div className="frequency-control">
       <div className="frequency-number"><strong>{frequency.toFixed(2)}</strong><span>Hz</span></div>
-      <input aria-label="Continuous frequency" type="range" min="0" max="4800" step="1" value={sliderValue} onChange={(event) => changeFrequency(Number(event.target.value))} />
+      <input aria-label="Continuous frequency" type="range" min="0" max={SOUND_LAB_SLIDER_MAXIMUM} step="1" value={sliderValue} onChange={(event) => changeFrequency(Number(event.target.value))} />
       <div className="frequency-scale"><span>65 Hz</span><span>CONTINUOUS FREQUENCY</span><span>1,047 Hz</span></div>
     </div>
   );
@@ -73,7 +82,6 @@ export function SoundLab() {
   const { labelsHidden, setLabelsHidden } = useUserPreferences();
   const { route, navigate } = useAppNavigation();
   const mode = route.surface === "explore" && route.activity === "sound" ? route.mode : "dyad";
-  const setMode = (nextMode: SoundMode) => navigate({ surface: "explore", activity: "sound", mode: nextMode });
   const [editSlot, setEditSlot] = useState<"first" | "second">("first");
   const [relationshipRevealed, setRelationshipRevealed] = useState(true);
   const [droneEnabled, setDroneEnabled] = useState(false);
@@ -81,6 +89,10 @@ export function SoundLab() {
   const [playbackError, setPlaybackError] = useState("");
   const drone = useRef(new Drone());
   const droneLifetime = useRef(0);
+  const setMode = (nextMode: SoundMode) => {
+    if (nextMode === "note") setEditSlot("first");
+    navigate({ surface: "explore", activity: "sound", mode: nextMode });
+  };
 
   const scalePreset = SCALE_PRESETS[scaleId] ?? SCALE_PRESETS.major;
   const chordPreset = CHORD_PRESETS[chordQuality] ?? CHORD_PRESETS.major;
@@ -89,8 +101,15 @@ export function SoundLab() {
   const harmonicContext = createHarmonicContext(scale, chord);
   const scalePcs = scale.pitchClasses;
   const chordPcs = chord.pitchClasses;
-  const firstPitch = splitMidiPitch(selectedMidi + centsOffset / 100);
-  const secondPitch = splitMidiPitch(compareMidi + compareCents / 100);
+  const firstPitch = soundLabPitch(selectedMidi, centsOffset);
+  const secondPitch = soundLabPitch(compareMidi, compareCents);
+  const activeEditSlot = mode === "note" ? "first" : editSlot;
+  const isolatedPitch = activeEditSlot === "first" ? firstPitch : secondPitch;
+  const isolatedNotePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(isolatedPitch.midiFloat),
+    timbre,
+    amplitude: 0.22,
+  });
   const firstFrequency = continuousMidiToHz(firstPitch.midiFloat);
   const secondFrequency = continuousMidiToHz(secondPitch.midiFloat);
   const dyadInterval = intervalBetweenMidi(firstPitch.midiFloat, secondPitch.midiFloat);
@@ -144,7 +163,7 @@ export function SoundLab() {
   };
 
   const setPitch = (slot: "first" | "second", midi: number, cents: number) => {
-    const normalized = splitMidiPitch(midi + cents / 100);
+    const normalized = soundLabPitch(midi, cents);
     if (slot === "first") {
       setSelectedMidi(normalized.nearestMidi);
       setCentsOffset(normalized.centsFromNearest);
@@ -155,32 +174,29 @@ export function SoundLab() {
   };
 
   const selectPitchClass = (pitchClass: number) => {
-    const current = editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi;
+    const current = activeEditSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi;
     let next = current - normalizePitchClass(current) + normalizePitchClass(pitchClass);
     if (next - current > 6) next -= 12;
     if (current - next > 6) next += 12;
-    setPitch(editSlot, next, 0);
-    playSafely(playTone({ frequencyHz: continuousMidiToHz(next), timbre, duration: 0.75 }), "Sound Lab pitch-class tone");
+    setPitch(activeEditSlot, next, 0);
   };
 
   const selectKeyboardNote = (midi: number) => {
-    setPitch(editSlot, midi, 0);
-    playSafely(playTone({ frequencyHz: continuousMidiToHz(midi), timbre, duration: 0.8 }), "Sound Lab keyboard tone");
+    setPitch(activeEditSlot, midi, 0);
   };
 
   const playCurrent = () => {
-    let frequencies = [firstFrequency];
-    if (mode === "dyad") frequencies = [firstFrequency, secondFrequency];
-    if (mode === "chord") {
-      frequencies = chord.intervals.map((interval) => continuousMidiToHz(60 + tonicPitchClass + interval));
-    }
+    if (mode === "note") return;
+    const frequencies = mode === "chord"
+      ? chord.intervals.map((interval) => continuousMidiToHz(60 + tonicPitchClass + interval))
+      : [firstFrequency, secondFrequency];
     playSafely(playFrequencies(frequencies, mode === "chord" ? "simultaneous" : playbackMode, { timbre, duration: 1.15 }), "Sound Lab playback");
   };
   let droneActionLabel = "Start drone";
   if (droneState === "starting" || droneEnabled) droneActionLabel = "Stop drone";
-  let playLabel = "Play note";
-  if (mode === "dyad") playLabel = "Hear relationship";
+  let playLabel = "Hear relationship";
   if (mode === "chord") playLabel = `Play ${pitchClassLabel(tonicPitchClass)} ${chordPreset.label}`;
+  const audibleError = playbackError || isolatedNotePlayback.error;
   const chordMembership = relationship.isChordTone
     ? `Yes · ${relationship.chordRole}`
     : "No · color tone";
@@ -195,7 +211,7 @@ export function SoundLab() {
         <div className="intro-actions"><Switch label="Hide labels" checked={labelsHidden} onChange={setLabelsHidden} /><ActionButton className={droneEnabled ? "active coral" : ""} onClick={toggleDrone}><span className="status-dot" /> {droneActionLabel}</ActionButton></div>
       </div>
 
-      {playbackError && <div className="error-banner"><strong>Playback needs attention.</strong><span>{playbackError}</span></div>}
+      {audibleError && <div className="error-banner"><strong>Playback needs attention.</strong><span>{audibleError}</span></div>}
 
       <div className="sound-workbench">
         <Panel className="sound-instrument">
@@ -206,42 +222,51 @@ export function SoundLab() {
           </div>
 
           <div className="pitch-slots">
-            <button className={`pitch-slot first ${editSlot === "first" ? "active" : ""}`} onClick={() => setEditSlot("first")}>
+            <button className={`pitch-slot first ${activeEditSlot === "first" ? "active" : ""}`} onClick={() => setEditSlot("first")}>
               <span>A · REFERENCE</span><strong>{labelsHidden ? "?" : noteLabel(firstPitch.nearestMidi)}</strong><small>{labelsHidden ? "labels hidden" : `${firstFrequency.toFixed(2)} Hz`}</small>
-              <i style={{ transform: `translateX(${Math.max(-48, Math.min(48, firstPitch.centsFromNearest))}%)` }} />
+              <i style={{ left: `${nearestNoteCentsPositionPercent(firstPitch.centsFromNearest)}%` }} />
             </button>
             <div className="relationship-mark"><span>{playbackMode === "simultaneous" ? "+" : "→"}</span><small>{mode === "dyad" ? `${Math.abs(relationship.totalCents).toFixed(0)}¢` : ""}</small></div>
-            <button disabled={mode === "note"} className={`pitch-slot second ${editSlot === "second" ? "active" : ""}`} onClick={() => setEditSlot("second")}>
+            <button disabled={mode === "note"} className={`pitch-slot second ${activeEditSlot === "second" ? "active" : ""}`} onClick={() => setEditSlot("second")}>
               <span>B · COLOR</span><strong>{labelsHidden ? "?" : noteLabel(secondPitch.nearestMidi)}</strong><small>{labelsHidden ? "labels hidden" : `${secondFrequency.toFixed(2)} Hz`}</small>
-              <i style={{ transform: `translateX(${Math.max(-48, Math.min(48, secondPitch.centsFromNearest))}%)` }} />
+              <i style={{ left: `${nearestNoteCentsPositionPercent(secondPitch.centsFromNearest)}%` }} />
             </button>
-            <PlayButton label={playLabel} onClick={playCurrent} />
+            {mode === "note" || isolatedNotePlayback.playing
+              ? (
+                  <NotePlaybackToggle
+                    playback={isolatedNotePlayback}
+                    label={noteLabel(isolatedPitch.nearestMidi)}
+                  />
+                )
+              : <PlayButton label={playLabel} onClick={playCurrent} />}
           </div>
 
-          <PianoKeyboard
-            className="sound-lab-keyboard"
-            startMidi={48}
-            endMidi={69}
-            showLabels={!labelsHidden}
-            markers={[
-              { midi: firstPitch.nearestMidi, role: "selected", label: "reference A" },
-              { midi: secondPitch.nearestMidi, role: "compare", label: "color B" },
-            ]}
-            onKeyPress={selectKeyboardNote}
-            ariaLabel="Playable Sound Lab keyboard from C3 to A4"
-          />
+          <div className="sound-lab-keyboard-scroll">
+            <PianoKeyboard
+              className="sound-lab-keyboard"
+              startMidi={SOUND_LAB_MINIMUM_MIDI}
+              endMidi={SOUND_LAB_MAXIMUM_MIDI}
+              showLabels={!labelsHidden}
+              markers={[
+                { midi: firstPitch.nearestMidi, role: "selected", label: "reference A" },
+                { midi: secondPitch.nearestMidi, role: "compare", label: "color B" },
+              ]}
+              onKeyPress={selectKeyboardNote}
+              ariaLabel="Selectable Sound Lab keyboard from C2 to C6; use the visible Play or Stop toggle for sound"
+            />
+          </div>
 
           <div className="continuous-section">
             <div className="continuous-heading">
-              <div><Eyebrow>Edit {editSlot === "first" ? "reference A" : "color B"}</Eyebrow><h3>Between the keys</h3></div>
+              <div><Eyebrow>Edit {activeEditSlot === "first" ? "reference A" : "color B"}</Eyebrow><h3>Between the keys</h3></div>
               <div className="cents-readout">
-                <button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) - 1)}>−</button>
-                <strong>{signed(editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest)}<small>¢</small></strong>
-                <button onClick={() => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, (editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest) + 1)}>+</button>
+                <button onClick={() => setPitch(activeEditSlot, isolatedPitch.nearestMidi, isolatedPitch.centsFromNearest - 1)}>−</button>
+                <strong>{signed(isolatedPitch.centsFromNearest)}<small>¢</small></strong>
+                <button onClick={() => setPitch(activeEditSlot, isolatedPitch.nearestMidi, isolatedPitch.centsFromNearest + 1)}>+</button>
               </div>
             </div>
-            <FrequencyReadout midi={editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi} cents={editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest} onChange={(midi, cents) => setPitch(editSlot, midi, cents)} />
-            <input className="detune-slider" type="range" min="-50" max="50" step="1" value={editSlot === "first" ? firstPitch.centsFromNearest : secondPitch.centsFromNearest} onChange={(event) => setPitch(editSlot, editSlot === "first" ? firstPitch.nearestMidi : secondPitch.nearestMidi, Number(event.target.value))} aria-label="Cents detuning" />
+            <FrequencyReadout midi={isolatedPitch.nearestMidi} cents={isolatedPitch.centsFromNearest} onChange={(midi, cents) => setPitch(activeEditSlot, midi, cents)} />
+            <input className="detune-slider" type="range" min="-50" max="50" step="1" value={isolatedPitch.centsFromNearest} onChange={(event) => setPitch(activeEditSlot, isolatedPitch.nearestMidi, Number(event.target.value))} aria-label="Cents detuning" />
             <div className="detune-labels"><span>−50¢</span><span>EQUAL TEMPERED</span><span>+50¢</span></div>
           </div>
         </Panel>
@@ -249,7 +274,7 @@ export function SoundLab() {
         <div className="sound-side">
           <Panel className="wheel-panel">
             <div className="panel-heading"><div><Eyebrow>Same object · circular view</Eyebrow><h2>Chromatic wheel</h2></div><span className="legend-dots"><i className="tonic" /> tonic <i className="chord" /> chord <i className="scale" /> scale</span></div>
-            <NoteWheel tonic={normalizePitchClass(tonicPitchClass)} selected={editSlot === "first" ? firstPitch.pitchClass : secondPitch.pitchClass} scalePcs={scalePcs} chordPcs={chordPcs} onSelect={selectPitchClass} />
+            <NoteWheel tonic={normalizePitchClass(tonicPitchClass)} selected={isolatedPitch.pitchClass} scalePcs={scalePcs} chordPcs={chordPcs} onSelect={selectPitchClass} />
           </Panel>
 
           <Panel className="context-panel">

@@ -10,7 +10,6 @@ import {
 } from "./curriculum";
 
 export const ARCADE_PROGRESS_STORAGE_KEY = "voice.arcade.progress";
-export const MAX_COMPLETED_VARIANTS_PER_MODE = 128;
 export const MAX_COMPLETED_VARIANT_LENGTH = 160;
 
 export interface ArcadeStageMasteryEvidence {
@@ -117,7 +116,6 @@ function normalizeCompletedVariants(candidate: unknown): readonly string[] {
     if (variant === null || seen.has(variant)) continue;
     seen.add(variant);
     variants.push(variant);
-    if (variants.length === MAX_COMPLETED_VARIANTS_PER_MODE) break;
   }
   return Object.freeze(variants);
 }
@@ -259,7 +257,6 @@ export function applyArcadeOutcome(
   const previousVariants = progress.completedVariantsByMode[mode];
   const nextVariants = completedVariant === null
     || previousVariants.includes(completedVariant)
-    || previousVariants.length >= MAX_COMPLETED_VARIANTS_PER_MODE
     ? previousVariants
     : Object.freeze([...previousVariants, completedVariant]);
 

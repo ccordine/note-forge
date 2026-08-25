@@ -215,7 +215,7 @@
   display: flex;
   align-items: center;
   transform: translate(-50%, -50%);
-  transition: top 110ms linear, opacity .18s ease;
+  transition: opacity .18s ease;
 }
 
 .echo-voice-cursor > i {
@@ -235,15 +235,6 @@
   color: var(--cream);
   background: rgba(8, 11, 9, .9);
   font: 7px var(--mono);
-}
-
-.echo-voice-cursor.silent {
-  opacity: .28;
-}
-
-.echo-voice-cursor.silent > i {
-  border-style: dashed;
-  box-shadow: none;
 }
 
 .echo-step-strip {
@@ -319,4 +310,3 @@
   font: 9px var(--mono);
   white-space: nowrap;
 }
-

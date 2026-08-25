@@ -285,20 +285,6 @@
     border-radius: 11px;
   }
 
-  .pong-voice-readout {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .pong-range-readout {
-    min-width: 0;
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
-  .pong-silence-cue {
-    min-width: 0;
-  }
-
   .pong-range-label {
     left: 8px;
     padding: 4px 5px;
@@ -362,4 +348,3 @@
     text-align: left;
   }
 }
-

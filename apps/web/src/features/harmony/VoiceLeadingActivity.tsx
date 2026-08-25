@@ -20,6 +20,25 @@ interface VoiceLeadingState {
   readonly mission: MissionId;
 }
 
+const VOICE_MAP_HEIGHT = 360;
+const VOICE_MAP_VERTICAL_INSET = 24;
+const VOICE_MAP_MINIMUM_MIDI = 44;
+const VOICE_MAP_MAXIMUM_MIDI = 76;
+
+export function voiceMapYForMidi(midi: number): number {
+  if (!Number.isFinite(midi)) {
+    throw new TypeError("Voice-map MIDI must be finite.");
+  }
+  if (midi < VOICE_MAP_MINIMUM_MIDI || midi > VOICE_MAP_MAXIMUM_MIDI) {
+    throw new RangeError("Voice-map MIDI is outside the authored voicing range.");
+  }
+  const usableHeight = VOICE_MAP_HEIGHT - VOICE_MAP_VERTICAL_INSET * 2;
+  return VOICE_MAP_VERTICAL_INSET
+    + (VOICE_MAP_MAXIMUM_MIDI - midi)
+      / (VOICE_MAP_MAXIMUM_MIDI - VOICE_MAP_MINIMUM_MIDI)
+      * usableHeight;
+}
+
 type VoiceLeadingAction =
   | Readonly<{ type: "set-preset"; presetId: ProgressionPresetId }>
   | Readonly<{ type: "set-mission"; mission: MissionId }>;
@@ -73,12 +92,12 @@ export function VoiceLeadingActivity() {
             <div><Eyebrow>Motion across changes</Eyebrow><h2>Three possible voices</h2></div>
             <span className="local-badge">nearest paths</span>
           </div>
-          <svg viewBox={`0 0 ${progression.chords.length * 220} 360`} preserveAspectRatio="none">
+          <svg viewBox={`0 0 ${progression.chords.length * 220} ${VOICE_MAP_HEIGHT}`} preserveAspectRatio="none">
             {[0, 1, 2].map((lineIndex) => (
               <path
                 key={lineIndex}
                 d={(voiceLines[lineIndex] ?? []).map((midi, index) => (
-                  `${index === 0 ? "M" : "L"} ${110 + index * 220} ${320 - (midi - 48) * 10}`
+                  `${index === 0 ? "M" : "L"} ${110 + index * 220} ${voiceMapYForMidi(midi)}`
                 )).join(" ")}
                 className={`voice-line line-${lineIndex}`}
               />
@@ -93,13 +112,13 @@ export function VoiceLeadingActivity() {
                 <g key={`${chordIndex}-${toneIndex}`}>
                   <circle
                     cx={110 + chordIndex * 220}
-                    cy={320 - (midi - 48) * 10}
+                    cy={voiceMapYForMidi(midi)}
                     r="18"
                     className={`voice-node line-${toneIndex}`}
                   />
                   <text
                     x={110 + chordIndex * 220}
-                    y={326 - (midi - 48) * 10}
+                    y={voiceMapYForMidi(midi) + 6}
                     textAnchor="middle"
                   >
                     {pitchClassLabel(midi)}

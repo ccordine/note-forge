@@ -1,12 +1,16 @@
+import type { ObservationSampleAuthority } from "@/realtime/observation-continuity";
+
 /** Exact derived telemetry consumed by Vocal Flight. Raw PCM never crosses this boundary. */
 export interface VocalTelemetrySample {
   readonly observationKind: "voiced" | "unvoiced" | "uncertain";
   readonly sampleRate: number;
   readonly startSample: number;
   readonly endSample: number;
+  readonly processedSampleCount: number;
   readonly captureEpoch: number;
   readonly continuityEpoch: number;
   readonly graphGeneration: number;
+  readonly workletProcessCount: number;
   readonly discontinuity: boolean;
   readonly frequencyHz: number | null;
   readonly midiFloat: number | null;
@@ -48,14 +52,7 @@ export interface VocalControlCalibration {
   readonly completedRecoveryCount: number;
 }
 
-export interface SampleAuthority {
-  readonly sampleRate: number;
-  readonly startSample: number;
-  readonly endSample: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-}
+export type SampleAuthority = ObservationSampleAuthority;
 
 export interface Vector3 {
   readonly x: number;

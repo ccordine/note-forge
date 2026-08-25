@@ -1,14 +1,10 @@
-import type { YinPitchFrame } from "@noteforge/pitch-engine";
+import type { PitchObservation } from "@/audio/note-input";
+import { clampUnit } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
 import {
   mapPitchToNormalizedVertical,
   type PitchVerticalMapping,
 } from "./model";
-
-/**
- * Evidence validity is a property of the microphone pipeline, not curriculum
- * difficulty. Games may change their mapping and response, but not this floor.
- */
-export const VOICE_AXIS_MINIMUM_CONFIDENCE = 0.55;
 
 export type VoiceAxisStatus =
   | "idle"
@@ -16,10 +12,7 @@ export type VoiceAxisStatus =
   | "unvoiced"
   | "uncertain";
 
-export type VoiceAxisFrame = Pick<
-  YinPitchFrame,
-  "timeSeconds" | "midiFloat" | "confidence" | "voiced" | "detector" | "reason"
->;
+export type VoiceAxisFrame = PitchObservation;
 
 export interface VoiceAxisControllerOptions {
   readonly lowMidi: number;
@@ -66,15 +59,6 @@ export interface AdvanceVoiceAxisOptions {
 }
 
 const EPSILON = 1e-9;
-const EXPLICIT_UNVOICED_REASONS = new Set<YinPitchFrame["reason"]>([
-  "below-rms-threshold",
-  "no-periodic-candidate",
-]);
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
 function requireFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
 }
@@ -146,21 +130,13 @@ export function createVoiceAxisController(
   };
 }
 
-/** Canonical YIN frames steer only after this game applies its local confidence rule. */
+/** Consume detector-admitted coordinates without inventing a second confidence floor. */
 export function isVoiceAxisFrameReliable(frame: Readonly<VoiceAxisFrame>): boolean {
-  return frame.detector === "yin"
-    && frame.reason === "detected"
-    && frame.voiced
-    && frame.midiFloat !== null
-    && Number.isFinite(frame.midiFloat)
-    && Number.isFinite(frame.confidence)
-    && frame.confidence >= VOICE_AXIS_MINIMUM_CONFIDENCE;
+  return isAuthoritativeVoicedPitch(frame);
 }
 
 function frozenStatusFor(frame: Readonly<VoiceAxisFrame>): VoiceAxisStatus {
-  return !frame.voiced && EXPLICIT_UNVOICED_REASONS.has(frame.reason)
-    ? "unvoiced"
-    : "uncertain";
+  return frame.observationKind === "unvoiced" ? "unvoiced" : "uncertain";
 }
 
 /**
@@ -256,10 +232,6 @@ export function advanceVoiceAxisController(
   const response = 1 - Math.exp(-options.deltaSeconds * state.options.responsePerSecond);
   return {
     ...state,
-    position: clamp(
-      state.position + (state.targetPosition - state.position) * response,
-      0,
-      1,
-    ),
+    position: clampUnit(state.position + (state.targetPosition - state.position) * response),
   };
 }

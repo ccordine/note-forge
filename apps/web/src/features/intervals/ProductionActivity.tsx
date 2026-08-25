@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { playSafely, playTone } from "@/audio/synth";
+import { useEffect, useRef, useState } from "react";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { continuousMidiToHz, INTERVAL_LONG, INTERVAL_SHORT, noteLabel } from "@/lib/music-display";
-import { ActionButton, Eyebrow, Panel, PlayButton } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import type { IntervalActivityProps } from "./activity-types";
 import { createIntervalTrial, intervalTrialNotes } from "./model";
 
@@ -14,17 +15,22 @@ export function ProductionActivity({
 }: IntervalActivityProps) {
   const [trial, setTrial] = useState(() => createIntervalTrial(presentation));
   const [revealed, setRevealed] = useState(false);
+  const previousPresentation = useRef(presentation);
   const notes = intervalTrialNotes(trial);
   const directionWord = presentation === "descending" ? "below" : "above";
   const directionGlyph = presentation === "descending" ? "↓" : "↑";
+  const startPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(notes[0]),
+    timbre,
+    amplitude: 0.22,
+  });
 
-  const hearStart = () => {
-    playSafely(playTone({
-      frequencyHz: continuousMidiToHz(notes[0]),
-      timbre,
-      duration: 1.05,
-    }), "Interval start note");
-  };
+  useEffect(() => {
+    if (previousPresentation.current === presentation) return;
+    previousPresentation.current = presentation;
+    setTrial(createIntervalTrial(presentation));
+    setRevealed(false);
+  }, [presentation]);
 
   const newMission = () => {
     setTrial(createIntervalTrial(presentation));
@@ -38,7 +44,6 @@ export function ProductionActivity({
         <div className="start-note-disc">
           <small>START</small>
           <strong>{soundFirst ? "•" : noteLabel(notes[0])}</strong>
-          <button onClick={hearStart}><Icon name="play" size={18} /></button>
         </div>
         <div className="mission-arrow">
           <span>{directionGlyph}</span>
@@ -52,7 +57,10 @@ export function ProductionActivity({
         <h2>Sing a {INTERVAL_LONG[trial.semitones]} {directionWord}.</h2>
         <p>Only the starting note sounds. Predict the second pitch, silently configure, then produce.</p>
         <div className="production-actions">
-          <PlayButton label="Hear start" onClick={hearStart} />
+          <NotePlaybackToggle
+            label={soundFirst ? "start" : noteLabel(notes[0])}
+            playback={startPlayback}
+          />
           <ActionButton className="primary" onClick={() => onMeasureMidi(notes[1])}>
             <Icon name="mic" size={18} /> Measure in Pitch Mirror
           </ActionButton>

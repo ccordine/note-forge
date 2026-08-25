@@ -80,6 +80,7 @@ export function EarLab() {
       <>
         <FoundationPrinciple />
         <NoteFamilyTrainer
+          key={mode}
           mode={mode}
           timbre={timbre}
           varyTimbre={crossTimbre}
@@ -90,7 +91,7 @@ export function EarLab() {
   } else {
     activity = (
       <AdvancedEarActivity
-        key={`${mode}-${crossTimbre}`}
+        key={mode}
         mode={mode as AdvancedEarMode}
         timbre={timbre}
         crossTimbre={crossTimbre}

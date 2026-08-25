@@ -1,10 +1,12 @@
 import {
   useCallback,
+  useEffect,
   useState,
   type CSSProperties,
 } from "react";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone, playToneSequence } from "@/audio/synth";
+import { playToneSequence } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import {
   attachVoiceToScope,
   useSessionEffectScope,
@@ -12,7 +14,9 @@ import {
 import { continuousMidiToHz, noteLabel, signed } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
+import { pitchMeterPositionPercent } from "@/ui/voice/pitch-meter-scale";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import { resolveArcadeCurriculum } from "./curriculum";
 import { getDifficultyPreset, type VoiceChallengeMode } from "./model";
@@ -43,7 +47,6 @@ function noteRailLookAhead(difficulty: ArcadeGameProps["difficulty"]): number {
 
 interface PatternReference {
   readonly play: (
-    mode: VoiceChallengeMode,
     pattern: PatternChallengeControllerState["pattern"],
     difficulty: ArcadeGameProps["difficulty"],
   ) => Promise<void>;
@@ -56,28 +59,21 @@ function usePatternReference(): PatternReference {
   const { abort: stop, restart } = useSessionEffectScope();
 
   const play = useCallback(async (
-    mode: VoiceChallengeMode,
     pattern: PatternChallengeControllerState["pattern"],
     difficulty: ArcadeGameProps["difficulty"],
   ) => {
     const signal = restart();
     setError("");
     try {
-      await attachVoiceToScope(signal, () => mode === "simon"
-        ? playToneSequence(pattern.map((step) => ({
+      await attachVoiceToScope(signal, () =>
+        playToneSequence(pattern.map((step) => ({
           frequencyHz: continuousMidiToHz(step.targetMidi),
           duration: referenceToneDuration(difficulty),
           gapAfter: difficulty === "hard" ? 0.08 : 0.12,
           timbre: "sine" as const,
           amplitude: 0.22,
           release: 0.06,
-        })))
-        : playTone({
-          frequencyHz: continuousMidiToHz(pattern[0]!.targetMidi),
-          duration: 0.55,
-          amplitude: 0.2,
-          release: 0.08,
-        }));
+        }))));
     } catch (cause) {
       if (!signal.aborted) {
         setError(cause instanceof Error ? cause.message : "Reference playback could not start.");
@@ -163,13 +159,14 @@ function PatternPreview({
   const previewLabel = feedback.showPreviewLabels
     ? game.pattern.map((step) => noteLabel(step.targetMidi)).join(" · ")
     : `${game.pattern.length}-note phrase`;
-  const hearLabel = game.mode === "simon" ? "Hear phrase" : "Hear first target";
   return (
     <Panel className="arcade-countdown-stage" aria-live="polite">
       <span className="arcade-countdown-orb"><Icon name="play" size={34} /></span>
       <Eyebrow>{game.mode === "simon" ? "Preview · then echo" : "Preview · then sight-read"}</Eyebrow>
       <h2>{previewLabel}</h2>
-      <p>Reference playback is optional and one-shot. It never hides the live detector, clears pitch evidence, or changes microphone state.</p>
+      <p>{game.mode === "simon"
+        ? "The phrase preview is an authored sequence. It never hides the live detector, clears pitch evidence, or changes microphone state."
+        : "The first target uses the persistent Play/Stop note toggle above. It never changes microphone or scoring state."}</p>
       <div className="arcade-preview-notes">
         {game.pattern.map((step, index) => (
           <span key={`${step.targetMidi}-${index}`}>
@@ -181,7 +178,7 @@ function PatternPreview({
       {referenceError && <div className="error-banner" role="alert">{referenceError}</div>}
       <div className="arcade-result-actions">
         <ActionButton onClick={onBack}>Change loadout</ActionButton>
-        <ActionButton onClick={onHear}><Icon name="play" size={16} /> {hearLabel}</ActionButton>
+        {game.mode === "simon" && <ActionButton onClick={onHear}><Icon name="play" size={16} /> Play phrase</ActionButton>}
         <ActionButton className="primary" onClick={onBegin}>
           Start voice run <Icon name="arrow" size={18} />
         </ActionButton>
@@ -195,11 +192,17 @@ function noteTiles(
   lookAheadSeconds: number,
   lowMidi: number,
   highMidi: number,
+  baselineMidi: number,
 ) {
+  const focusCents = Math.max(
+    100,
+    Math.abs(highMidi - baselineMidi) * 100,
+    Math.abs(baselineMidi - lowMidi) * 100,
+  );
   return game.session?.steps.map((step) => ({
     step,
     left: 15 + (step.windowStartSeconds - game.elapsedSeconds) / lookAheadSeconds * 78,
-    top: 8 + (1 - (step.targetMidi - lowMidi) / (highMidi - lowMidi)) * 80,
+    top: 100 - (pitchMeterPositionPercent(step.targetMidi, baselineMidi, focusCents) ?? 50),
     width: Math.max(5, (step.windowEndSeconds - step.windowStartSeconds) / lookAheadSeconds * 78),
   })) ?? [];
 }
@@ -232,18 +235,24 @@ interface PlayingProps {
   readonly difficulty: ArcadeGameProps["difficulty"];
   readonly lowMidi: number;
   readonly highMidi: number;
+  readonly baselineMidi: number;
 }
 
-function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi }: PlayingProps) {
+function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi, baselineMidi }: PlayingProps) {
   const session = game.session!;
   const activeStep = session.steps[session.activeStepIndex];
   const liveMidi = game.liveMidi;
   const liveError = liveMidi === null || !activeStep ? null : (liveMidi - activeStep.targetMidi) * 100;
+  const focusCents = Math.max(
+    100,
+    Math.abs(highMidi - baselineMidi) * 100,
+    Math.abs(baselineMidi - lowMidi) * 100,
+  );
   const liveY = liveMidi === null
-    ? 50
-    : 8 + (1 - Math.max(0, Math.min(1, (liveMidi - lowMidi) / (highMidi - lowMidi)))) * 80;
+    ? null
+    : 100 - (pitchMeterPositionPercent(liveMidi, baselineMidi, focusCents) ?? 50);
   const lookAheadSeconds = noteRailLookAhead(difficulty);
-  const tiles = noteTiles(game, lookAheadSeconds, lowMidi, highMidi);
+  const tiles = noteTiles(game, lookAheadSeconds, lowMidi, highMidi, baselineMidi);
   const nextStep = session.steps[session.activeStepIndex + 1];
   const nextLabel = upcomingNoteLabel(nextStep?.targetMidi, feedback.showUpcomingCue);
   const direction = pitchDirection(liveError, feedback.showCents);
@@ -260,7 +269,19 @@ function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi }: Playi
         <div><span>NOW</span><strong>{activeStep ? noteLabel(activeStep.targetMidi) : "LIVE"}</strong><small>{activeStep ? `${activeStep.requiredSustainSeconds.toFixed(2)}s hold` : "phrase recorded · input still live"}</small></div>
         <div><span>NEXT</span><strong>{activeStep ? nextLabel : "YOU DECIDE"}</strong><small>{session.hitSteps}/{session.steps.length} hits</small></div>
       </div>
-      <div className="echo-highway" role="img" aria-label={`Moving note highway. Current target ${activeStep ? noteLabel(activeStep.targetMidi) : "complete"}.`}>
+      <div
+        className="echo-highway"
+        role="img"
+        aria-label={`Moving note highway. Current target ${activeStep ? noteLabel(activeStep.targetMidi) : "complete"}.`}
+        data-observation-kind={game.clock?.observationKind ?? ""}
+        data-start-sample={game.clock?.authority.startSample ?? ""}
+        data-end-sample={game.clock?.authority.endSample ?? ""}
+        data-processed-sample-count={game.clock?.authority.processedSampleCount ?? ""}
+        data-worklet-process-count={game.clock?.authority.workletProcessCount ?? ""}
+        data-capture-epoch={game.clock?.authority.captureEpoch ?? ""}
+        data-continuity-epoch={game.clock?.authority.continuityEpoch ?? ""}
+        data-graph-generation={game.clock?.authority.graphGeneration ?? ""}
+      >
         <div className="echo-pitch-grid">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</div>
         <i className="echo-hit-line"><span>HIT</span></i>
         {tiles.filter(({ left }) => left > -15 && left < 110).map(({ step, left, top, width }) => (
@@ -273,9 +294,16 @@ function PatternPlaying({ game, feedback, difficulty, lowMidi, highMidi }: Playi
             <i style={{ width: `${step.progress * 100}%` }} />
           </span>
         ))}
-        <span className={`echo-voice-cursor ${liveMidi === null ? "silent" : ""}`} style={{ "--voice-top": `${liveY}%` } as CSSProperties}>
-          <i />{feedback.showLiveNote && <b>{liveMidi === null ? "VOICE" : noteLabel(liveMidi)}</b>}
-        </span>
+        {liveMidi !== null && liveY !== null && (
+          <span
+            className="echo-voice-cursor"
+            style={{ "--voice-top": `${liveY}%` } as CSSProperties}
+            data-midi-float={liveMidi}
+            data-end-sample={game.clock?.authority.endSample ?? ""}
+          >
+            <i />{feedback.showLiveNote && <b>{noteLabel(liveMidi)}</b>}
+          </span>
+        )}
       </div>
       <div className="echo-step-strip">
         {session.steps.map((step) => (
@@ -345,7 +373,7 @@ function PatternSurface(props: SurfaceProps) {
     case "preview":
       return <PatternPreview game={props.game} feedback={curriculum.feedback} referenceError={props.referenceError} onHear={props.onHear} onBegin={props.onBegin} onBack={props.onBack} />;
     case "playing":
-      return <PatternPlaying game={props.game} feedback={curriculum.feedback} difficulty={props.difficulty} lowMidi={props.voiceRange.lowMidi} highMidi={props.voiceRange.highMidi} />;
+      return <PatternPlaying game={props.game} feedback={curriculum.feedback} difficulty={props.difficulty} lowMidi={props.voiceRange.lowMidi} highMidi={props.voiceRange.highMidi} baselineMidi={props.voiceRange.baselineMidi} />;
     case "result":
       return <PatternResult game={props.game} onExit={props.onExit} onChange={props.onBack} onNext={props.onNext} />;
   }
@@ -367,6 +395,15 @@ export function PatternChallenge(props: ArcadeGameProps) {
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const reference = usePatternReference();
+  const [firstTargetMidi, setFirstTargetMidi] = useState(voiceRange.baselineMidi);
+  useEffect(() => {
+    if (game.pattern[0]) setFirstTargetMidi(game.pattern[0].targetMidi);
+  }, [game.pattern]);
+  const firstTargetPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(firstTargetMidi),
+    timbre: "sine",
+    amplitude: 0.2,
+  });
   const preset = getDifficultyPreset(difficulty);
   const curriculum = resolveArcadeCurriculum("pattern", curriculumStage);
   const completedOutcome = game.phase === "result" && game.result ? {
@@ -439,6 +476,15 @@ export function PatternChallenge(props: ArcadeGameProps) {
       <div className="echo-live-input">
         <NoteInput variant="compact" input={input} compact />
       </div>
+      {((game.mode === "ddr" && Boolean(game.pattern[0])) || firstTargetPlayback.playing) && (
+        <div className="arcade-persistent-note-control">
+          <NotePlaybackToggle
+            playback={firstTargetPlayback}
+            label={noteLabel(firstTargetMidi)}
+          />
+          <small>First target · user-owned playback</small>
+        </div>
+      )}
       {input.error && <div className="error-banner" role="alert">{input.error}</div>}
 
       <PatternSurface
@@ -447,7 +493,7 @@ export function PatternChallenge(props: ArcadeGameProps) {
         referenceError={reference.error}
         onSelectMode={(mode) => realtime.dispatch({ type: "select-mode", mode })}
         onPrepare={prepare}
-        onHear={() => { void reference.play(game.mode, game.pattern, difficulty); }}
+        onHear={() => { void reference.play(game.pattern, difficulty); }}
         onBegin={begin}
         onBack={back}
         onNext={() => realtime.dispatch({ type: "next-round" })}

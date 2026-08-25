@@ -141,6 +141,153 @@ export function canonicalFrameKey(frame) {
   return `${frame.captureEpoch}:${frame.endSample}`;
 }
 
+function nearestMidiForFrequency(frequencyHz) {
+  return Number.isFinite(frequencyHz) && frequencyHz > 0
+    ? Math.round(69 + 12 * Math.log2(frequencyHz / 440))
+    : null;
+}
+
+/**
+ * Correlate the pre-tracker candidate, public authoritative frame, and exact
+ * rendered mutation for each deliberately abrupt fixture transition.
+ */
+export function analyzeImmediatePitchTransitions({
+  diagnosticFrames,
+  presentationClaims,
+  renderedFrames,
+  expectedMidis,
+  labelForMidi,
+}) {
+  const diagnosticIndexByKey = new Map(
+    diagnosticFrames.map((frame, index) => [canonicalFrameKey(frame), index]),
+  );
+  let renderedSearchIndex = 0;
+  let diagnosticSearchIndex = 0;
+  let previousAcceptedEndSample = null;
+  return expectedMidis.map((midi) => {
+    const label = labelForMidi(midi);
+    const candidateOffset = presentationClaims.slice(renderedSearchIndex)
+      .findIndex((observation) => observation.candidateMidi === midi);
+    const candidateRenderedIndex = candidateOffset < 0
+      ? -1
+      : renderedSearchIndex + candidateOffset;
+    const candidateRendered = candidateRenderedIndex < 0
+      ? null
+      : presentationClaims[candidateRenderedIndex];
+    const candidateFrameIndex = candidateRendered === null
+      ? -1
+      : diagnosticIndexByKey.get(canonicalFrameKey(candidateRendered)) ?? -1;
+    const candidateFrame = candidateFrameIndex < 0
+      ? null
+      : diagnosticFrames[candidateFrameIndex];
+    const acceptedOffset = diagnosticFrames.slice(
+      Math.max(diagnosticSearchIndex, candidateFrameIndex),
+    ).findIndex((frame) => frame.voiced && frame.nearestMidi === midi);
+    const acceptedFrameIndex = acceptedOffset < 0
+      ? -1
+      : Math.max(diagnosticSearchIndex, candidateFrameIndex) + acceptedOffset;
+    const detectorFrame = acceptedFrameIndex < 0
+      ? null
+      : diagnosticFrames[acceptedFrameIndex];
+    const previousDetectorFrame = acceptedFrameIndex <= 0
+      ? null
+      : diagnosticFrames[acceptedFrameIndex - 1];
+    const rendered = detectorFrame === null
+      ? null
+      : renderedFrames.find((observation) =>
+          canonicalFrameKey(observation) === canonicalFrameKey(detectorFrame)
+            && observation.note === label) ?? null;
+    const transitionGapSamples = candidateFrame === null
+      || previousAcceptedEndSample === null
+      ? null
+      : candidateFrame.endSample - previousAcceptedEndSample;
+    if (candidateRenderedIndex >= 0) renderedSearchIndex = candidateRenderedIndex + 1;
+    if (acceptedFrameIndex >= 0) diagnosticSearchIndex = acceptedFrameIndex + 1;
+    if (detectorFrame !== null) previousAcceptedEndSample = detectorFrame.endSample;
+    return {
+      midi,
+      label,
+      candidateFrame,
+      candidateRendered,
+      detectorFrame,
+      previousDetectorFrame,
+      transitionGapSamples,
+      rendered,
+    };
+  });
+}
+
+export function immediatePitchTransitionFailures(
+  proof,
+  { hopSamples, maximumSegmentSamples },
+) {
+  const failures = [];
+  for (const [index, transition] of proof.entries()) {
+    const {
+      midi,
+      label,
+      candidateFrame,
+      candidateRendered,
+      detectorFrame,
+      previousDetectorFrame,
+      transitionGapSamples,
+      rendered,
+    } = transition;
+    const commonAccepted = detectorFrame?.voiced === true
+      && detectorFrame.nearestMidi === midi
+      && rendered?.endSample === detectorFrame.endSample
+      && rendered?.captureEpoch === detectorFrame.captureEpoch
+      && rendered?.continuityEpoch === detectorFrame.continuityEpoch
+      && rendered?.graphGeneration === detectorFrame.graphGeneration
+      && rendered?.observationKind === "voiced"
+      && rendered?.inputState === "running";
+    const candidateTelemetryMatches = candidateFrame !== null
+      && candidateRendered?.endSample === candidateFrame.endSample
+      && candidateRendered?.captureEpoch === candidateFrame.captureEpoch
+      && candidateRendered?.candidateMidi === midi
+      && nearestMidiForFrequency(candidateRendered?.candidateFrequencyHz) === midi
+      && nearestMidiForFrequency(candidateRendered?.candidateRawFrequencyHz) === midi
+      && candidateRendered?.inputState === "running";
+    const segmentTimingMatches = index === 0
+      || (transitionGapSamples !== null
+        && transitionGapSamples > 0
+        && transitionGapSamples <= maximumSegmentSamples);
+    const coldAttackMatches = index !== 0 || (
+      candidateFrame === detectorFrame
+      && candidateRendered?.endSample === rendered?.endSample
+      && candidateRendered?.displayedMidi === midi
+      && rendered?.trackingDecision === "accepted-cold-attack"
+    );
+    const remoteTransitionMatches = index === 0 || (
+      candidateFrame?.voiced === false
+      && candidateFrame.nearestMidi === null
+      && candidateFrame.reason === "temporally-ambiguous"
+      && candidateRendered?.observationKind === "uncertain"
+      && candidateRendered.trackingDecision === "pending-transition"
+      && candidateRendered.displayedMidi === null
+      && previousDetectorFrame === candidateFrame
+      && detectorFrame.endSample - candidateFrame.endSample === hopSamples
+      && rendered?.trackingDecision === "accepted-confirmed-transition"
+    );
+    if (!commonAccepted
+      || !candidateTelemetryMatches
+      || !segmentTimingMatches
+      || !coldAttackMatches
+      || !remoteTransitionMatches) {
+      failures.push(`${label}: ${JSON.stringify(transition)}`);
+    }
+  }
+  return failures;
+}
+
+export function formatImmediatePitchTransitions(proof) {
+  return proof.map(({ label, candidateFrame, detectorFrame }) =>
+    candidateFrame === detectorFrame
+      ? `${label} candidate/accepted@${detectorFrame?.endSample}`
+      : `${label} candidate@${candidateFrame?.endSample} uncertain -> accepted@${detectorFrame?.endSample}`)
+    .join(", ");
+}
+
 export function orderedPitchEvents(requests) {
   return [...pitchFramesFrom(requests)].sort((left, right) => {
     const leftFrame = left.pitch?.frame;

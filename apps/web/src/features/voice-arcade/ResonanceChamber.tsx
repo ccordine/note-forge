@@ -1,5 +1,6 @@
 import { useId, useMemo } from "react";
 import { noteLabel } from "@/lib/music-display";
+import { clamp } from "@/lib/numeric";
 import {
   computeResonanceForce,
 } from "./resonance-physics";
@@ -21,10 +22,6 @@ interface ResonanceChamberProps {
 
 const FIELD_COLUMNS = 12;
 const FIELD_ROWS = 8;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 function pointLabel(point: Readonly<ResonanceVector>, room: Readonly<{ width: number; height: number }>): string {
   return `${Math.round(point.x / room.width * 100)}% across, ${Math.round(point.y / room.height * 100)}% down`;

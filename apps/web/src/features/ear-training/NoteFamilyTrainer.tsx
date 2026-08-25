@@ -1,15 +1,16 @@
 import { useEffect, useReducer } from "react";
 import "../../styles-note-family.css";
-import { playTone, playToneSequence, type Timbre } from "@/audio/synth";
+import { playToneSequence, type Timbre } from "@/audio/synth";
+import { useSustainedNote, type SustainedNoteControl } from "@/audio/use-sustained-note";
 import {
   BRIEF_COMPARISON_SECONDS,
-  BRIEF_REFERENCE_SECONDS,
   useSessionEffectScope,
 } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, INTERVAL_LONG, noteLabel } from "@/lib/music-display";
 import { getSetting, saveAttempt, setSetting } from "@/storage/database";
-import { ActionButton, Eyebrow, Panel, Select } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel, PlayButton, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { PianoKeyboard, type PianoKeyMarker } from "@/ui/PianoKeyboard";
 import {
   createNoteFamilySession,
@@ -72,12 +73,7 @@ function startPrompt(
       { frequencyHz: continuousMidiToHz(trial.note.targetMidi), timbre: varyTimbre ? trial.timbreB : timbre, duration: BRIEF_COMPARISON_SECONDS, amplitude: 0.24 },
     ]);
   }
-  return playTone({
-    frequencyHz: continuousMidiToHz(trial.note.targetMidi),
-    timbre: varyTimbre ? trial.timbreB : timbre,
-    duration: BRIEF_REFERENCE_SECONDS,
-    amplitude: 0.26,
-  });
+  throw new Error("A one-note prompt uses the app-owned sustained note lane.");
 }
 
 function markersFor(session: Readonly<NoteFamilySession>): PianoKeyMarker[] {
@@ -117,11 +113,12 @@ function FamilySelector({ session, onSelect }: { session: Readonly<NoteFamilySes
   );
 }
 
-function PromptPanel({ session, mode, timbre, varyTimbre, onAnchor, onPlay }: {
+function PromptPanel({ session, mode, timbre, varyTimbre, playback, onAnchor, onPlay }: {
   session: Readonly<NoteFamilySession>;
   mode: FoundationEarMode;
   timbre: Timbre;
   varyTimbre: boolean;
+  playback: Readonly<SustainedNoteControl>;
   onAnchor: (letter: NoteLetter) => void;
   onPlay: () => void;
 }) {
@@ -131,11 +128,14 @@ function PromptPanel({ session, mode, timbre, varyTimbre, onAnchor, onPlay }: {
       <div className="trial-index">FIXED REGISTER <span /> {mode === "reference" ? "anchor comparison" : "hear + name"}</div>
       <div className="register-selection"><span><i /> SELECTED REGISTER</span><strong>{family.label} · {family.rangeLabel}</strong><small>Change it at any time from the family selector above.</small></div>
       {mode === "reference" && <Select label="Visible starting tone" value={session.anchorLetter} onChange={(event) => onAnchor(event.target.value as NoteLetter)}>{NOTE_LETTERS.map((letter) => <option key={letter} value={letter}>{letter}{family.octave}</option>)}</Select>}
-      <button className="sound-orb family-sound-orb" type="button" onClick={onPlay} aria-label="Play brief prompt">
-        <div className="orb-ring one" /><div className="orb-ring two" /><div className="orb-ring three" /><Icon name="play" size={32} /><span>{mode === "reference" ? "PLAY TWO BRIEF TONES" : "PLAY BRIEF NOTE"}</span>
-      </button>
+      <div className="sound-orb family-sound-orb" aria-hidden="true">
+        <div className="orb-ring one" /><div className="orb-ring two" /><div className="orb-ring three" /><Icon name="play" size={32} /><span>{mode === "reference" ? "TWO-TONE PROMPT" : "ONE NOTE"}</span>
+      </div>
       <h2>{mode === "reference" ? `Start at ${session.anchorLetter}${family.octave}. Name the second tone.` : "Hear one note. Press its letter."}</h2>
       <p>{varyTimbre ? "The timbre may vary; the selected register does not." : `Natural notes in ${family.rangeLabel} use the selected ${timbre} timbre.`}</p>
+      {mode === "reference"
+        ? <PlayButton label="Play comparison" onClick={onPlay} />
+        : <NotePlaybackToggle label="prompt" playback={playback} />}
     </Panel>
   );
 }
@@ -162,6 +162,7 @@ function AnswerPanel({ session, mode, onAnswer, onNext }: {
   const streakDetail = resultCorrect
     ? targetStable ? "Stable now: three correct in a row." : `Current streak: ${targetStreak}/3.`
     : "This note's current streak returned to 0/3.";
+  const spaceAction = mode === "reference" ? "replay" : "play / stop";
 
   return (
     <Panel className="answer-card family-answer-card">
@@ -183,7 +184,7 @@ function AnswerPanel({ session, mode, onAnswer, onNext }: {
       </div>
       {submitted && <div className={`answer-result family-answer-result ${resultCorrect ? "correct" : "partial"}`} role="status" aria-live="polite"><Icon name={resultCorrect ? "spark" : "ear"} size={21} /><div><span>{resultCorrect ? "CORRECT MAP" : `YOU PRESSED ${answerLetter}`}</span><b>{noteLabel(trial.note.targetMidi)} · {continuousMidiToHz(trial.note.targetMidi).toFixed(2)} Hz</b><small>{resultDetail} {streakDetail}</small></div></div>}
       {isFamilyComplete(evidence) && <div className="family-complete-banner"><Icon name="spark" size={22} /><div><b>{family.label} family complete.</b><small>Every register remains selectable above; this is progress, not a gate.</small></div></div>}
-      {submitted ? <ActionButton className="wide primary family-next" onClick={onNext}>Next note in {family.rangeLabel} <Icon name="arrow" size={17} /></ActionButton> : <div className="answer-shortcuts"><span><kbd>Space</kbd> replay</span><span><kbd>A–G</kbd> answer</span><span><kbd>Enter</kbd> next</span></div>}
+      {submitted ? <ActionButton className="wide primary family-next" onClick={onNext}>Next note in {family.rangeLabel} <Icon name="arrow" size={17} /></ActionButton> : <div className="answer-shortcuts"><span><kbd>Space</kbd> {spaceAction}</span><span><kbd>A–G</kbd> answer</span><span><kbd>Enter</kbd> next</span></div>}
     </Panel>
   );
 }
@@ -191,16 +192,27 @@ function AnswerPanel({ session, mode, onAnswer, onNext }: {
 export function NoteFamilyTrainer({ mode, timbre, varyTimbre, onRevealMidi }: TrainerProps) {
   const [session, dispatch] = useReducer(reduceNoteFamilySession, mode, createNoteFamilySession);
   const effects = useSessionEffectScope();
+  const promptPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(session.trial.note.targetMidi),
+    timbre: varyTimbre ? session.trial.timbreB : timbre,
+    amplitude: 0.26,
+  });
 
   const replaceTrial = (familyId: NoteFamilyId, anchorLetter = session.anchorLetter) => {
     effects.abort();
     const trial = makePromptTrial(mode, familyId, session.progress[familyId], anchorLetter);
     dispatch({ type: "replace-trial", activeFamilyId: familyId, anchorLetter, trial });
   };
-  const playCurrentPrompt = () => effects.playReference(
-    isReferencePrompt(session.trial) ? "Note-family comparison" : "Note-family prompt",
-    () => startPrompt(session.trial, timbre, varyTimbre),
-  );
+  const playCurrentPrompt = () => {
+    if (!isReferencePrompt(session.trial)) {
+      promptPlayback.toggle();
+      return;
+    }
+    effects.playGesture(
+      "Note-family comparison",
+      () => startPrompt(session.trial, timbre, varyTimbre),
+    );
+  };
   const answer = (letter: NoteLetter) => {
     if (session.answerLetter !== null) return;
     const correct = letter === session.trial.note.targetLetter;
@@ -262,7 +274,7 @@ export function NoteFamilyTrainer({ mode, timbre, varyTimbre, onRevealMidi }: Tr
       {session.notice && <div className="error-banner"><strong>Local attempt history needs attention.</strong><span>{session.notice}</span></div>}
       <FamilySelector session={session} onSelect={replaceTrial} />
       <div className="ear-workspace family-workspace">
-        <PromptPanel session={session} mode={mode} timbre={timbre} varyTimbre={varyTimbre} onAnchor={(letter) => replaceTrial(session.activeFamilyId, letter)} onPlay={playCurrentPrompt} />
+        <PromptPanel session={session} mode={mode} timbre={timbre} varyTimbre={varyTimbre} playback={promptPlayback} onAnchor={(letter) => replaceTrial(session.activeFamilyId, letter)} onPlay={playCurrentPrompt} />
         <AnswerPanel session={session} mode={mode} onAnswer={answer} onNext={() => replaceTrial(session.activeFamilyId)} />
       </div>
     </>

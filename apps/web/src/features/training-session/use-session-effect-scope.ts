@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { ActiveVoice } from "@/audio/synth";
 
-export const BRIEF_REFERENCE_SECONDS = 0.5;
 export const BRIEF_COMPARISON_SECONDS = 0.42;
 
 export async function attachVoiceToScope(
@@ -21,8 +20,8 @@ export interface SessionEffectScope {
   readonly restart: () => AbortSignal;
   /** End the current attempt and every asynchronous effect attached to it. */
   readonly abort: () => void;
-  /** Play one explicit reference; replay atomically replaces the prior reference. */
-  readonly playReference: (
+  /** Play one authored time-domain gesture; replay replaces the prior gesture. */
+  readonly playGesture: (
     label: string,
     start: (signal: AbortSignal) => Promise<ActiveVoice>,
   ) => void;
@@ -43,7 +42,7 @@ export function useSessionEffectScope(): SessionEffectScope {
     return controller.signal;
   }, [abort]);
 
-  const playReference = useCallback((
+  const playGesture = useCallback((
     label: string,
     start: (signal: AbortSignal) => Promise<ActiveVoice>,
   ) => {
@@ -55,5 +54,5 @@ export function useSessionEffectScope(): SessionEffectScope {
 
   useEffect(() => abort, [abort]);
 
-  return { restart, abort, playReference };
+  return { restart, abort, playGesture };
 }

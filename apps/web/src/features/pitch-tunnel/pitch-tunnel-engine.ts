@@ -1,8 +1,16 @@
-import type { PitchObservation } from "@/audio/note-input";
+import {
+  NOTE_INPUT_DEFAULTS,
+  type PitchObservation,
+} from "@/audio/note-input";
+import { clampUnit } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import {
   type PitchTunnelAction,
   type PitchTunnelAnchorCandidate,
-  type PitchTunnelAuthority,
   type PitchTunnelCheckpointProgress,
   type PitchTunnelCheckpointResult,
   type PitchTunnelErrorAccumulation,
@@ -15,8 +23,6 @@ import {
 export * from "./pitch-tunnel-types";
 export { pitchTunnelMetrics } from "./pitch-tunnel-metrics";
 
-const MINIMUM_FREQUENCY_HZ = 45;
-const MAXIMUM_FREQUENCY_HZ = 1_200;
 const EPSILON = 1e-9;
 const EMPTY_ACCUMULATION = Object.freeze({
   trackedSeconds: 0,
@@ -34,85 +40,34 @@ function midiToFrequency(midiFloat: number): number {
   return 440 * 2 ** ((midiFloat - 69) / 12);
 }
 
-function validAuthority(observation: Readonly<PitchObservation>): boolean {
-  return Number.isFinite(observation.sampleRate)
-    && observation.sampleRate > 0
-    && Number.isSafeInteger(observation.startSample)
-    && observation.startSample >= 0
-    && Number.isSafeInteger(observation.endSample)
-    && observation.endSample > observation.startSample
-    && Number.isSafeInteger(observation.processedSampleCount)
-    && observation.processedSampleCount === observation.endSample
-    && Number.isSafeInteger(observation.captureEpoch)
-    && observation.captureEpoch >= 0
-    && Number.isSafeInteger(observation.continuityEpoch)
-    && observation.continuityEpoch >= 0
-    && Number.isSafeInteger(observation.graphGeneration)
-    && observation.graphGeneration >= 0
-    && Number.isSafeInteger(observation.workletProcessCount)
-    && observation.workletProcessCount >= 0;
-}
-
-function authorityFor(observation: Readonly<PitchObservation>): PitchTunnelAuthority {
-  return Object.freeze({
-    sampleRate: observation.sampleRate,
-    startSample: observation.startSample,
-    endSample: observation.endSample,
-    processedSampleCount: observation.processedSampleCount,
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-    workletProcessCount: observation.workletProcessCount,
-  });
-}
-
-function sameStream(
-  previous: Readonly<PitchTunnelAuthority>,
-  observation: Readonly<PitchObservation>,
-): boolean {
-  return previous.sampleRate === observation.sampleRate
-    && previous.captureEpoch === observation.captureEpoch
-    && previous.continuityEpoch === observation.continuityEpoch
-    && previous.graphGeneration === observation.graphGeneration;
-}
-
-function reliable(
-  observation: Readonly<PitchObservation>,
-): observation is Readonly<PitchObservation> & { midiFloat: number; frequencyHz: number } {
-  return observation.observationKind === "voiced"
-    && observation.voiced
-    && observation.midiFloat !== null
-    && Number.isFinite(observation.midiFloat)
-    && observation.frequencyHz !== null
-    && Number.isFinite(observation.frequencyHz);
-}
-
 function supportsTrajectory(
   midiFloat: number,
   offsets: readonly number[],
 ): boolean {
   return offsets.every((offset) => {
     const frequency = midiToFrequency(midiFloat + offset / 100);
-    return frequency >= MINIMUM_FREQUENCY_HZ && frequency <= MAXIMUM_FREQUENCY_HZ;
+    return frequency >= NOTE_INPUT_DEFAULTS.minFrequency
+      && frequency <= NOTE_INPUT_DEFAULTS.maxFrequency;
   });
 }
 
 function candidateFor(
   observation: Readonly<PitchObservation>,
   options: Readonly<ResolvedPitchTunnelOptions>,
+  authority: Readonly<ObservationSampleAuthority>,
 ): PitchTunnelAnchorCandidate | null {
-  if (!reliable(observation)) return null;
+  if (!isAuthoritativeVoicedPitch(observation)) return null;
   return Object.freeze({
     midiFloat: observation.midiFloat,
     frequencyHz: observation.frequencyHz,
     confidence: Number.isFinite(observation.confidence)
-      ? Math.max(0, Math.min(1, observation.confidence))
+      ? clampUnit(observation.confidence)
       : 0,
     supportsTrajectory: supportsTrajectory(
       observation.midiFloat,
       options.checkpointOffsetsCents,
     ),
-    authority: authorityFor(observation),
+    authority,
   });
 }
 
@@ -199,7 +154,7 @@ function currentFields(
   | "currentInLane"
   | "currentConfidence"
 > & { readonly reliable: boolean } {
-  const isReliable = reliable(observation);
+  const isReliable = isAuthoritativeVoicedPitch(observation);
   const midiFloat = isReliable ? observation.midiFloat : null;
   const pitchOffsetCents = midiFloat === null || state.anchorMidiFloat === null
     ? null
@@ -217,7 +172,7 @@ function currentFields(
       ? null
       : Math.abs(errorCents) <= state.options.laneHalfWidthCents + EPSILON,
     currentConfidence: Number.isFinite(observation.confidence)
-      ? Math.max(0, Math.min(1, observation.confidence))
+      ? clampUnit(observation.confidence)
       : 0,
     reliable: isReliable,
   };
@@ -227,18 +182,11 @@ function observeWhileIdle(
   state: Readonly<PitchTunnelState>,
   observation: Readonly<PitchObservation>,
 ): PitchTunnelState {
-  if (!validAuthority(observation)) return state as PitchTunnelState;
-  if (
-    state.lastAuthority
-    && sameStream(state.lastAuthority, observation)
-    && (
-      observation.endSample <= state.lastAuthority.endSample
-      || observation.workletProcessCount <= state.lastAuthority.workletProcessCount
-    )
-  ) return state as PitchTunnelState;
+  const continuity = observationContinuity(state.lastAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as PitchTunnelState;
   const fields = currentFields(state, observation);
-  const candidate = candidateFor(observation, state.options);
-  const authority = candidate?.authority ?? authorityFor(observation);
+  const authority = continuity.authority;
+  const candidate = candidateFor(observation, state.options, authority);
   return freezeState({
     ...state,
     ...fields,
@@ -358,30 +306,19 @@ function advanceTracking(
   state: Readonly<PitchTunnelState>,
   observation: Readonly<PitchObservation>,
 ): PitchTunnelState {
-  if (!validAuthority(observation) || !state.lastAuthority || !state.checkpoint) {
+  if (!state.lastAuthority || !state.checkpoint) {
     return state as PitchTunnelState;
   }
   const previousAuthority = state.lastAuthority;
-  if (
-    sameStream(previousAuthority, observation)
-    && (
-      observation.endSample <= previousAuthority.endSample
-      || observation.workletProcessCount <= previousAuthority.workletProcessCount
-    )
-  ) return state as PitchTunnelState;
+  const continuity = observationContinuity(previousAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as PitchTunnelState;
 
   const fields = currentFields(state, observation);
-  const candidate = candidateFor(observation, state.options);
-  const authority = candidate?.authority ?? authorityFor(observation);
-  const sameAuthority = sameStream(previousAuthority, observation);
-  const rawDeltaSeconds = sameAuthority
-    ? (observation.endSample - previousAuthority.endSample) / observation.sampleRate
-    : 0;
-  const continuous = sameAuthority
-    && !observation.discontinuity
-    && rawDeltaSeconds > 0
-    && rawDeltaSeconds <= state.options.maximumCreditedIntervalSeconds + EPSILON;
-  const deltaSeconds = continuous ? rawDeltaSeconds : 0;
+  const authority = continuity.authority;
+  const candidate = candidateFor(observation, state.options, authority);
+  const continuous = continuity.contiguous
+    && continuity.deltaSeconds <= state.options.maximumCreditedIntervalSeconds + EPSILON;
+  const deltaSeconds = continuous ? continuity.deltaSeconds : 0;
   const trackable = continuous
     && state.previousReliable
     && fields.reliable
@@ -518,21 +455,14 @@ function observeWithoutScoring(
   state: Readonly<PitchTunnelState>,
   observation: Readonly<PitchObservation>,
 ): PitchTunnelState {
-  if (!validAuthority(observation) || !state.lastAuthority) return state as PitchTunnelState;
-  if (
-    sameStream(state.lastAuthority, observation)
-    && (
-      observation.endSample <= state.lastAuthority.endSample
-      || observation.workletProcessCount <= state.lastAuthority.workletProcessCount
-    )
-  ) return state as PitchTunnelState;
+  if (!state.lastAuthority) return state as PitchTunnelState;
+  const continuity = observationContinuity(state.lastAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as PitchTunnelState;
   const fields = currentFields(state, observation);
-  const candidate = candidateFor(observation, state.options);
-  const authority = candidate?.authority ?? authorityFor(observation);
-  const continuous = sameStream(state.lastAuthority, observation)
-    && !observation.discontinuity
-    && (observation.endSample - state.lastAuthority.endSample) / observation.sampleRate
-      <= state.options.maximumCreditedIntervalSeconds + EPSILON;
+  const authority = continuity.authority;
+  const candidate = candidateFor(observation, state.options, authority);
+  const continuous = continuity.contiguous
+    && continuity.deltaSeconds <= state.options.maximumCreditedIntervalSeconds + EPSILON;
   return freezeState({
     ...state,
     ...fields,

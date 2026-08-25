@@ -10,6 +10,7 @@ export interface RealtimeSession<State, Action> {
   readonly dispatch: (action: Readonly<Action>) => void;
   readonly observe: (action: Readonly<Action>) => void;
   readonly getCurrent: () => State;
+  readonly flushPresentation: () => void;
 }
 
 /**
@@ -44,5 +45,6 @@ export function useRealtimeSession<State, Action>(
     dispatch: store.dispatch,
     observe: store.observe,
     getCurrent: store.getCurrent,
+    flushPresentation: store.flushPresentation,
   };
 }

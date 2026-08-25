@@ -253,7 +253,6 @@ function createLevel(
     directionNotes: level.directionNotes,
     requiredHoldSeconds: level.config.holdDurationSeconds,
     toleranceCents: level.config.toleranceCents,
-    minimumConfidence: 0.58,
     acquisitionCorridorCents: 48,
     directionSwitchHysteresisCents: 10,
   });

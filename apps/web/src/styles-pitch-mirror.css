@@ -135,13 +135,10 @@ stroke-width:2;
 opacity:.85}
 .pitch-trace-glow{
 fill:none;
-stroke:url(#trace-gradient);
 stroke-width:11;
-opacity:.18;
-filter:url(#trace-glow)}
+opacity:.18}
 .pitch-trace{
 fill:none;
-stroke:url(#trace-gradient);
 stroke-width:3.3;
 stroke-linecap:round;
 stroke-linejoin:round;
@@ -157,18 +154,22 @@ stroke-width:1}
 .ribbon-y-labels{
 position:absolute;
 right:calc(100% + 10px);
+width:34px;
 height:270px;
 top:0;
-display:flex;
-flex-direction:column;
-justify-content:space-between;
-align-items:flex-end;
-padding:0 0;
 font:7px var(--mono);
 color:var(--dim)}
-.ribbon-y-labels b{
+.ribbon-y-labels>span{
+position:absolute;
+right:0;
+white-space:nowrap;
+transform:translateY(-50%)}
+.ribbon-y-labels>span:first-child{transform:none}
+.ribbon-y-labels>span:last-child{transform:translateY(-100%)}
+.ribbon-y-labels .target{
 color:var(--lime);
 font-weight:500}
+.ribbon-y-labels .range{color:var(--blue)}
 .ribbon-time-labels{
 display:flex;
 justify-content:space-between;

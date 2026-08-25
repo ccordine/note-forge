@@ -1,3 +1,5 @@
+import { clamp } from "@/lib/numeric";
+
 export type VoiceArcadeDifficulty = "easy" | "medium" | "hard";
 export type VoiceChallengeMode = "simon" | "ddr";
 export type SeedValue = number | string;
@@ -81,10 +83,6 @@ function requireMidi(value: number, label: string): void {
   if (!Number.isInteger(value) || value < MIDI_MIN || value > MIDI_MAX) {
     throw new RangeError(`${label} must be an integer MIDI note from ${MIDI_MIN} through ${MIDI_MAX}.`);
   }
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 export function getDifficultyPreset(difficulty: VoiceArcadeDifficulty): DifficultyPreset {
@@ -306,16 +304,9 @@ export interface ChallengeSessionState {
   matchedFrames: number;
   pitchQualityTotal: number;
   accuracyPercent: number;
-  minimumConfidence: number;
   lastFrameTimeSeconds: number | null;
   lastFrameMatched: boolean;
 }
-
-export interface CreateChallengeSessionOptions {
-  minimumConfidence?: number;
-}
-
-const DEFAULT_CHALLENGE_MINIMUM_CONFIDENCE = 0.5;
 
 function validateChallengeStep(step: Readonly<ChallengeStep>, index: number): void {
   requireMidi(step.targetMidi, `Challenge target ${index + 1}`);
@@ -335,15 +326,8 @@ function validateChallengeStep(step: Readonly<ChallengeStep>, index: number): vo
 
 export function createChallengeSession(
   steps: readonly ChallengeStep[],
-  options: Readonly<CreateChallengeSessionOptions> = {},
 ): ChallengeSessionState {
   if (steps.length === 0) throw new RangeError("A challenge session needs at least one step.");
-  const minimumConfidence = options.minimumConfidence ?? DEFAULT_CHALLENGE_MINIMUM_CONFIDENCE;
-  requireFinite(minimumConfidence, "Minimum pitch confidence");
-  if (minimumConfidence < 0 || minimumConfidence > 1) {
-    throw new RangeError("Minimum pitch confidence must be from 0 through 1.");
-  }
-
   const ids = new Set<string>();
   let previousWindowEnd = -Infinity;
   const progress = steps.map((step, index): ChallengeStepProgress => {
@@ -382,7 +366,6 @@ export function createChallengeSession(
     matchedFrames: 0,
     pitchQualityTotal: 0,
     accuracyPercent: 0,
-    minimumConfidence,
     lastFrameTimeSeconds: null,
     lastFrameMatched: false,
   };

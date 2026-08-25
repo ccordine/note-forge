@@ -51,6 +51,11 @@ export type RangeSimulatorControllerAction =
   | { readonly type: "save-rating"; readonly ratedAt: string; readonly toleranceCents: number }
   | { readonly type: "finish"; readonly stoppedAt: string }
   | {
+      readonly type: "recheck";
+      readonly startedAt: string;
+      readonly toleranceCents: number;
+    }
+  | {
       readonly type: "fresh";
       readonly anchorMidi: number;
       readonly preparation: RangePreparation;
@@ -193,7 +198,11 @@ function finishController(
     ...state,
     status: "complete",
     session,
-    profile: projectRangeSimulatorProfile(state.profile, session),
+    // Explicitly finishing an incomplete assessment must not replace a
+    // previously established full voice map with only today's partial probes.
+    // A naturally completed assessment was already projected when its final
+    // rating established both boundaries.
+    profile: state.profile,
     rating: null,
     coordinationChange: false,
     notice: completionNotice(session),
@@ -249,6 +258,28 @@ export function reduceRangeSimulatorController(
       return saveCurrentRating(state, action);
     case "finish":
       return finishController(state, action.stoppedAt);
+    case "recheck": {
+      if (state.status !== "tracking" || state.session.phase !== "complete") {
+        return state as RangeSimulatorControllerState;
+      }
+      const next = createRangeSimulatorSession({
+        anchorMidi: state.session.baselineMidi ?? state.session.anchorMidi,
+        preparation: state.session.preparation,
+        startedAt: action.startedAt,
+        sessionId: `range-map-${new Date(action.startedAt).toISOString()}`,
+      });
+      return {
+        ...state,
+        // This is an explicit new assessment pass inside the already-running
+        // user-owned live workspace. It neither starts nor stops that lifetime.
+        session: next,
+        dwell: createDwellForSession(next, action.toleranceCents),
+        rating: null,
+        coordinationChange: false,
+        notice: "Boundary recheck started. The live session never stopped; rate the new displayed probes when ready.",
+        persistenceRevision: state.persistenceRevision + 1,
+      };
+    }
     case "fresh": {
       if (state.status === "tracking") return state as RangeSimulatorControllerState;
       const next = createRangeSimulatorSession({

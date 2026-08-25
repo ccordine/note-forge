@@ -1,121 +1,34 @@
 import { useEffect, useState, type ReactNode } from "react";
 import "../../styles-pitch-control.css";
-import { type PitchFrame } from "@noteforge/pitch-engine";
-import { type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone, type Timbre } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import {
   attemptRecentScoringFrames,
   attemptScoringFrames,
   type CompletedAttempt,
 } from "@/features/training-session/attempt-runner";
 import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
-import { scoreWeightedSustainedNote } from "@/features/training-session/attempt-scoring";
-import { aggregateEnvelopeScore } from "@/features/training-session/attempt-scoring-aggregate";
-import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import type { ControlMode } from "@/navigation";
 import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import { saveAttempt } from "@/storage/database";
-import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import { PitchRibbon } from "@/features/pitch-mirror/PitchRibbon";
-
-interface ControlTakeConfiguration {
-  readonly envelopeType: ControlMode;
-  readonly vowel: string;
-  readonly midi: number;
-  readonly centsOffset: number;
-  readonly timbre: Timbre;
-  readonly toleranceCents: number;
-  readonly cyclePeriodSeconds: number;
-}
-
-interface ControlResult {
-  readonly metrics: AttemptMetrics;
-  readonly volumeScore: number | undefined;
-}
-
-const envelopes: Record<ControlMode, { label: string; points: readonly number[]; cue: string }> = {
-  free: { label: "Free volume", points: [0.5, 0.5], cue: "Hold pitch; shape volume however you choose." },
-  steady: { label: "Steady", points: [0.48, 0.48], cue: "One pitch. One volume. No drift." },
-  crescendo: { label: "Crescendo", points: [0.12, 0.2, 0.38, 0.62, 0.92], cue: "Grow without lifting the fundamental." },
-  decrescendo: { label: "Decrescendo", points: [0.92, 0.68, 0.42, 0.22, 0.12], cue: "Release energy without letting pitch sag." },
-  diamond: { label: "Quiet → loud → quiet", points: [0.12, 0.32, 0.78, 0.96, 0.78, 0.32, 0.12], cue: "Open and close the dynamic arc around one center." },
-  pulses: { label: "Pulses", points: [0.18, 0.82, 0.18, 0.82, 0.18, 0.82, 0.18], cue: "Change energy in clean steps while pitch stays put." },
-};
-
-const NUMERICAL_SILENCE_RMS = 1e-6;
-const TRACE_WINDOW_SECONDS = 8;
-/** Repeating target phase; it never owns or ends the user's trace. */
-export const ENVELOPE_CYCLE_SECONDS = 8;
-
-export function interpolateEnvelope(points: readonly number[], progress: number): number {
-  const position = Math.max(0, Math.min(1, progress)) * (points.length - 1);
-  const index = Math.floor(position);
-  const fraction = position - index;
-  const next = points[Math.min(index + 1, points.length - 1)] ?? points[index]!;
-  return points[index]! * (1 - fraction) + next * fraction;
-}
-
-export function scoreEnvelope(
-  frames: readonly (Pick<PitchFrame, "rms"> & { readonly scoringWeight?: number })[],
-  frameElapsedSeconds: readonly number[],
-  points: readonly number[],
-  cyclePeriodSeconds: number,
-  rmsThreshold = NUMERICAL_SILENCE_RMS,
-): number | undefined {
-  if (!Number.isFinite(cyclePeriodSeconds) || cyclePeriodSeconds <= 0) {
-    throw new RangeError("cyclePeriodSeconds must be finite and positive.");
-  }
-  const samples = frames.flatMap((frame, index) => {
-    const elapsed = frameElapsedSeconds[index];
-    return elapsed != null && Number.isFinite(frame.rms) && frame.rms >= rmsThreshold
-      ? [{ level: frame.rms, elapsed, weight: frame.scoringWeight ?? 1 }]
-      : [];
-  });
-  if (samples.length < 4) return undefined;
-  const data = samples.map(({ level, elapsed, weight }) => ({
-    level,
-    weight,
-    progress: ((elapsed % cyclePeriodSeconds) + cyclePeriodSeconds) % cyclePeriodSeconds
-      / cyclePeriodSeconds,
-  }));
-  const levels = samples.map(({ level }) => level);
-  const minimum = Math.min(...levels);
-  const maximum = Math.max(...levels);
-  if (maximum - minimum < 1e-5) {
-    return points.every((point) => Math.abs(point - points[0]!) < 0.05) ? 100 : 0;
-  }
-  const totalWeight = data.reduce((sum, item) => sum + item.weight, 0);
-  const error = data.reduce((sum, item) => {
-    const actual = (item.level - minimum) / (maximum - minimum);
-    return sum + item.weight * Math.abs(actual - interpolateEnvelope(points, item.progress));
-  }, 0) / totalWeight;
-  return Math.max(0, (1 - error) * 100);
-}
-
-function scoreTake(take: Readonly<CompletedAttempt<ControlTakeConfiguration>>): ControlResult {
-  const configuration = take.configuration;
-  const frames = attemptScoringFrames(take);
-  const metrics = scoreWeightedSustainedNote(
-    take,
-    frames,
-    { midi: configuration.midi, centsOffset: configuration.centsOffset, timbre: configuration.timbre, amplitude: 0.25 },
-    { toleranceCents: configuration.toleranceCents, promptTimeSeconds: frames[0]?.timeSeconds },
-  );
-  return {
-    metrics,
-    volumeScore: aggregateEnvelopeScore(
-      take.scoringAggregate,
-      envelopes[configuration.envelopeType].points,
-      interpolateEnvelope,
-    ),
-  };
-}
+import {
+  ENVELOPE_CYCLE_SECONDS,
+  TRACE_WINDOW_SECONDS,
+  envelopes,
+  interpolateEnvelope,
+  pitchControlEnvelopeDisplayLevels,
+  scoreControlTake,
+  type ControlResult,
+  type ControlTakeConfiguration,
+} from "./pitch-control-model";
 
 export function PitchControl() {
   const { selectedMidi, setSelectedMidi, centsOffset, timbre } = useMusicalState();
@@ -128,7 +41,7 @@ export function PitchControl() {
 
   const completeAttempt = (completed: Readonly<CompletedAttempt<ControlTakeConfiguration>>) => {
     const configuration = completed.configuration;
-    const nextResult = scoreTake(completed);
+    const nextResult = scoreControlTake(completed);
     setResult(nextResult);
     const frames = attemptScoringFrames(completed);
     const completedAt = new Date().toISOString();
@@ -166,14 +79,16 @@ export function PitchControl() {
   const activeTimbre = attemptConfiguration?.timbre ?? timbre;
   const activeToleranceCents = attemptConfiguration?.toleranceCents ?? toleranceCents;
   const activeCyclePeriodSeconds = attemptConfiguration?.cyclePeriodSeconds ?? ENVELOPE_CYCLE_SECONDS;
+  const referencePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(activeMidi, activeCentsOffset),
+    timbre: activeTimbre,
+    amplitude: 0.22,
+  });
   const envelope = envelopes[activeEnvelopeType];
   const frames = attemptRecentScoringFrames(attempt.state);
   const displayStartSeconds = Math.max(0, attempt.state.elapsedSeconds - TRACE_WINDOW_SECONDS);
   const displayFrames = frames.filter((frame) => frame.timeSeconds >= displayStartSeconds);
-  const normalizedRms = (() => {
-    const maximum = Math.max(...displayFrames.map((frame) => frame.rms), 0.001);
-    return displayFrames.map((frame) => frame.rms / maximum);
-  })();
+  const displayRmsLevels = pitchControlEnvelopeDisplayLevels(displayFrames);
   const resetAttempt = attempt.reset;
 
   useEffect(() => {
@@ -200,12 +115,6 @@ export function PitchControl() {
       cyclePeriodSeconds: ENVELOPE_CYCLE_SECONDS,
     });
   };
-  const hearReference = () => attempt.playReference("Pitch Control reference", () => playTone({
-    frequencyHz: continuousMidiToHz(activeMidi, activeCentsOffset),
-    timbre: activeTimbre,
-    duration: BRIEF_REFERENCE_SECONDS,
-    amplitude: 0.22,
-  }));
   const medianCenter = result?.metrics.medianErrorCents == null
     ? "—"
     : `${result.metrics.medianErrorCents > 0 ? "+" : ""}${result.metrics.medianErrorCents.toFixed(1)}¢`;
@@ -232,7 +141,6 @@ export function PitchControl() {
         </div>
         <div className="envelope-header"><div><span>MISSION · {vowel.toUpperCase()}</span><h2>{envelopes[envelopeType].cue}</h2></div><div className="envelope-target"><small>PITCH CENTER</small><strong>{noteLabel(selectedMidi)}</strong><span>±{toleranceCents}¢</span></div></div>
         <div className="stage-actions">
-          <PlayButton label="Hear brief reference" onClick={hearReference} />
           <ActionButton className="primary" disabled={input.state !== "running"} onClick={begin}><Icon name="mic" size={18} /> {beginLabel}</ActionButton>
         </div>
       </Panel>
@@ -248,13 +156,13 @@ export function PitchControl() {
             <path className="target-envelope-area" d={`M 0 205 ${envelope.points.map((point, index) => `L ${(index / (envelope.points.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} L 1000 205 Z`} />
             <path className="target-envelope-line" d={envelope.points.map((point, index) => `${index ? "L" : "M"} ${(index / (envelope.points.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} />
             <line className="playhead" x1={cycleProgress * 1000} x2={cycleProgress * 1000} y1="0" y2="220" />
-            {normalizedRms.length > 1 && <path className="actual-envelope-line" d={normalizedRms.map((point, index) => `${index ? "L" : "M"} ${(index / (normalizedRms.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} />}
+            {displayRmsLevels.length > 1 && <path className="actual-envelope-line" d={displayRmsLevels.map((point, index) => `${index ? "L" : "M"} ${(index / (displayRmsLevels.length - 1)) * 1000} ${205 - point * 170}`).join(" ")} />}
           </svg>
           <div className="dynamic-readout"><span>{activeCyclePeriodSeconds}s target loop · trace stays live</span><b style={{ transform: `scale(${0.8 + currentTargetLevel * 0.4})` }}>{dynamicCue}</b></div>
-          <div className="envelope-axis"><span>quiet</span><span>VOLUME · RMS</span><span>loud</span></div>
+          <div className="envelope-axis"><span>quiet</span><span>VOLUME · dBFS</span><span>loud</span></div>
         </div>
-        <PitchRibbon frames={displayFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} envelope={normalizedRms} />
-        <div className="stage-actions"><PlayButton label="Hear brief reference" onClick={hearReference} /><ActionButton onClick={attempt.finish}>Finish trace</ActionButton></div>
+        <PitchRibbon frames={displayFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} envelope={displayRmsLevels} />
+        <div className="stage-actions"><ActionButton onClick={attempt.finish}>Finish trace</ActionButton></div>
       </Panel>
     );
   } else {
@@ -292,6 +200,7 @@ export function PitchControl() {
       {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
 
       <NoteInput variant="scope" input={input} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} title="Pitch and level monitor" />
+      <div className="practice-reference-control"><NotePlaybackToggle playback={referencePlayback} label={noteLabel(activeMidi)} /></div>
       <section className="practice-current-step">{currentStep}</section>
     </div>
   );

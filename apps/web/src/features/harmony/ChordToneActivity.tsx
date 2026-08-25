@@ -6,12 +6,14 @@ import {
   createHarmonicContext,
   normalizePitchClass,
 } from "@noteforge/music-core";
-import { playSafely, playTone } from "@/audio/synth";
+import { playSafely } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { CHORD_PRESETS, continuousMidiToHz, noteLabel, pitchClassLabel } from "@/lib/music-display";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import { useMusicalState } from "@/state/MusicalContext";
 import { ActionButton, Eyebrow, Panel, PlayButton } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import {
   MissionSelect,
   ProgressionSelect,
@@ -81,6 +83,11 @@ export function ChordToneActivity() {
   const stabilityDetail = isChordTone
     ? "Reinforce the chord, linger, or use it as a landing point."
     : `Nearest stable options are ${nearest.map(pitchClassLabel).join(" or ")}. The note is not “wrong”; its continuation defines its function.`;
+  const selectedNotePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(selectedMidi),
+    timbre,
+    amplitude: 0.22,
+  });
 
   const roleNotes = [
     { role: "Root", offset: 0, function: "1 · foundation" },
@@ -106,11 +113,6 @@ export function ChordToneActivity() {
   const selectRole = (offset: number) => {
     const midi = midiNearMiddleC(activeRootPitchClass) + offset;
     setSelectedMidi(midi);
-    playSafely(playTone({
-      frequencyHz: continuousMidiToHz(midi),
-      timbre,
-      duration: 0.85,
-    }), "Harmony note");
   };
 
   const selectChord = (index: number, chord: ProgressionChord) => {
@@ -213,7 +215,6 @@ export function ChordToneActivity() {
                   <span className="role-index">{pitchClassLabel(pitchClass)}</span>
                   <span><b>{role.role}</b><small>{state.reveal ? role.function : "function hidden"}</small></span>
                   <i>{inChord ? "CHORD" : "COLOR"}</i>
-                  <Icon name="play" size={16} />
                 </button>
               );
             })}
@@ -232,6 +233,10 @@ export function ChordToneActivity() {
             <span>over</span>
             <b>{pitchClassLabel(activeRootPitchClass)} {activeChord.label.toLowerCase()}</b>
           </div>
+          <NotePlaybackToggle
+            label={noteLabel(selectedMidi)}
+            playback={selectedNotePlayback}
+          />
           <h2>{stabilityHeading}</h2>
           <p>{stabilityDetail}</p>
           <div className="resolution-route">

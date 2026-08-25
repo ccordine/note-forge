@@ -1,4 +1,5 @@
 import type { PitchObservation } from "../../audio/note-input";
+import type { ObservationSampleAuthority } from "@/realtime/observation-continuity";
 import type { ArcadeVoiceRange } from "./types";
 
 export const VOICE_DRAW_DIRECTIONS = Object.freeze([
@@ -68,20 +69,12 @@ export interface VoiceDrawSegment {
   readonly durationSeconds: number;
 }
 
-export interface VoiceDrawSampleAuthority {
-  readonly sampleRate: number;
-  readonly endSample: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-}
+export type VoiceDrawSampleAuthority = ObservationSampleAuthority;
 
 export interface VoiceDrawState {
   readonly phase: VoiceDrawPhase;
   readonly cursor: VoiceDrawPoint;
   readonly segments: readonly VoiceDrawSegment[];
-  /** Segments retired from the bounded live vector window during very long sessions. */
-  readonly retiredSegmentCount: number;
   readonly noteBank: VoiceDrawNoteBank;
   readonly speedNormalizedPerSecond: number;
   readonly maxStepSeconds: number;

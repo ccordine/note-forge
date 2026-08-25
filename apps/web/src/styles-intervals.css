@@ -24,6 +24,8 @@ flex:1}
 display:grid;
 grid-template-columns:.8fr 1.2fr;
 gap:13px}
+.interval-workspace>*{
+min-width:0}
 .interval-listen-card,.interval-answer-card,.production-mission,.production-map,.comparison-card,.comparison-answer,.mutation-phrase,.mutation-missions{
 padding:27px}
 .interval-listen-card{
@@ -418,3 +420,38 @@ margin-top:4px}
 .mutation-missions svg{
 color:var(--lime)}
 
+@media (max-width:760px){
+.interval-config{
+display:block;
+overflow:hidden}
+.interval-config>*+*{
+margin-top:10px}
+.interval-config .segmented{
+display:grid;
+grid-template-columns:repeat(2,minmax(0,1fr));
+overflow:visible}
+.interval-config .segmented button{
+min-width:0;
+min-height:44px;
+padding:5px 7px;
+white-space:normal}
+.interval-config .switch-row{
+padding:12px 4px}
+.interval-workspace{
+grid-template-columns:minmax(0,1fr)}
+.production-actions{
+flex-wrap:wrap}}
+
+@media (max-width:430px){
+.interval-listen-card,.interval-answer-card,.production-mission,.production-map,.comparison-card,.comparison-answer,.mutation-phrase,.mutation-missions{
+padding:16px}
+.start-note-disc,.target-note-disc{
+width:88px;
+height:88px;
+margin:24px 3px 18px}
+.start-note-disc strong,.target-note-disc strong{
+font-size:25px}
+.mission-arrow span{
+font-size:28px}
+.mission-arrow small{
+font-size:5px}}

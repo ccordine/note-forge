@@ -9,6 +9,7 @@ import {
   reduceVoiceDrawSession,
   startVoiceDraw,
 } from "../apps/web/src/features/voice-arcade/voice-draw-engine";
+import { VOICE_DRAW_PRESENTATION_POLICY } from "../apps/web/src/features/voice-arcade/VoiceDraw";
 import {
   createPitchTunnel,
   reducePitchTunnel,
@@ -49,6 +50,7 @@ const reducer = (state: Readonly<{ total: number }>, action: Action) => ({
 
 function voicedObservation(endSample: number, midiFloat = 50): PitchObservation {
   const sampleRate = 48_000;
+  const nearestMidi = Math.round(midiFloat);
   return Object.freeze({
     observationKind: "voiced",
     timeSeconds: endSample / sampleRate,
@@ -63,8 +65,8 @@ function voicedObservation(endSample: number, midiFloat = 50): PitchObservation 
     discontinuity: false,
     frequencyHz: 440 * 2 ** ((midiFloat - 69) / 12),
     midiFloat,
-    nearestMidi: midiFloat,
-    centsFromNearest: 0,
+    nearestMidi,
+    centsFromNearest: (midiFloat - nearestMidi) * 100,
     confidence: 0.98,
     periodicity: 0.98,
     rms: 0.08,
@@ -144,6 +146,28 @@ describe("RealtimeSessionStore", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("flushes reduced evidence once so queued presentation cannot cross an explicit Finish boundary", () => {
+    const scheduler = new ManualScheduler();
+    const store = new RealtimeSessionStore(reducer, { total: 0 }, 30, scheduler);
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.observe({ type: "add", value: 4 });
+    expect(store.getCurrent()).toEqual({ total: 4 });
+    expect(store.getSnapshot()).toEqual({ total: 0 });
+    expect(scheduler.callbacks).toHaveLength(1);
+
+    store.flushPresentation();
+    const finishSnapshot = store.getSnapshot();
+    expect(finishSnapshot).toEqual({ total: 4 });
+    expect(scheduler.callbacks).toHaveLength(0);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    scheduler.frame(500);
+    expect(store.getSnapshot()).toBe(finishSnapshot);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("reduces every real voice-drawing window before one coalesced UI publication", () => {
     const scheduler = new ManualScheduler();
     const initial = startVoiceDraw(createVoiceDrawState({
@@ -177,6 +201,47 @@ describe("RealtimeSessionStore", () => {
     expect(store.getSnapshot()).toBe(store.getCurrent());
     expect(store.getSnapshot().observedFrameCount).toBe(51);
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes Voice Draw semantic boundaries on their exact observations", () => {
+    const scheduler = new ManualScheduler();
+    const initial = startVoiceDraw(createVoiceDrawState({
+      voiceRange: { lowMidi: 48, highMidi: 60, baselineMidi: 48 },
+      speedNormalizedPerSecond: 0.2,
+    }));
+    const store = new RealtimeSessionStore(
+      reduceVoiceDrawSession,
+      initial,
+      30,
+      scheduler,
+      VOICE_DRAW_PRESENTATION_POLICY,
+    );
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    const firstVoiced = voicedObservation(4_096);
+    store.observe({ type: "observation", observation: firstVoiced });
+    expect(store.getSnapshot().lastAuthority?.endSample).toBe(firstVoiced.endSample);
+    expect(store.getSnapshot().activeMidi).toBe(50);
+
+    const firstMovement = voicedObservation(5_056);
+    store.observe({ type: "observation", observation: firstMovement });
+    expect(store.getSnapshot().lastAuthority?.endSample).toBe(firstMovement.endSample);
+    expect(store.getSnapshot().segments).toHaveLength(1);
+
+    const steadyMovement = voicedObservation(6_016);
+    store.observe({ type: "observation", observation: steadyMovement });
+    expect(store.getCurrent().lastAuthority?.endSample).toBe(steadyMovement.endSample);
+    expect(store.getSnapshot().lastAuthority?.endSample).toBe(firstMovement.endSample);
+    expect(scheduler.callbacks).toHaveLength(1);
+
+    const firstSilence = unvoicedObservation(6_976);
+    store.observe({ type: "observation", observation: firstSilence });
+    expect(store.getSnapshot().lastAuthority?.endSample).toBe(firstSilence.endSample);
+    expect(store.getSnapshot().activeMidi).toBeNull();
+    expect(store.getSnapshot().stationaryReason).toBe("unvoiced");
+    expect(scheduler.callbacks).toHaveLength(0);
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("publishes Pitch Tunnel's exact first voiced frame, then bounds steady voiced frames", () => {
@@ -302,7 +367,7 @@ describe("RealtimeSessionStore", () => {
 
     const graphChange = Object.freeze({
       ...voicedObservation(65_536),
-      continuityEpoch: 1,
+      continuityEpoch: 2,
       graphGeneration: 1,
     });
     store.observe({ type: "observation", observation: graphChange });

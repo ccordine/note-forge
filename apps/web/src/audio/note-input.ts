@@ -1,8 +1,19 @@
-import { detectPitch, type YinPitchFrame } from "@noteforge/pitch-engine";
+import {
+  YinDetector,
+  YIN_DETECTOR_DEFAULTS,
+  type YinPitchFrame,
+} from "@noteforge/pitch-engine";
+import { clampUnit } from "@/lib/numeric";
 import {
   deriveVocalBrightness,
   type VocalBrightnessTelemetry,
 } from "./vocal-brightness";
+import {
+  PitchStateTracker,
+  type PitchCandidateTelemetry,
+  type PitchTrackingDecision,
+} from "./pitch-state-tracker";
+import { AnalysisWindowNormalizer } from "./analysis-window-normalizer";
 
 export type PitchObservationKind = "voiced" | "unvoiced" | "uncertain";
 
@@ -32,6 +43,10 @@ export interface PitchObservation extends YinPitchFrame {
   readonly workletProcessCount: number;
   readonly discontinuity: boolean;
   readonly periodicity: number;
+  /** Raw per-window estimator result before causal musical-state admission. */
+  readonly pitchCandidate?: Readonly<PitchCandidateTelemetry>;
+  /** Target-independent explanation of how this window affected pitch state. */
+  readonly pitchTrackingDecision?: PitchTrackingDecision;
 }
 
 /** The canonical shared vocal observation consumed by multidimensional tools. */
@@ -46,6 +61,7 @@ export interface ResolvedNoteInputConfiguration {
   readonly minConfidence: number;
   readonly a4Frequency: number;
   readonly rmsThreshold: number;
+  readonly currentEdgeSpanSamples: number;
 }
 
 export interface NoteInputResult {
@@ -55,20 +71,22 @@ export interface NoteInputResult {
 }
 
 export const NOTE_INPUT_DEFAULTS = Object.freeze({
-  minFrequency: 45,
-  maxFrequency: 1_200,
-  yinThreshold: 0.18,
-  minConfidence: 0.55,
-  a4Frequency: 440,
-  /** -120 dBFS: reject numerical silence, not a quiet real microphone note. */
-  rmsThreshold: 10 ** (-120 / 20),
+  ...YIN_DETECTOR_DEFAULTS,
 }) satisfies Readonly<Omit<
   ResolvedNoteInputConfiguration,
   "analysisSampleRate" | "analysisSampleCount"
 >>;
 
-const MAXIMUM_ANALYSIS_SAMPLE_RATE = 48_000;
-const MAXIMUM_CAPTURE_SAMPLE_RATE = 768_000;
+export const NOTE_INPUT_SAMPLE_RATE_BOUNDS = Object.freeze({
+  capture: Object.freeze({
+    exclusiveMinimum: NOTE_INPUT_DEFAULTS.maxFrequency * 2,
+    maximum: 768_000,
+  }),
+  analysis: Object.freeze({
+    exclusiveMinimum: NOTE_INPUT_DEFAULTS.maxFrequency * 2,
+    maximum: 48_000,
+  }),
+});
 
 function requireNonNegativeSafeInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -82,11 +100,11 @@ function validateWindow(window: Readonly<NoteInputWindow>): void {
   }
   if (
     !Number.isFinite(window.sampleRate)
-    || window.sampleRate <= 0
-    || window.sampleRate > MAXIMUM_CAPTURE_SAMPLE_RATE
+    || window.sampleRate <= NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.exclusiveMinimum
+    || window.sampleRate > NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.maximum
   ) {
     throw new RangeError(
-      `sampleRate must be finite, positive, and no greater than ${MAXIMUM_CAPTURE_SAMPLE_RATE}.`,
+      `sampleRate must be finite, greater than ${NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.exclusiveMinimum}, and no greater than ${NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.maximum}.`,
     );
   }
   requireNonNegativeSafeInteger(window.startSample, "startSample");
@@ -118,38 +136,6 @@ function validateWindow(window: Readonly<NoteInputWindow>): void {
   }
 }
 
-/** Bound detector work at high hardware sample rates without changing capture coordinates. */
-function normalizedAnalysisWindow(
-  window: Pick<NoteInputWindow, "samples" | "sampleRate">,
-): Pick<NoteInputWindow, "samples" | "sampleRate"> {
-  if (window.sampleRate <= MAXIMUM_ANALYSIS_SAMPLE_RATE) return window;
-
-  const outputLength = Math.max(
-    2,
-    Math.floor(window.samples.length * MAXIMUM_ANALYSIS_SAMPLE_RATE / window.sampleRate),
-  );
-  const sourceSamplesPerOutput = window.samples.length / outputLength;
-  const output = new Float32Array(outputLength);
-  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
-    const start = outputIndex * sourceSamplesPerOutput;
-    const end = start + sourceSamplesPerOutput;
-    let sourceIndex = Math.floor(start);
-    let position = start;
-    let sum = 0;
-    while (position < end) {
-      const segmentEnd = Math.min(end, sourceIndex + 1);
-      sum += window.samples[sourceIndex]! * (segmentEnd - position);
-      position = segmentEnd;
-      sourceIndex += 1;
-    }
-    output[outputIndex] = sum / sourceSamplesPerOutput;
-  }
-  return {
-    samples: output,
-    sampleRate: outputLength / (window.samples.length / window.sampleRate),
-  };
-}
-
 function observationKind(frame: Readonly<YinPitchFrame>): PitchObservationKind {
   if (frame.reason === "detected" && frame.voiced) return "voiced";
   if (
@@ -163,20 +149,56 @@ function observationKind(frame: Readonly<YinPitchFrame>): PitchObservationKind {
 
 function periodicity(frame: Readonly<YinPitchFrame>): number {
   if (frame.yinValue === null || !Number.isFinite(frame.yinValue)) return 0;
-  return Math.min(1, Math.max(0, 1 - frame.yinValue));
+  return clampUnit(1 - frame.yinValue);
 }
 
-/** Stateless detector: every complete PCM window becomes exactly one observation. */
+/** Every complete PCM window becomes exactly one independently owned observation. */
 export class NoteInputEngine {
+  private readonly detector = new YinDetector();
+  private readonly pitchTracker = new PitchStateTracker();
+  private readonly analysisNormalizer = new AnalysisWindowNormalizer();
+  private trackerAuthority: Readonly<{
+    captureEpoch: number;
+    continuityEpoch: number;
+    graphGeneration: number;
+    sampleRate: number;
+  }> | null = null;
+  private inUse = false;
+
   process(window: Readonly<NoteInputWindow>): NoteInputResult {
+    if (this.inUse) {
+      throw new Error("A NoteInputEngine instance cannot be used reentrantly.");
+    }
+    this.inUse = true;
+    try {
+      return this.processWindow(window);
+    } finally {
+      this.inUse = false;
+    }
+  }
+
+  private processWindow(window: Readonly<NoteInputWindow>): NoteInputResult {
     validateWindow(window);
-    const analysisWindow = normalizedAnalysisWindow(window);
+    const trackerAuthorityChanged = this.trackerAuthority === null
+      || this.trackerAuthority.captureEpoch !== window.captureEpoch
+      || this.trackerAuthority.continuityEpoch !== window.continuityEpoch
+      || this.trackerAuthority.graphGeneration !== window.graphGeneration
+      || this.trackerAuthority.sampleRate !== window.sampleRate;
+    if (window.discontinuity || trackerAuthorityChanged) this.pitchTracker.reset();
+    this.trackerAuthority = Object.freeze({
+      captureEpoch: window.captureEpoch,
+      continuityEpoch: window.continuityEpoch,
+      graphGeneration: window.graphGeneration,
+      sampleRate: window.sampleRate,
+    });
+    const analysisWindow = this.analysisNormalizer.normalize(window);
     const configuration = Object.freeze({
       analysisSampleRate: analysisWindow.sampleRate,
       analysisSampleCount: analysisWindow.samples.length,
       ...NOTE_INPUT_DEFAULTS,
+      currentEdgeSpanSamples: Math.max(1, Math.round(analysisWindow.sampleRate * 0.02)),
     });
-    const detected = detectPitch(analysisWindow.samples, {
+    const detected = this.detector.detectPitch(analysisWindow.samples, {
       sampleRate: analysisWindow.sampleRate,
       minFrequency: configuration.minFrequency,
       maxFrequency: configuration.maxFrequency,
@@ -184,17 +206,19 @@ export class NoteInputEngine {
       minConfidence: configuration.minConfidence,
       a4Frequency: configuration.a4Frequency,
       rmsThreshold: configuration.rmsThreshold,
+      currentEdgeSpanSamples: configuration.currentEdgeSpanSamples,
       timeSeconds: window.capturedAt,
     });
+    const tracked = this.pitchTracker.track(detected);
     const brightness = deriveVocalBrightness(
       analysisWindow.samples,
       analysisWindow.sampleRate,
-      detected,
+      tracked.frame,
     );
     const observation = Object.freeze({
-      ...detected,
+      ...tracked.frame,
       ...brightness,
-      observationKind: observationKind(detected),
+      observationKind: observationKind(tracked.frame),
       sampleRate: window.sampleRate,
       startSample: window.startSample,
       endSample: window.endSample,
@@ -204,7 +228,9 @@ export class NoteInputEngine {
       graphGeneration: window.graphGeneration,
       workletProcessCount: window.processCount,
       discontinuity: window.discontinuity,
-      periodicity: periodicity(detected),
+      periodicity: periodicity(tracked.frame),
+      pitchCandidate: tracked.candidate,
+      pitchTrackingDecision: tracked.decision,
     }) satisfies Readonly<VocalObservation>;
     return Object.freeze({ observation, configuration });
   }

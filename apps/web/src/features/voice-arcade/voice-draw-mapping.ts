@@ -1,5 +1,6 @@
 import { frequencyToMidi } from "@noteforge/music-core";
 import { NOTE_INPUT_DEFAULTS } from "../../audio/note-input";
+import { clamp } from "@/lib/numeric";
 import type { ArcadeVoiceRange } from "./types";
 import {
   VOICE_DRAW_DIRECTIONS,
@@ -31,10 +32,6 @@ export const VOICE_DRAW_DIRECTION_VECTORS = Object.freeze({
   left: Object.freeze({ dx: -1, dy: 0 }),
   "up-left": Object.freeze({ dx: -DIAGONAL_COMPONENT, dy: -DIAGONAL_COMPONENT }),
 }) satisfies Readonly<Record<VoiceDrawDirection, VoiceDrawDirectionVector>>;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 function requireMidi(value: number, label: string): void {
   if (!Number.isInteger(value) || value < 0 || value > 127) {

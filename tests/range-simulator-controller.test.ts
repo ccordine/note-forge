@@ -6,7 +6,6 @@ import {
   reduceRangeSimulatorController,
 } from "../apps/web/src/features/range-simulator/controller";
 import {
-  RANGE_SIMULATOR_MAX_RATED_PROBES,
   currentRangeSimulatorProbe,
   rateRangeSimulatorProbe,
 } from "../apps/web/src/features/range-simulator/model";
@@ -96,7 +95,7 @@ describe("Range Simulator sample-coordinate controller", () => {
     expect(state.dwell.heldSamples).toBe(HOP_SIZE * 2);
   });
 
-  it("resets dwell only when credible voiced evidence leaves the target", () => {
+  it("resets dwell for every detector-admitted voiced pitch outside the target", () => {
     let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
     for (let index = 0; index < 5; index += 1) {
       state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(index) });
@@ -104,7 +103,7 @@ describe("Range Simulator sample-coordinate controller", () => {
     expect(state.dwell.heldSamples).toBe(HOP_SIZE * 4);
 
     state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(5, { midiFloat: 49, confidence: 0.2 }) });
-    expect(state.dwell.heldSamples).toBe(HOP_SIZE * 4);
+    expect(state.dwell.heldSamples).toBe(0);
     state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(6, { midiFloat: 49, confidence: 0.96 }) });
     expect(state.dwell.heldSamples).toBe(0);
   });
@@ -242,17 +241,23 @@ describe("Range Simulator sample-coordinate controller", () => {
     expect(finishedReload.status).toBe("complete");
   });
 
-  it("records the probe-cap achievement without giving the cap Stop authority", () => {
+  it("latches full-depth boundary achievement while observations and explicit recheck remain live until Finish", () => {
     let state = reduceRangeSimulatorController(controller(), { type: "begin", toleranceCents: 20 });
     let session = state.session;
-    while (session.ratedProbeCount < RANGE_SIMULATOR_MAX_RATED_PROBES - 1) {
+    let finalRatingTime = "";
+    while (true) {
       const probe = currentRangeSimulatorProbe(session);
-      if (!probe) throw new Error("Probe-cap fixture exhausted its queue early.");
-      session = rateRangeSimulatorProbe(session, {
+      if (!probe) throw new Error("Full-depth fixture exhausted its queue unexpectedly.");
+      finalRatingTime = new Date(
+        Date.parse(STARTED_AT) + (session.ratedProbeCount + 1) * 1_000,
+      ).toISOString();
+      const candidate = rateRangeSimulatorProbe(session, {
         taskId: probe.id,
-        rating: 3,
-        ratedAt: new Date(Date.parse(STARTED_AT) + (session.ratedProbeCount + 1) * 1_000).toISOString(),
+        rating: 1,
+        ratedAt: finalRatingTime,
       });
+      if (candidate.phase === "complete") break;
+      session = candidate;
     }
     state = {
       ...state,
@@ -267,10 +272,10 @@ describe("Range Simulator sample-coordinate controller", () => {
         progress: 1,
       },
     };
-    state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 3 });
+    state = reduceRangeSimulatorController(state, { type: "select-rating", rating: 1 });
     state = reduceRangeSimulatorController(state, {
       type: "save-rating",
-      ratedAt: new Date(Date.parse(STARTED_AT) + RANGE_SIMULATOR_MAX_RATED_PROBES * 1_000).toISOString(),
+      ratedAt: finalRatingTime,
       toleranceCents: 20,
     });
 
@@ -278,13 +283,32 @@ describe("Range Simulator sample-coordinate controller", () => {
       status: "tracking",
       session: {
         phase: "complete",
-        completionStatus: "probe-cap",
-        ratedProbeCount: RANGE_SIMULATOR_MAX_RATED_PROBES,
+        completionStatus: "complete",
       },
     });
+    expect(state.session.ratedProbeCount).toBeGreaterThan(24);
     const priorCount = state.dwell.observedFrameCount;
     state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(200) });
     expect(state.status).toBe("tracking");
     expect(state.dwell.observedFrameCount).toBe(priorCount + 1);
+
+    state = reduceRangeSimulatorController(state, {
+      type: "recheck",
+      startedAt: new Date(Date.parse(finalRatingTime) + 1_000).toISOString(),
+      toleranceCents: 20,
+    });
+    expect(state).toMatchObject({
+      status: "tracking",
+      session: { phase: "baseline", ratedProbeCount: 0 },
+      dwell: { observedFrameCount: 0 },
+    });
+    state = reduceRangeSimulatorController(state, { type: "observation", observation: observation(201) });
+    expect(state.dwell.observedFrameCount).toBe(1);
+
+    state = reduceRangeSimulatorController(state, {
+      type: "finish",
+      stoppedAt: new Date(Date.parse(finalRatingTime) + 2_000).toISOString(),
+    });
+    expect(state.status).toBe("complete");
   });
 });

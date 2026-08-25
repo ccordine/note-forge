@@ -14,12 +14,6 @@ export function PitchPong(props: ArcadeGameProps) {
     latestAchievement, maximumRally, maximumRallyPercent, phase, preset,
     rangeLabels, resetToSetup, result, scoreFlash, startRound, status,
   } = runtime;
-  const rangeLabelClass = (index: number) => {
-    if (index === 0) return "pong-range-label pong-range-high";
-    if (index === rangeLabels.length - 1) return "pong-range-label pong-range-low";
-    return "pong-range-label";
-  };
-
   return (
     <section className={`arcade-game-shell pitch-pong-shell curriculum-${curriculumStage}`}>
       <div className="arcade-game-hud">
@@ -84,8 +78,13 @@ export function PitchPong(props: ArcadeGameProps) {
           >
             <div className="pong-court-grid" aria-hidden="true" />
             <div className="pong-net" aria-hidden="true" />
-            {rangeLabels.map((midi, index) => (
-              <span className={rangeLabelClass(index)} key={`${midi}-${index}`}>{noteLabel(midi)}</span>
+            {rangeLabels.map(({ midi, topPercent }) => (
+              <span
+                className="pong-range-label"
+                key={midi}
+                style={{ top: `${topPercent}%` }}
+                data-controller-position={topPercent}
+              >{noteLabel(midi)}</span>
             ))}
             <span className="pong-paddle pong-player" aria-hidden="true" />
             <span className="pong-paddle pong-opponent" aria-hidden="true" />

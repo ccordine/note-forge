@@ -1,4 +1,6 @@
 import type { PitchObservation } from "@/audio/note-input";
+import { clampPercent } from "@/lib/numeric";
+import { observationContinuity } from "@/realtime/observation-continuity";
 import {
   createResonanceController,
   toResonanceVoiceInput,
@@ -61,8 +63,6 @@ export type ResonanceSessionAction =
   | Readonly<{ type: "finish" }>
   | Readonly<{ type: "observation"; observation: Readonly<PitchObservation> }>;
 
-const ANALYSIS_HOP_SECONDS = 0.02;
-
 export function focusedResonator(
   game: Readonly<ResonanceGameState>,
 ): FrequencyTunedResonator | null {
@@ -75,10 +75,9 @@ export function goalProgressPercent(game: Readonly<ResonanceGameState>): number 
   const startX = game.level.ball.position.x;
   const goalX = game.level.goal.position.x;
   if (goalX <= startX) return game.status === "won" ? 100 : 0;
-  return Math.min(100, Math.max(
-    0,
+  return clampPercent(
     (game.ball.position.x - startX) / (goalX - startX) * 100,
-  ));
+  );
 }
 
 export function resonatorIsCoupled(
@@ -130,18 +129,6 @@ export function createResonanceSession(
   return sessionWithGame("idle", 0, options.level ?? 1, generateResonanceLevel(options));
 }
 
-function sampleDelta(
-  previous: Readonly<ResonanceControllerState>["authority"],
-  frame: Readonly<PitchObservation>,
-  authorityChanged: boolean,
-): Readonly<{ samples: number; boundary: boolean }> {
-  if (previous === null || authorityChanged) return { samples: 0, boundary: true };
-  const delta = frame.endSample - previous.endSample;
-  const expectedHop = Math.round(frame.sampleRate * ANALYSIS_HOP_SECONDS);
-  if (delta !== expectedHop) return { samples: 0, boundary: true };
-  return { samples: delta, boundary: false };
-}
-
 function updateDwell(
   current: Readonly<ResonanceTargetDwell>,
   target: Readonly<FrequencyTunedResonator> | null,
@@ -170,14 +157,15 @@ function advanceFromObservation(
 ): ResonanceSessionState {
   if (state.phase !== "tracking") return state as ResonanceSessionState;
   const previousAuthority = state.controller.authority;
+  const continuity = observationContinuity(previousAuthority, observation);
+  if (!continuity.accepted) return state as ResonanceSessionState;
   const controllerUpdate = updateResonanceControllerFromFrame(state.controller, observation);
   if (controllerUpdate.duplicate) return state as ResonanceSessionState;
 
-  const delta = sampleDelta(
-    previousAuthority,
-    observation,
-    controllerUpdate.authorityChanged,
-  );
+  const delta = {
+    samples: continuity.deltaSamples,
+    boundary: continuity.boundary,
+  };
   const targetBeforeAdvance = focusedResonator(state.game);
   const voice = toResonanceVoiceInput(controllerUpdate.state);
   const physics = advanceResonanceGame(

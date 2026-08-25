@@ -148,11 +148,12 @@ async function inspectLayout(session) {
         });
       }
     }
-    const maximumScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-    scrollTo({ top: document.documentElement.scrollHeight, left: 0, behavior: 'instant' });
+    const scrollRoot = document.scrollingElement ?? document.documentElement;
+    scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, left: 0, behavior: 'instant' });
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const reachedBottom = Math.abs(scrollY - maximumScroll) <= 2;
-    scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    const maximumScroll = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+    const reachedBottom = Math.abs(scrollRoot.scrollTop - maximumScroll) <= 2;
+    scrollRoot.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     return {
       viewport: { width: innerWidth, height: innerHeight },
       document: {
@@ -222,17 +223,18 @@ function assertLayout(layout, viewport, expectedStep) {
       `${viewport.label}: expected ${MODES.length} mode controls, found ${layout.counts.radios}.`);
     assert(layout.counts.settingSelects === 3,
       `${viewport.label}: expected three configuration selects, found ${layout.counts.settingSelects}.`);
-    assert(layout.counts.randomize === 1 && layout.counts.idleActions === 2,
+    assert(layout.counts.randomize === 1 && layout.counts.idleActions === 1,
       `${viewport.label}: idle workflow actions are incomplete: ${JSON.stringify(layout.counts)}`);
-    assert(layout.labels.playback.length === 1 && layout.labels.playback[0] === "Hear",
-      `${viewport.label}: the visible idle playback action must be the compact “Hear” label: ${JSON.stringify(layout.labels)}`);
+    assert(layout.labels.playback.length <= 1
+      && layout.labels.playback.every((label) => /^Play\s+\S+/u.test(label)),
+    `${viewport.label}: every available isolated note must use the canonical Play/Stop toggle (silent-prep may omit it): ${JSON.stringify(layout.labels)}`);
     assert(layout.labels.attempt === "Start trace",
       `${viewport.label}: the local action must remain “Start trace” regardless of microphone state: ${JSON.stringify(layout.labels)}`);
   } else if (expectedStep === "tracking") {
-    assert(layout.counts.trackingActions === 2,
+    assert(layout.counts.trackingActions === 1,
       `${viewport.label}: tracking workflow actions are incomplete: ${JSON.stringify(layout.counts)}`);
-    assert(layout.labels.playback.length === 1 && layout.labels.playback[0] === "Hear",
-      `${viewport.label}: the visible tracking playback action must be the compact “Hear” label: ${JSON.stringify(layout.labels)}`);
+    assert(layout.labels.playback.length === 1 && /^Play\s+\S+/u.test(layout.labels.playback[0]),
+      `${viewport.label}: tracking must retain the canonical isolated-note Play/Stop toggle: ${JSON.stringify(layout.labels)}`);
   } else {
     assert(layout.counts.completeActions === 1,
       `${viewport.label}: completion workflow action is incomplete: ${JSON.stringify(layout.counts)}`);

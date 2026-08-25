@@ -1,17 +1,27 @@
 import { pitchValuesFromFrequency } from "./pitch";
-import type {
-  PitchDetectionReason,
-  YinOptions,
-  YinPitchFrame,
+import { recentPeriodConfidence } from "./recent-period-confidence";
+import {
+  selectHarmonicFamily,
+  sinusoidalMagnitude,
+} from "./harmonic-family";
+import { YinScratchWorkspace } from "./yin-workspace";
+import {
+  YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS,
+  type PitchDetectionReason,
+  type YinOptions,
+  type YinPitchFrame,
+  type YinRawCandidate,
 } from "./types";
-
-const DEFAULT_MIN_FREQUENCY = 65;
-const DEFAULT_MAX_FREQUENCY = 1_200;
-const DEFAULT_YIN_THRESHOLD = 0.15;
-const DEFAULT_MIN_CONFIDENCE = 0.8;
-const DEFAULT_RMS_THRESHOLD = 0.005;
-const DEFAULT_A4_FREQUENCY = 440;
-
+/** Canonical full-depth, zero-floor policy for direct and live callers. */
+export const YIN_DETECTOR_DEFAULTS = Object.freeze({
+  minFrequency: 45,
+  maxFrequency: 1_200,
+  yinThreshold: 0.18,
+  minConfidence: 0.55,
+  rmsThreshold: 0,
+  currentEdgeSpanSamples: 0,
+  a4Frequency: 440,
+});
 interface ResolvedOptions {
   sampleRate: number;
   minFrequency: number;
@@ -20,44 +30,44 @@ interface ResolvedOptions {
   yinThreshold: number;
   minConfidence: number;
   rmsThreshold: number;
+  currentEdgeSpanSamples: number;
   a4Frequency: number;
   timeSeconds: number;
 }
-
 function requireFinitePositive(value: number, name: string): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new RangeError(`${name} must be a finite positive number`);
   }
 }
-
 function requireUnitInterval(value: number, name: string): void {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new RangeError(`${name} must be between 0 and 1`);
   }
 }
-
 function resolveOptions(options: YinOptions): ResolvedOptions {
   const resolved: ResolvedOptions = {
     sampleRate: options.sampleRate,
-    minFrequency: options.minFrequency ?? DEFAULT_MIN_FREQUENCY,
-    maxFrequency: options.maxFrequency ?? DEFAULT_MAX_FREQUENCY,
+    minFrequency: options.minFrequency ?? YIN_DETECTOR_DEFAULTS.minFrequency,
+    maxFrequency: options.maxFrequency ?? YIN_DETECTOR_DEFAULTS.maxFrequency,
     analysisWindowSize: options.analysisWindowSize,
-    yinThreshold: options.yinThreshold ?? DEFAULT_YIN_THRESHOLD,
-    minConfidence: options.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
-    rmsThreshold: options.rmsThreshold ?? DEFAULT_RMS_THRESHOLD,
-    a4Frequency: options.a4Frequency ?? DEFAULT_A4_FREQUENCY,
+    yinThreshold: options.yinThreshold ?? YIN_DETECTOR_DEFAULTS.yinThreshold,
+    minConfidence: options.minConfidence ?? YIN_DETECTOR_DEFAULTS.minConfidence,
+    rmsThreshold: options.rmsThreshold ?? YIN_DETECTOR_DEFAULTS.rmsThreshold,
+    currentEdgeSpanSamples: options.currentEdgeSpanSamples ?? YIN_DETECTOR_DEFAULTS.currentEdgeSpanSamples,
+    a4Frequency: options.a4Frequency ?? YIN_DETECTOR_DEFAULTS.a4Frequency,
     timeSeconds: options.timeSeconds ?? 0,
   };
-
   requireFinitePositive(resolved.sampleRate, "sampleRate");
   requireFinitePositive(resolved.minFrequency, "minFrequency");
   requireFinitePositive(resolved.maxFrequency, "maxFrequency");
   requireFinitePositive(resolved.a4Frequency, "a4Frequency");
   requireUnitInterval(resolved.yinThreshold, "yinThreshold");
   requireUnitInterval(resolved.minConfidence, "minConfidence");
-
   if (!Number.isFinite(resolved.rmsThreshold) || resolved.rmsThreshold < 0) {
     throw new RangeError("rmsThreshold must be a finite non-negative number");
+  }
+  if (!Number.isSafeInteger(resolved.currentEdgeSpanSamples) || resolved.currentEdgeSpanSamples < 0) {
+    throw new RangeError("currentEdgeSpanSamples must be a non-negative safe integer");
   }
   if (!Number.isFinite(resolved.timeSeconds) || resolved.timeSeconds < 0) {
     throw new RangeError("timeSeconds must be a finite non-negative number");
@@ -75,7 +85,6 @@ function resolveOptions(options: YinOptions): ResolvedOptions {
   ) {
     throw new RangeError("analysisWindowSize must be a positive integer");
   }
-
   return resolved;
 }
 
@@ -85,6 +94,8 @@ function frameWithoutPitch(
   confidence: number,
   reason: Exclude<PitchDetectionReason, "detected">,
   yinValue: number | null = null,
+  rawCandidate: Readonly<YinRawCandidate> | null = null,
+  harmonicAmbiguity = 0,
 ): YinPitchFrame {
   return {
     timeSeconds: options.timeSeconds,
@@ -99,6 +110,8 @@ function frameWithoutPitch(
     periodSamples: null,
     yinValue,
     reason,
+    rawCandidate,
+    harmonicAmbiguity,
   };
 }
 
@@ -126,53 +139,6 @@ function clampUnit(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-let cachedHannWindow = new Float64Array(0);
-
-function hannWindow(length: number): Float64Array {
-  if (cachedHannWindow.length === length) return cachedHannWindow;
-  const window = new Float64Array(length);
-  for (let index = 0; index < length; index += 1) {
-    window[index] = 0.5 - 0.5 * Math.cos(
-      2 * Math.PI * index / (length - 1),
-    );
-  }
-  cachedHannWindow = window;
-  return window;
-}
-
-/** Hann-windowed single-frequency magnitude used only to disambiguate octaves. */
-function sinusoidalMagnitude(
-  samples: Float32Array,
-  sampleRate: number,
-  frequencyHz: number,
-): number {
-  if (samples.length < 2 || frequencyHz <= 0 || frequencyHz >= sampleRate / 2) {
-    return 0;
-  }
-  let real = 0;
-  let imaginary = 0;
-  let weightSum = 0;
-  const window = hannWindow(samples.length);
-  const angularStep = 2 * Math.PI * frequencyHz / sampleRate;
-  const oscillatorCosine = Math.cos(angularStep);
-  const oscillatorSine = Math.sin(angularStep);
-  let phaseCosine = 1;
-  let phaseSine = 0;
-  for (let index = 0; index < samples.length; index += 1) {
-    const weight = window[index]!;
-    const weighted = samples[index] * weight;
-    real += weighted * phaseCosine;
-    imaginary -= weighted * phaseSine;
-    weightSum += weight;
-    const nextCosine = phaseCosine * oscillatorCosine
-      - phaseSine * oscillatorSine;
-    phaseSine = phaseSine * oscillatorCosine
-      + phaseCosine * oscillatorSine;
-    phaseCosine = nextCosine;
-  }
-  return weightSum === 0 ? 0 : 2 * Math.hypot(real, imaginary) / weightSum;
-}
-
 /**
  * Refine YIN's time-domain estimate against the signal's harmonic spectrum.
  *
@@ -186,16 +152,15 @@ function refineFrequencyFromHarmonics(
   sampleRate: number,
   initialFrequencyHz: number,
   confidence: number,
-  maximumFrequency: number,
+  workspace: YinScratchWorkspace,
 ): { frequencyHz: number; supportsConfidence: boolean } {
   // The broad low-frequency YIN trough is the one susceptible to room hum.
   // Higher-confidence candidates already have enough evidence for only a
   // narrow low-register refinement. We spend a wider pass solely on uncertain
   // candidates, where additive noise can move YIN by more than a semitone.
   const uncertain = confidence < 0.9;
-  const sparseUpperBoundary = initialFrequencyHz >= maximumFrequency * 0.9
-    && sampleRate / initialFrequencyHz < 24;
-  if (!uncertain && initialFrequencyHz >= 160 && !sparseUpperBoundary) {
+  const sparsePeriod = sampleRate / initialFrequencyHz < 24;
+  if (!uncertain && initialFrequencyHz >= 160 && !sparsePeriod) {
     return { frequencyHz: initialFrequencyHz, supportsConfidence: false };
   }
 
@@ -212,6 +177,7 @@ function refineFrequencyFromHarmonics(
         samples,
         sampleRate,
         harmonicFrequency,
+        workspace,
       );
       // Equal partial energy lets an uncertain harmonic family outvote nearby
       // hum. High-confidence refinement keeps its low-harmonic weighting for
@@ -221,59 +187,44 @@ function refineFrequencyFromHarmonics(
     return score;
   };
 
-  const centers = [initialFrequencyHz];
-  if (uncertain && initialFrequencyHz * 2 <= maximumFrequency) {
-    // This lets independent harmonic evidence undo a noise-induced
-    // subharmonic choice without ever snapping toward a tempered note.
-    centers.push(initialFrequencyHz * 2);
+  let bestCents = 0;
+  let bestScore = -1;
+  const scoreCount = Math.floor(2 * searchRadiusCents / coarseStepCents) + 1;
+  const scores = workspace.harmonicScores(scoreCount);
+  let scoreIndex = 0;
+  for (
+    let cents = -searchRadiusCents;
+    cents <= searchRadiusCents;
+    cents += coarseStepCents
+  ) {
+    const frequencyHz = initialFrequencyHz * 2 ** (cents / 1_200);
+    // Permit the fitting neighborhood to cross a configured boundary so a
+    // candidate exactly on that boundary still has symmetric evidence. The
+    // final refined result is range-checked below before it can be emitted.
+    const score = harmonicScore(frequencyHz);
+    scores[scoreIndex] = score;
+    scoreIndex += 1;
+    if (score > bestScore) {
+      bestScore = score;
+      bestCents = cents;
+    }
   }
 
-  const bestByCenter = centers.map((centerFrequencyHz) => {
-    let bestCents = 0;
-    let bestScore = -1;
-    const scores: number[] = [];
-    for (
-      let cents = -searchRadiusCents;
-      cents <= searchRadiusCents;
-      cents += coarseStepCents
-    ) {
-      const frequencyHz = centerFrequencyHz * 2 ** (cents / 1_200);
-      // Permit the fitting neighborhood to cross a configured boundary so a
-      // candidate exactly on that boundary still has symmetric evidence. The
-      // final refined result is range-checked below before it can be emitted.
-      const score = harmonicScore(frequencyHz);
-      scores.push(score);
-      if (score > bestScore) {
-        bestScore = score;
-        bestCents = cents;
-      }
+  const bestIndex = Math.round(
+    (bestCents + searchRadiusCents) / coarseStepCents,
+  );
+  let refinedCents = bestCents;
+  if (bestIndex > 0 && bestIndex < scoreCount - 1) {
+    const previous = scores[bestIndex - 1]!;
+    const current = scores[bestIndex]!;
+    const next = scores[bestIndex + 1]!;
+    const denominator = previous - 2 * current + next;
+    if (Number.isFinite(denominator) && Math.abs(denominator) > 1e-18) {
+      const offset = 0.5 * (previous - next) / denominator;
+      refinedCents += Math.max(-1, Math.min(1, offset)) * coarseStepCents;
     }
-
-    const bestIndex = Math.round(
-      (bestCents + searchRadiusCents) / coarseStepCents,
-    );
-    let refinedCents = bestCents;
-    if (bestIndex > 0 && bestIndex < scores.length - 1) {
-      const previous = scores[bestIndex - 1]!;
-      const current = scores[bestIndex]!;
-      const next = scores[bestIndex + 1]!;
-      const denominator = previous - 2 * current + next;
-      if (Number.isFinite(denominator) && Math.abs(denominator) > 1e-18) {
-        const offset = 0.5 * (previous - next) / denominator;
-        refinedCents += Math.max(-1, Math.min(1, offset)) * coarseStepCents;
-      }
-    }
-    return {
-      frequencyHz: centerFrequencyHz * 2 ** (refinedCents / 1_200),
-      score: bestScore,
-    };
-  });
-
-  const local = bestByCenter[0]!;
-  const doubled = bestByCenter[1];
-  const frequencyHz = doubled && doubled.score > local.score * 1.03
-    ? doubled.frequencyHz
-    : local.frequencyHz;
+  }
+  const frequencyHz = initialFrequencyHz * 2 ** (refinedCents / 1_200);
   let totalHarmonicEnergy = 0;
   let upperHarmonicEnergy = 0;
   for (let harmonic = 1; harmonic <= MAXIMUM_HARMONIC; harmonic += 1) {
@@ -281,6 +232,7 @@ function refineFrequencyFromHarmonics(
       samples,
       sampleRate,
       frequencyHz * harmonic,
+      workspace,
     );
     const energy = magnitude * magnitude;
     totalHarmonicEnergy += energy;
@@ -293,86 +245,6 @@ function refineFrequencyFromHarmonics(
     && totalHarmonicEnergy > 1e-18
     && upperHarmonicEnergy / totalHarmonicEnergy >= 0.015;
   return { frequencyHz, supportsConfidence };
-}
-
-/**
- * A weak vocal fundamental with a dominant second harmonic can make the first
- * acceptable YIN minimum one octave high. Prefer the doubled period only when
- * the PCM contains measurable energy at that lower fundamental as independent
- * evidence; a pure high sine therefore stays high.
- */
-function correctDominantSecondHarmonic(
-  samples: Float32Array,
-  yin: Float64Array,
-  selectedTau: number,
-  maximumTau: number,
-  sampleRate: number,
-  minimumFrequency: number,
-): number {
-  const doubled = selectedTau * 2;
-  if (doubled > maximumTau || sampleRate / doubled < minimumFrequency) {
-    return selectedTau;
-  }
-
-  let lowerTau = doubled;
-  for (
-    let tau = Math.max(selectedTau + 1, doubled - 2);
-    tau <= Math.min(maximumTau, doubled + 2);
-    tau += 1
-  ) {
-    if (yin[tau] < yin[lowerTau]) lowerTau = tau;
-  }
-  // The longer period must itself be strongly periodic. This prevents random
-  // low-frequency room energy from overriding a valid high candidate.
-  if (yin[lowerTau] > Math.min(0.25, yin[selectedTau] + 0.08)) {
-    return selectedTau;
-  }
-
-  const candidateFrequency = sampleRate / selectedTau;
-  const lowerFrequency = sampleRate / lowerTau;
-  const candidateMagnitude = sinusoidalMagnitude(
-    samples,
-    sampleRate,
-    candidateFrequency,
-  );
-  const lowerMagnitude = sinusoidalMagnitude(
-    samples,
-    sampleRate,
-    lowerFrequency,
-  );
-  if (candidateMagnitude <= 1e-12) {
-    return selectedTau;
-  }
-
-  const fundamentalRatio = lowerMagnitude / candidateMagnitude;
-  if (lowerFrequency < 80) {
-    // A 50/60 Hz electrical line can sit below a real high note and look like
-    // octave evidence in an 85 ms window. A low vocal fundamental with a
-    // dominant second partial also carries independent odd partials, whereas
-    // a line plus the selected high candidate does not. Require both the low
-    // fundamental and energy at an odd member of that same harmonic family
-    // before correcting a sub-80 Hz octave.
-    const thirdMagnitude = sinusoidalMagnitude(
-      samples,
-      sampleRate,
-      lowerFrequency * 3,
-    );
-    const fifthMagnitude = sinusoidalMagnitude(
-      samples,
-      sampleRate,
-      lowerFrequency * 5,
-    );
-    const oddHarmonicRatio = Math.hypot(
-      thirdMagnitude,
-      fifthMagnitude,
-    ) / candidateMagnitude;
-    if (fundamentalRatio < 0.06 || oddHarmonicRatio < 0.08) {
-      return selectedTau;
-    }
-  } else if (fundamentalRatio < 0.075) {
-    return selectedTau;
-  }
-  return lowerTau;
 }
 
 /** Refines an integer lag by fitting a parabola through its YIN neighbors. */
@@ -399,15 +271,39 @@ function parabolicPeriod(
   return tau + Math.min(1, Math.max(-1, offset));
 }
 
+function rawCandidateAt(
+  samples: Float32Array,
+  yin: Float64Array,
+  tau: number,
+  maximumTau: number,
+  sampleRate: number,
+  currentEdgeSpanSamples: number,
+): Readonly<YinRawCandidate> {
+  const periodSamples = parabolicPeriod(yin, tau, 1, maximumTau + 1);
+  const yinValue = yin[tau];
+  return Object.freeze({
+    frequencyHz: sampleRate / periodSamples,
+    periodSamples,
+    yinValue,
+    confidence: Math.min(
+      clampUnit(1 - yinValue),
+      recentPeriodConfidence(samples, tau, currentEdgeSpanSamples),
+    ),
+  });
+}
+
 /**
+ * @internal
+ *
  * Estimate one monophonic fundamental with the YIN difference function.
  *
  * The raw signal is never snapped before scoring: frequencyHz and midiFloat are
  * continuous. Invalid or non-periodic buffers return an explicit unvoiced frame.
  */
-export function detectPitch(
+export function detectPitchWithWorkspace(
   samples: Float32Array,
   options: YinOptions,
+  workspace: YinScratchWorkspace,
 ): YinPitchFrame {
   const resolved = resolveOptions(options);
   const measured = rootMeanSquare(samples);
@@ -415,7 +311,10 @@ export function detectPitch(
   if (!measured.valid) {
     return frameWithoutPitch(resolved, 0, 0, "invalid-samples");
   }
-  if (measured.rms < resolved.rmsThreshold) {
+  // Exact digital silence is cheaply observable without imposing a nonzero
+  // amplitude admission floor. Any finite nonzero periodic evidence reaches
+  // the periodicity detector, however quiet it is.
+  if (measured.rms === 0 || measured.rms < resolved.rmsThreshold) {
     return frameWithoutPitch(
       resolved,
       measured.rms,
@@ -451,25 +350,26 @@ export function detectPitch(
   }
 
   const maximumTau = requestedMaximumTau;
-  const difference = new Float64Array(maximumTau + 2);
-  const yin = new Float64Array(maximumTau + 2);
-
+  workspace.prepareLagBuffers(maximumTau + 2);
+  const difference = workspace.differenceBuffer();
+  const yin = workspace.normalizedDifferenceBuffer();
+  // Select candidates from a fixed current region, not an older window prefix
+  // that can disagree with the current-edge evidence at an abrupt transition.
+  const analysisStart = resolved.currentEdgeSpanSamples > 0 ? samples.length - analysisWindow - maximumTau - 1 : 0;
   for (let tau = 1; tau <= maximumTau + 1; tau += 1) {
     let sum = 0;
     for (let index = 0; index < analysisWindow; index += 1) {
-      const delta = samples[index] - samples[index + tau];
+      const delta = samples[analysisStart + index] - samples[analysisStart + index + tau];
       sum += delta * delta;
     }
     difference[tau] = sum;
   }
-
   yin[0] = 1;
   let runningSum = 0;
   for (let tau = 1; tau <= maximumTau + 1; tau += 1) {
     runningSum += difference[tau];
     yin[tau] = runningSum === 0 ? 1 : (difference[tau] * tau) / runningSum;
   }
-
   let selectedTau = -1;
   let bestTau = minimumTau;
   for (let tau = minimumTau; tau <= maximumTau; tau += 1) {
@@ -491,32 +391,69 @@ export function detectPitch(
 
   if (selectedTau < 0) {
     const bestYinValue = yin[bestTau];
-    return frameWithoutPitch(
-      resolved,
-      measured.rms,
-      clampUnit(1 - bestYinValue),
-      "no-periodic-candidate",
-      bestYinValue,
+    const bestConfidence = clampUnit(1 - bestYinValue);
+    const rawCandidate = rawCandidateAt(
+      samples,
+      yin,
+      bestTau,
+      maximumTau,
+      resolved.sampleRate,
+      resolved.currentEdgeSpanSamples,
     );
+    // The YIN threshold guides selection toward the first strong local
+    // minimum. It is not a second, hidden confidence policy: when no minimum
+    // crosses it, credible global-best periodic evidence must still reach the
+    // public minConfidence decision below.
+    if (bestConfidence >= resolved.minConfidence) {
+      selectedTau = bestTau;
+    } else {
+      return frameWithoutPitch(
+        resolved,
+        measured.rms,
+        bestConfidence,
+        "no-periodic-candidate",
+        bestYinValue,
+        rawCandidate,
+      );
+    }
   }
 
-  selectedTau = correctDominantSecondHarmonic(
+  const rawCandidate = rawCandidateAt(
     samples,
     yin,
     selectedTau,
     maximumTau,
     resolved.sampleRate,
-    resolved.minFrequency,
+    resolved.currentEdgeSpanSamples,
   );
+  const family = selectHarmonicFamily(
+    samples,
+    yin,
+    selectedTau,
+    minimumTau,
+    maximumTau,
+    resolved.sampleRate,
+    resolved.minFrequency,
+    resolved.maxFrequency,
+    resolved.currentEdgeSpanSamples,
+    workspace,
+  );
+  selectedTau = family.selectedTau;
   const yinValue = yin[selectedTau];
   const yinConfidence = clampUnit(1 - yinValue);
-  if (yinConfidence < resolved.minConfidence) {
+  const currentConfidence = Math.min(
+    yinConfidence,
+    recentPeriodConfidence(samples, selectedTau, resolved.currentEdgeSpanSamples),
+  );
+  if (currentConfidence < resolved.minConfidence) {
     return frameWithoutPitch(
       resolved,
       measured.rms,
-      yinConfidence,
+      currentConfidence,
       "below-confidence-threshold",
       yinValue,
+      rawCandidate,
+      family.ambiguity,
     );
   }
 
@@ -531,18 +468,20 @@ export function detectPitch(
     samples,
     resolved.sampleRate,
     initialFrequencyHz,
-    yinConfidence,
-    resolved.maxFrequency,
+    currentConfidence,
+    workspace,
   );
   const frequencyHz = refinement.frequencyHz;
   const confidence = refinement.supportsConfidence
-    ? Math.max(yinConfidence, 0.6)
-    : yinConfidence;
+    ? Math.max(currentConfidence, 0.6)
+    : currentConfidence;
   const refinedPeriodSamples = resolved.sampleRate / frequencyHz;
   // Parabolic interpolation can land a fraction of a cent beyond an inclusive
   // configured boundary. Keep that measurement continuous while rejecting
   // candidates that are musically outside the requested range.
-  const rangeToleranceRatio = 2 ** (1 / 1_200);
+  const rangeToleranceRatio = 2 ** (
+    YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS / 1_200
+  );
 
   if (
     !Number.isFinite(frequencyHz) ||
@@ -555,6 +494,8 @@ export function detectPitch(
       confidence,
       "frequency-out-of-range",
       yinValue,
+      rawCandidate,
+      family.ambiguity,
     );
   }
 
@@ -569,5 +510,7 @@ export function detectPitch(
     periodSamples: refinedPeriodSamples,
     yinValue,
     reason: "detected",
+    rawCandidate,
+    harmonicAmbiguity: family.ambiguity,
   };
 }

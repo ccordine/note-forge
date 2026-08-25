@@ -10,7 +10,6 @@ import {
   resolveArcadeCurriculum,
 } from "../apps/web/src/features/voice-arcade/curriculum";
 import {
-  MAX_COMPLETED_VARIANTS_PER_MODE,
   MAX_COMPLETED_VARIANT_LENGTH,
   applyArcadeOutcome,
   createDefaultArcadeProgress,
@@ -157,9 +156,9 @@ describe("Voice Arcade current progress schema and evidence", () => {
     expect(Object.isFrozen(normalized.completedVariantsByMode)).toBe(true);
   });
 
-  it("normalizes completion IDs conservatively, deduplicates them, and enforces storage bounds", () => {
+  it("normalizes completion IDs conservatively and retains every valid distinct achievement", () => {
     const candidates = Array.from(
-      { length: MAX_COMPLETED_VARIANTS_PER_MODE + 20 },
+      { length: 300 },
       (_, index) => `chapter-${index}`,
     );
     const normalized = normalizeArcadeProgress({
@@ -178,9 +177,7 @@ describe("Voice Arcade current progress schema and evidence", () => {
       },
     });
 
-    expect(normalized.completedVariantsByMode.flight).toHaveLength(
-      MAX_COMPLETED_VARIANTS_PER_MODE,
-    );
+    expect(normalized.completedVariantsByMode.flight).toHaveLength(300);
     expect(normalized.completedVariantsByMode.flight.slice(0, 3)).toEqual([
       "chapter-0",
       "chapter-1",
@@ -188,6 +185,7 @@ describe("Voice Arcade current progress schema and evidence", () => {
     ]);
     expect(new Set(normalized.completedVariantsByMode.flight).size)
       .toBe(normalized.completedVariantsByMode.flight.length);
+    expect(normalized.completedVariantsByMode.flight.at(-1)).toBe("chapter-299");
     expect(normalized.completedVariantsByMode.maze).toEqual([]);
     expect("unknown" in normalized.completedVariantsByMode).toBe(false);
   });

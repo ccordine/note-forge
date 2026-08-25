@@ -178,13 +178,26 @@ export function assertExactAuthority(native, feature, detectorFrames) {
     const key = frameKey(publication);
     const nativeFrame = workletByKey.get(key);
     const detector = detectorByKey.get(key);
-    if (!nativeFrame || !detector
-      || publication.startSample !== nativeFrame.startSample
-      || publication.processedSampleCount !== publication.endSample
-      || publication.sampleRate !== detector.sampleRate
-      || publication.continuityEpoch !== detector.continuityEpoch
-      || publication.graphGeneration !== detector.graphGeneration) {
-      failures.push(key);
+    const mismatches = [];
+    if (!nativeFrame) mismatches.push("missing-native");
+    if (!detector) mismatches.push("missing-detector");
+    if (nativeFrame && publication.startSample !== nativeFrame.startSample) {
+      mismatches.push(`start:${publication.startSample}/${nativeFrame.startSample}`);
+    }
+    if (publication.processedSampleCount !== publication.endSample) {
+      mismatches.push(`processed:${publication.processedSampleCount}/${publication.endSample}`);
+    }
+    if (detector && publication.sampleRate !== detector.sampleRate) {
+      mismatches.push(`rate:${publication.sampleRate}/${detector.sampleRate}`);
+    }
+    if (detector && publication.continuityEpoch !== detector.continuityEpoch) {
+      mismatches.push(`continuity:${publication.continuityEpoch}/${detector.continuityEpoch}`);
+    }
+    if (detector && publication.graphGeneration !== detector.graphGeneration) {
+      mismatches.push(`graph:${publication.graphGeneration}/${detector.graphGeneration}`);
+    }
+    if (mismatches.length > 0) {
+      failures.push(`${key}[${mismatches.join(";")}]`);
     }
   }
   assert(failures.length === 0,

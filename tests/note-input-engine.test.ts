@@ -6,8 +6,10 @@ import {
 } from "@noteforge/pitch-engine";
 import {
   NOTE_INPUT_DEFAULTS,
+  NOTE_INPUT_SAMPLE_RATE_BOUNDS,
   NoteInputEngine,
   type NoteInputWindow,
+  type VocalObservation,
 } from "../apps/web/src/audio/note-input";
 import { reduceLiveNote } from "../apps/web/src/audio/live-note";
 import { analysisWindowSizes } from "../apps/web/src/audio/microphone";
@@ -16,7 +18,14 @@ import { generateSyntheticSignal } from "../packages/pitch-engine/test/synthetic
 const REFERENCE_SAMPLE_RATE = 48_000;
 const REFERENCE_WINDOW_SIZE = 4_096;
 const REFERENCE_WINDOW_SECONDS = REFERENCE_WINDOW_SIZE / REFERENCE_SAMPLE_RATE;
-const PRODUCTION_CAPTURE_SAMPLE_RATES = [44_100, 48_000, 96_000, 192_000] as const;
+const PRODUCTION_CAPTURE_SAMPLE_RATES = [
+  44_100,
+  48_000,
+  88_200,
+  96_000,
+  176_400,
+  192_000,
+] as const;
 const LOW_CAPTURE_SAMPLE_RATES = [8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000] as const;
 const LOWEST_SUPPORTED_MIDI = Math.ceil(
   frequencyToMidi(NOTE_INPUT_DEFAULTS.minFrequency),
@@ -59,7 +68,7 @@ function processHarmonic(
   midi: number,
   windowIndex: number,
   options: { sampleRate?: number; rmsScaleDbfs?: number } = {},
-): YinPitchFrame {
+): Readonly<VocalObservation> {
   const sampleRate = options.sampleRate ?? REFERENCE_SAMPLE_RATE;
   const windowSeconds = analysisWindowSizes(
     sampleRate,
@@ -129,7 +138,10 @@ describe("direct NoteInputEngine detection", () => {
       midis.map((midi) => ({ sampleRate, midi })));
     const results = trials.map(({ sampleRate, midi }, index) => {
       // A fresh engine for every trial proves there is no acquisition frame.
-      const frame = processHarmonic(new NoteInputEngine(), midi, index, { sampleRate });
+      const frame = processHarmonic(new NoteInputEngine(), midi, index, {
+        sampleRate,
+        rmsScaleDbfs: -108,
+      });
       const failure = frameFailure(frame, midi, 2);
       return {
         sampleRate,
@@ -148,8 +160,8 @@ describe("direct NoteInputEngine detection", () => {
     }).toEqual({
       lowestMidi: 30,
       highestMidi: 86,
-      passed: 228,
-      total: 228,
+      passed: 342,
+      total: 342,
       failures: [],
     });
     expect(results.every(({ frame }) => frame.reason === "detected")).toBe(true);
@@ -301,6 +313,18 @@ describe("direct NoteInputEngine detection", () => {
       .toBe(true);
   });
 
+  it("uses one normalized live hop for current-edge transport evidence", () => {
+    const spans = PRODUCTION_CAPTURE_SAMPLE_RATES.map((sampleRate, index) =>
+      new NoteInputEngine().process(capturedWindow(
+        harmonicWindow(60, { sampleRate, windowIndex: index }),
+        sampleRate,
+        index + 1,
+      )).configuration.currentEdgeSpanSamples);
+
+    expect(NOTE_INPUT_DEFAULTS.currentEdgeSpanSamples).toBe(0);
+    expect(spans).toEqual([882, 960, 882, 960, 882, 960]);
+  });
+
   it("keeps both literal detector boundaries voiced and accurate at low Web Audio rates", () => {
     const frequencies = [
       NOTE_INPUT_DEFAULTS.minFrequency,
@@ -364,21 +388,45 @@ describe("direct NoteInputEngine detection", () => {
     }).toEqual({ passed: 399, total: 399, failures: [] });
   });
 
-  it("reports every changing note immediately without holding the previous note", () => {
+  it("exposes every raw candidate immediately while requiring persistent remote pitch evidence", () => {
     const engine = new NoteInputEngine();
     const sequence = [48, 49, 67, 36, 83, 55, 60, 47, 72] as const;
-    const frames = sequence.map((midi, index) =>
-      processHarmonic(engine, midi, index));
+    const frames = sequence.flatMap((midi, sequenceIndex) => [0, 1].map((repeat) =>
+      processHarmonic(engine, midi, sequenceIndex * 2 + repeat)));
+    const pairs = sequence.map((_midi, index) =>
+      frames.slice(index * 2, index * 2 + 2));
 
-    expect(frames.map((frame) => frame.nearestMidi)).toEqual(sequence);
+    expect(frames.map((frame) => frame.pitchCandidate?.nearestMidi)).toEqual(
+      sequence.flatMap((midi) => [midi, midi]),
+    );
     frames.forEach((frame, index) => {
       expect(frame.timeSeconds).toBeCloseTo(
         (index + 0.5) * REFERENCE_WINDOW_SECONDS,
         12,
       );
     });
-    expect(frames.flatMap((frame, index) =>
-      frameFailure(frame, sequence[index]!, 2) ?? [])).toEqual([]);
+    expect(pairs[0]!.map((frame) => frame.nearestMidi)).toEqual([48, 48]);
+    pairs.slice(1).forEach((pair, index) => {
+      const expectedMidi = sequence[index + 1]!;
+      expect(pair[0]).toMatchObject({
+        voiced: false,
+        nearestMidi: null,
+        reason: "temporally-ambiguous",
+        pitchTrackingDecision: "pending-transition",
+      });
+      expect(pair[0]!.pitchCandidate).toMatchObject({
+        voiced: true,
+        nearestMidi: expectedMidi,
+        reason: "detected",
+      });
+      expect(pair[1]).toMatchObject({
+        voiced: true,
+        nearestMidi: expectedMidi,
+        reason: "detected",
+        pitchTrackingDecision: "accepted-confirmed-transition",
+      });
+      expect(frameFailure(pair[1]!, expectedMidi, 2)).toBeNull();
+    });
   });
 
   it("freezes each canonical live result so consumers cannot rewrite shared evidence", () => {
@@ -468,10 +516,20 @@ describe("direct NoteInputEngine detection", () => {
       ...valid,
       capturedAt: valid.capturedAt + 0.001,
     })).toThrow(/midpoint/);
+    expect(() => new NoteInputEngine().process(capturedWindow(
+      new Float32Array(128),
+      NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.exclusiveMinimum,
+      1,
+    ))).toThrow(/greater than 2400/);
+    expect(() => new NoteInputEngine().process(capturedWindow(
+      new Float32Array(128),
+      NOTE_INPUT_SAMPLE_RATE_BOUNDS.capture.maximum + 1,
+      1,
+    ))).toThrow(/no greater than 768000/);
   });
 
-  it("detects very quiet valid harmonic notes down to -108 dBFS scale", () => {
-    const trials = [-72, -90, -108].flatMap((rmsScaleDbfs) =>
+  it("analyzes arbitrarily quiet nonzero harmonic evidence down to -126 dBFS scale", () => {
+    const trials = [-72, -90, -108, -126].flatMap((rmsScaleDbfs) =>
       [36, 48, 60, 72, 83].map((midi) => ({ midi, rmsScaleDbfs })));
     const results = trials.map((trial, index) => {
       const frame = processHarmonic(new NoteInputEngine(), trial.midi, index, {
@@ -484,12 +542,41 @@ describe("direct NoteInputEngine detection", () => {
       };
     });
 
-    expect(NOTE_INPUT_DEFAULTS.rmsThreshold).toBe(10 ** (-120 / 20));
+    expect(NOTE_INPUT_DEFAULTS.rmsThreshold).toBe(0);
     expect(results.flatMap((result) => result.failure === null
       ? []
       : [`${result.rmsScaleDbfs} dBFS / ${result.failure}`])).toEqual([]);
-    expect(results.every(({ frame }) => frame.rms > NOTE_INPUT_DEFAULTS.rmsThreshold))
-      .toBe(true);
+    expect(results.every(({ frame }) => frame.rms > 0)).toBe(true);
+  });
+
+  it("lets credible best-period evidence reach minConfidence when no YIN minimum crosses the search guide", () => {
+    const samples = generateSyntheticSignal({
+      sampleRate: REFERENCE_SAMPLE_RATE,
+      durationSeconds: REFERENCE_WINDOW_SECONDS,
+      frequencyHz: midiToFrequency(48),
+      amplitude: 0.02,
+      harmonics: [
+        { multiple: 2, amplitude: 0.3 },
+        { multiple: 3, amplitude: 0.1 },
+      ],
+      noiseAmplitude: 0.013,
+      noiseSeed: 12_345,
+    });
+    const frame = new NoteInputEngine().process(capturedWindow(
+      samples,
+      REFERENCE_SAMPLE_RATE,
+      1,
+    )).observation;
+
+    expect(frame.periodicity).toBeGreaterThan(NOTE_INPUT_DEFAULTS.minConfidence);
+    expect(frame.periodicity).toBeLessThan(1 - NOTE_INPUT_DEFAULTS.yinThreshold);
+    expect(frame).toMatchObject({
+      observationKind: "voiced",
+      voiced: true,
+      reason: "detected",
+      nearestMidi: 48,
+    });
+    expect(Math.abs((frame.midiFloat! - 48) * 100)).toBeLessThan(8);
   });
 
   it("detects every low-register semitone from F-sharp 1 through B2 at -108 dBFS scale across production rates", () => {
@@ -520,12 +607,11 @@ describe("direct NoteInputEngine detection", () => {
     }).toEqual({
       lowestMidi: 30,
       highestMidi: 47,
-      passed: 72,
-      total: 72,
+      passed: 108,
+      total: 108,
       failures: [],
     });
-    expect(results.every(({ frame }) => frame.rms > NOTE_INPUT_DEFAULTS.rmsThreshold))
-      .toBe(true);
+    expect(results.every(({ frame }) => frame.rms > 0)).toBe(true);
   });
 
   it("retains low-register identity when realistic vocal spectra have a dominant second harmonic", () => {
@@ -651,7 +737,7 @@ describe("direct NoteInputEngine detection", () => {
       trials: results.length,
       passed: results.filter(({ failure }) => failure === null).length,
       failures: results.flatMap(({ failure }) => failure ?? []),
-    }).toEqual({ trials: 160, passed: 160, failures: [] });
+    }).toEqual({ trials: 240, passed: 240, failures: [] });
   });
 
   it("does not fold high periodic sources onto 50 or 60 Hz mains leakage", () => {
@@ -717,7 +803,7 @@ describe("direct NoteInputEngine detection", () => {
         ? [`${sampleRate} Hz / target ${fixture.targetHz} / phase ${phaseRadians}: ${errorCents?.toFixed(2) ?? "no"} cents`]
         : [];
     })).toEqual([]);
-    expect(results).toHaveLength(32);
+    expect(results).toHaveLength(48);
   });
 
   it("rejects digital silence and deterministic broadband noise", () => {
@@ -806,11 +892,19 @@ describe("direct NoteInputEngine detection", () => {
     const durationsMs: number[] = [];
     const frames = fixtures.map((fixture, index) => {
       const startedAt = performance.now();
-      const frame = engine.process(capturedWindow(
+      const independentWindow = capturedWindow(
         fixture.samples,
         REFERENCE_SAMPLE_RATE,
         (index + 1) * REFERENCE_WINDOW_SECONDS,
-      )).observation;
+      );
+      const frame = engine.process({
+        ...independentWindow,
+        // This benchmark intentionally changes pitch by seven semitones every
+        // call. Mark each unrelated fixture as an explicit authority boundary
+        // instead of asking the temporal tracker to believe an impossible
+        // 20 ms vocal teleport.
+        discontinuity: true,
+      }).observation;
       durationsMs.push(performance.now() - startedAt);
       return frame;
     });

@@ -120,11 +120,14 @@ export function summarizeRangeSimulatorSession(session: Readonly<RangeSimulatorS
   };
 }
 
-/** Replace the shared voice map with the current simulator summary. */
+/** Replace the shared voice map with a naturally completed simulator summary. */
 export function projectRangeSimulatorProfile(
   profile: Readonly<PersonalRangeProfile>,
   session: Readonly<RangeSimulatorSessionState>,
 ): PersonalRangeProfile {
+  if (session.phase !== "complete" || session.completionStatus !== "complete") {
+    return { ...profile };
+  }
   if (session.baselineMidi === null) return { ...profile };
   const summary = summarizeRangeSimulatorSession(session);
   if (!summary.usableMidis.includes(session.baselineMidi)) return { ...profile };

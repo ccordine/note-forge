@@ -148,7 +148,10 @@
 
 .pitch-tunnel-lane::before {
   position: absolute;
-  inset: 18px var(--pitch-tunnel-wall-inset, 41.667%);
+  top: 18px;
+  bottom: 18px;
+  left: var(--pitch-tunnel-wall-left, 41.667%);
+  width: var(--pitch-tunnel-wall-width, 16.666%);
   border-right: 1px solid rgba(216, 255, 62, .55);
   border-left: 1px solid rgba(216, 255, 62, .55);
   border-radius: 10px;
@@ -160,7 +163,7 @@
   position: absolute;
   top: 18px;
   bottom: 18px;
-  left: 50%;
+  left: var(--pitch-tunnel-target-x, 50%);
   width: 1px;
   background: var(--lime);
   box-shadow: 0 0 10px rgba(216, 255, 62, .45);
@@ -184,14 +187,10 @@
   box-shadow: 0 0 0 1px var(--lime), 0 0 22px rgba(216, 255, 62, .6);
 }
 
-.pitch-tunnel-lane.no-pitch .pitch-tunnel-point {
-  opacity: 0;
-}
-
 .pitch-tunnel-lane-label {
   position: absolute;
   top: 12px;
-  left: 50%;
+  left: var(--pitch-tunnel-target-x, 50%);
   color: var(--lime);
   font: 7px var(--mono);
   letter-spacing: .12em;
@@ -200,14 +199,23 @@
 
 .pitch-tunnel-axis {
   position: absolute;
-  right: 10px;
+  right: 0;
   bottom: 9px;
-  left: 10px;
-  display: flex;
-  justify-content: space-between;
+  left: 0;
   color: var(--dim);
   font: 7px var(--mono);
 }
+
+.pitch-tunnel-axis > b {
+  position: absolute;
+  bottom: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.pitch-tunnel-axis > b:first-child { transform: none; }
+.pitch-tunnel-axis > b:last-child { transform: translateX(-100%); }
 
 .pitch-tunnel-readout {
   position: absolute;

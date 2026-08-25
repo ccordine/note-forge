@@ -73,13 +73,11 @@
     height: 390px;
   }
 
-  .pong-voice-readout,
   .song-ride-readout,
   .song-analysis-contract {
     grid-template-columns: 1fr;
   }
 
-  .pong-range-readout,
   .song-ride-readout > div:first-child {
     grid-column: auto;
     grid-row: auto;
@@ -88,10 +86,6 @@
   .pong-court,
   .song-rail {
     height: 400px;
-  }
-
-  .pong-range-label:not(.pong-range-high):not(.pong-range-low) {
-    display: none;
   }
 
   .song-file-meta {
@@ -181,8 +175,6 @@
     height: 270px;
   }
 
-  .pong-voice-readout > div,
-  .pong-silence-cue,
   .song-ride-readout > div {
     min-height: 55px;
     padding-top: 7px;
@@ -233,7 +225,6 @@
   .echo-voice-cursor,
   .pong-paddle,
   .pong-ball,
-  .pong-range-track > i,
   .song-rail-lane,
   .song-voice-cursor {
     transition: none !important;

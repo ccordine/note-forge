@@ -75,7 +75,7 @@ function NavigationContents({ route, onNavigate }: {
       </nav>
       <div className="sidebar-foot">
         <div className="offline-status"><span /> LOCAL-FIRST · NO RAW AUDIO UPLOAD</div>
-        <p>No account. Raw voice audio stays on this device; bounded derived pitch diagnostics go only to this NoteForge server.</p>
+        <p>No account. Raw voice audio stays on this device. Remote derived diagnostics are off unless you explicitly enable them.</p>
       </div>
     </>
   );
@@ -115,7 +115,12 @@ function SettingsDialog({ onDismiss, returnFocusRef }: {
   onDismiss: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const { toleranceCents, setToleranceCents } = useUserPreferences();
+  const {
+    remotePitchDiagnosticsEnabled,
+    setRemotePitchDiagnosticsEnabled,
+    toleranceCents,
+    setToleranceCents,
+  } = useUserPreferences();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   useEffect(() => {
     if (!dialogRef.current?.open) dialogRef.current?.showModal();
@@ -135,7 +140,8 @@ function SettingsDialog({ onDismiss, returnFocusRef }: {
       <section className="settings-drawer">
         <div className="drawer-header"><div><span>Instrument</span><h2 id="settings-title">Training settings</h2></div><button onClick={close} aria-label="Close settings">×</button></div>
         <label className="settings-block"><span>Pitch tolerance <b>±{toleranceCents} cents</b></span><input type="range" min="5" max="50" step="5" value={toleranceCents} onChange={(event) => setToleranceCents(Number(event.target.value))} /><small>Beginner 35¢ · Developing 20¢ · Precise 10¢</small></label>
-        <div className="privacy-note"><Icon name="record" size={18} /><span><b>Recording is opt-in.</b> Standard sessions send bounded derived pitch diagnostics for troubleshooting, never microphone PCM.</span></div>
+        <label className="settings-block diagnostic-consent"><span>Share derived pitch diagnostics <b>{remotePitchDiagnosticsEnabled ? "ON" : "OFF"}</b></span><input data-remote-pitch-diagnostics-toggle type="checkbox" checked={remotePitchDiagnosticsEnabled} onChange={(event) => setRemotePitchDiagnosticsEnabled(event.target.checked)} /><small>Explicit troubleshooting opt-in. Sends bounded detector/sample facts to this NoteForge server; never microphone PCM or exercise targets.</small></label>
+        <div className="privacy-note"><Icon name="record" size={18} /><span><b>Recording is separately opt-in.</b> Raw microphone audio stays local.</span></div>
       </section>
     </dialog>
   );
@@ -164,7 +170,7 @@ function Topbar({ screen, onMenu, onSettings, menuButtonRef, settingsButtonRef }
         <span><i /> {status}</span>
         <MicrophoneAction input={input} />
       </div>
-      <button ref={settingsButtonRef} className="icon-button" onClick={onSettings} aria-label="Settings"><Icon name="settings" size={20} /></button>
+      <button ref={settingsButtonRef} data-settings-open className="icon-button" onClick={onSettings} aria-label="Settings"><Icon name="settings" size={20} /></button>
     </header>
   );
 }

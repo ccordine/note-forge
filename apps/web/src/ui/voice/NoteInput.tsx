@@ -5,6 +5,7 @@ import {
   type AudioInputController,
 } from "../../audio/use-audio-input";
 import { noteLabel } from "../../lib/music-display";
+import { isAuthoritativeVoicedPitch } from "../../realtime/authoritative-voiced-pitch";
 import { InputScope, type InputScopeProps } from "../InputScope";
 import { VoiceCoach, type VoiceCoachProps } from "./VoiceCoach";
 
@@ -47,8 +48,9 @@ function CompactNoteInput({ input, compact }: Omit<NoteInputCompactProps, "varia
   const pitch = useAudioPitchSnapshot(input);
   const state = transport.state;
   const frame = state === "running" ? pitch.liveFrame : undefined;
-  const detectedMidi = frame?.voiced === true ? frame.nearestMidi : null;
-  const detected = detectedMidi !== null && detectedMidi !== undefined;
+  const detectedFrame = frame && isAuthoritativeVoicedPitch(frame) ? frame : null;
+  const detectedMidi = detectedFrame?.nearestMidi ?? null;
+  const detected = detectedMidi !== null;
   const statusLabel = state === "disabled"
     ? "MICROPHONE OFF"
     : state === "opening"
@@ -62,20 +64,20 @@ function CompactNoteInput({ input, compact }: Omit<NoteInputCompactProps, "varia
       ? "waiting for browser input"
       : state === "error"
         ? transport.error || "microphone unavailable"
-        : frame?.frequencyHz === null || frame?.frequencyHz === undefined
+        : detectedFrame === null
           ? frame?.reason ?? "no observation yet"
-          : `${frame.frequencyHz.toFixed(2)} Hz · ${Math.round(frame.confidence * 100)}%`;
+          : `${detectedFrame.frequencyHz.toFixed(2)} Hz · ${Math.round(detectedFrame.confidence * 100)}%`;
   return (
     <div
       className={`nf-note-input-compact ${compact ? "compact" : ""} state-${state} ${detected ? "voiced" : "unvoiced"}`}
       data-note-input
       data-input-state={state}
-      data-detected-note={detectedMidi === null || detectedMidi === undefined ? "" : noteLabel(detectedMidi)}
+      data-detected-note={detectedMidi === null ? "" : noteLabel(detectedMidi)}
       data-frame-time={frame?.timeSeconds ?? ""}
       aria-live="polite"
     >
       <span>{statusLabel}</span>
-      <strong>{detectedMidi === null || detectedMidi === undefined ? "—" : noteLabel(detectedMidi)}</strong>
+      <strong>{detectedMidi === null ? "—" : noteLabel(detectedMidi)}</strong>
       <small>{statusDetail}</small>
     </div>
   );

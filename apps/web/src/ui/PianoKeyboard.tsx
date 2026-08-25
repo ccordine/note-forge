@@ -56,6 +56,9 @@ export function buildPianoKeyLayout(startMidi: number, endMidi: number): KeyLayo
   if (endMidi < startMidi) {
     throw new RangeError("Piano keyboard endMidi must be greater than or equal to startMidi.");
   }
+  if (!isWhiteKey(startMidi) || !isWhiteKey(endMidi)) {
+    throw new RangeError("Piano keyboard bounds must be visible white keys.");
+  }
 
   const midiNotes = Array.from({ length: endMidi - startMidi + 1 }, (_, index) => startMidi + index);
   const whiteNotes = midiNotes.filter(isWhiteKey);

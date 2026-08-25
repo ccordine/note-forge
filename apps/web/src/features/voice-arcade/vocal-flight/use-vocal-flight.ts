@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useAudioInput } from "@/audio/use-audio-input";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import type { RealtimePresentationPolicy } from "@/realtime/realtime-session-store";
+import { sameObservationStream } from "@/realtime/observation-continuity";
 import { useArcadeOutcomeHandoff } from "../use-arcade-outcome";
 import type { ArcadeGameProps, ArcadeOutcome } from "../types";
 import {
@@ -21,9 +22,7 @@ function authorityChanged(
   const before = previous.control?.lastAuthority;
   const after = next.control?.lastAuthority;
   if (before === null || before === undefined || after === null || after === undefined) return false;
-  return before.captureEpoch !== after.captureEpoch
-    || before.continuityEpoch !== after.continuityEpoch
-    || before.graphGeneration !== after.graphGeneration;
+  return !sameObservationStream(before, after);
 }
 
 export const VOCAL_FLIGHT_PRESENTATION_POLICY = Object.freeze({
@@ -87,10 +86,6 @@ export function useVocalFlight(props: ArcadeGameProps) {
   );
   const state = realtime.state;
   const input = useAudioInput({
-    diagnostics: {
-      flow: "voice-arcade",
-      phase: `flight-${state.phase}`,
-    },
     onFrame: (observation) => realtime.observe({ type: "observation", sample: observation }),
   });
   const outcome = outcomeFor(state, props.curriculumStage);

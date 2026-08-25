@@ -1,4 +1,5 @@
 import type { YinPitchFrame } from "@noteforge/pitch-engine";
+import { clampUnit } from "@/lib/numeric";
 
 /**
  * Per-window spectral-shape evidence derived from the same PCM as pitch.
@@ -14,6 +15,25 @@ export interface VocalBrightnessTelemetry {
   readonly brightnessConfidence: number;
 }
 
+export interface QualifiedVocalBrightnessTelemetry extends VocalBrightnessTelemetry {
+  readonly brightness: number;
+}
+
+/** One shared admission policy for using derived brightness as a control axis. */
+export const VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE = 0.55;
+
+export function hasQualifiedBrightnessEvidence(
+  telemetry: Readonly<VocalBrightnessTelemetry>,
+): telemetry is Readonly<QualifiedVocalBrightnessTelemetry> {
+  return telemetry.brightness !== null
+    && Number.isFinite(telemetry.brightness)
+    && telemetry.brightness >= 0
+    && telemetry.brightness <= 1
+    && Number.isFinite(telemetry.brightnessConfidence)
+    && telemetry.brightnessConfidence >= VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE
+    && telemetry.brightnessConfidence <= 1;
+}
+
 const MAXIMUM_HARMONIC = 16;
 const MINIMUM_HARMONICS = 4;
 const NYQUIST_MARGIN = 0.9;
@@ -23,10 +43,6 @@ const EMPTY_BRIGHTNESS = Object.freeze({
 }) satisfies Readonly<VocalBrightnessTelemetry>;
 
 let cachedHannWindow = new Float64Array(0);
-
-function clampUnit(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
 
 function hannWindow(length: number): Float64Array {
   if (cachedHannWindow.length === length) return cachedHannWindow;
@@ -137,4 +153,3 @@ export function deriveVocalBrightness(
       * Math.sqrt(harmonicCoherence * spectralCoverage),
   });
 }
-

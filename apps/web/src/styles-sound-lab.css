@@ -26,14 +26,16 @@ bottom:0;
 left:50%;
 width:3px;
 height:9px;
-background:currentColor}
+background:currentColor;
+transform:translateX(-50%)}
 .pitch-slot.first i{
 color:var(--lime)}
 .pitch-slot.second i{
 color:var(--coral)}
 
 .relationship-mark{text-align:center;color:var(--dim)}.relationship-mark>span{display:block;font-size:22px}.relationship-mark small{font:7px var(--mono);color:var(--muted)}
-.sound-lab-keyboard { height: 187px; }
+.sound-lab-keyboard-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.sound-lab-keyboard { min-width: 720px; height: 187px; }
 .continuous-section { padding: 22px 4px 0; }
 .continuous-heading {
 display:flex;
@@ -267,3 +269,77 @@ margin:0;
 color:var(--muted);
 font-size:10px}
 
+@media (max-width:760px){
+.sound-workbench{
+grid-template-columns:minmax(0,1fr)}
+.sound-workbench>*{
+min-width:0}
+.sound-side{
+display:block;
+min-width:0}
+.sound-side>*+*{
+margin-top:13px}
+.instrument-top{
+grid-template-columns:minmax(0,1fr)}
+.instrument-top>*{
+min-width:0}
+.pitch-slots{
+grid-template-columns:minmax(0,1fr)}
+.pitch-slots>*{
+min-width:0;
+max-width:100%}
+.pitch-slots>.note-playback-toggle{
+width:100%}
+.relationship-mark{
+height:25px}
+.relationship-mark>span{
+display:inline-block;
+pointer-events:none;
+transform:rotate(90deg)}
+.sound-lab-keyboard-scroll{
+width:100%;
+min-width:0}
+.sound-lab-keyboard{
+height:145px}
+.continuous-heading{
+flex-wrap:wrap;
+gap:12px}
+.note-wheel{
+width:min(270px,100%)}
+.context-controls{
+grid-template-columns:repeat(2,minmax(0,1fr))}
+.context-controls>*{
+min-width:0}
+.context-controls .field:last-child{
+grid-column:1 / -1}
+.context-notes{
+grid-template-columns:repeat(6,minmax(0,1fr))}
+.relationship-content{
+grid-template-columns:minmax(0,1fr);
+gap:12px}
+.relationship-content dl{
+grid-template-columns:repeat(2,minmax(0,1fr));
+row-gap:15px}
+.relationship-content dl div{
+min-width:0;
+padding:9px}
+.discovery-prompt{
+gap:14px}}
+
+@media (max-width:430px){
+.sound-instrument,.wheel-panel,.context-panel,.relationship-panel{
+padding:16px}
+.pitch-slot small{
+display:block;
+margin:6px 0 0}
+.context-controls{
+grid-template-columns:minmax(0,1fr)}
+.context-controls .field:last-child{
+grid-column:auto}
+.relationship-content dl{
+grid-template-columns:minmax(0,1fr)}
+.relationship-reveal{
+position:static;
+margin-bottom:12px}
+.wave-mark{
+font-size:40px}}

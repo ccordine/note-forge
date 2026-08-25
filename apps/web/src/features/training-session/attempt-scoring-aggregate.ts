@@ -1,4 +1,5 @@
 import type { PitchObservation } from "@/audio/note-input";
+import { clamp } from "@/lib/numeric";
 
 export interface AttemptScoringProfile {
   readonly targetMidiFloat?: number;
@@ -72,10 +73,11 @@ export function createAttemptScoringAggregate(): AttemptScoringAggregate {
 }
 
 function midiBin(midiFloat: number): number {
-  return Math.max(0, Math.min(
-    MIDI_BIN_COUNT - 1,
+  return clamp(
     Math.floor((midiFloat - MIDI_MINIMUM) * MIDI_BINS_PER_SEMITONE),
-  ));
+    0,
+    MIDI_BIN_COUNT - 1,
+  );
 }
 
 function increment(values: BoundedHistogram, index: number, amount: number): BoundedHistogram {

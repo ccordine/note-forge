@@ -1,5 +1,8 @@
 import type { PitchObservation } from "@/audio/note-input";
-import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "@/audio/microphone";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import {
   advanceAttemptScoringAggregate,
   createAttemptScoringAggregate,
@@ -11,12 +14,7 @@ export type { AttemptScoringProfile } from "./attempt-scoring-aggregate";
 
 export type AttemptRunnerStatus = "idle" | "tracking" | "complete";
 
-interface SampleCursor {
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly endSample: number;
-}
+type SampleCursor = ObservationSampleAuthority;
 
 interface AttemptEvidenceChunk {
   readonly frames: readonly Readonly<PitchObservation>[];
@@ -88,7 +86,6 @@ export type AttemptRunnerAction<Configuration> =
   | { readonly type: "finish" }
   | { readonly type: "reset" };
 
-const MAXIMUM_HOP_SECONDS = MICROPHONE_ANALYSIS_HOP_SECONDS * 1.05;
 const EVIDENCE_CHUNK_SIZE = 64;
 const PINNED_OPENING_FRAME_COUNT = 32;
 export const MAXIMUM_RECENT_TRACE_FRAMES = 512;
@@ -255,32 +252,6 @@ export function attemptRecentScoringFrames(
   timeline: Readonly<AttemptTimeline>,
 ): readonly AttemptScoringFrame[] {
   return scoringFramesForEvidence(attemptRecentEvidence(timeline));
-}
-
-function cursorFor(observation: Readonly<PitchObservation>): SampleCursor {
-  return {
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-    endSample: observation.endSample,
-  };
-}
-
-function elapsedDeltaSeconds(
-  cursor: Readonly<SampleCursor> | null,
-  observation: Readonly<PitchObservation>,
-): number {
-  if (!cursor || observation.discontinuity) return 0;
-  if (
-    cursor.captureEpoch !== observation.captureEpoch
-    || cursor.continuityEpoch !== observation.continuityEpoch
-    || cursor.graphGeneration !== observation.graphGeneration
-  ) return 0;
-
-  const deltaSamples = observation.endSample - cursor.endSample;
-  const maximumHopSamples = Math.ceil(observation.sampleRate * MAXIMUM_HOP_SECONDS);
-  if (deltaSamples <= 0 || deltaSamples > maximumHopSamples) return 0;
-  return deltaSamples / observation.sampleRate;
 }
 
 function qualifiedVoicedObservation(
@@ -465,10 +436,12 @@ export function advanceAttempt<Configuration>(
   observation: Readonly<PitchObservation>,
 ): AttemptRunnerState<Configuration> {
   if (state.status !== "tracking") return state;
-  const elapsedDelta = elapsedDeltaSeconds(state.cursor, observation);
+  const continuity = observationContinuity(state.cursor, observation);
+  if (!continuity.accepted || continuity.authority === null) return state;
+  const elapsedDelta = continuity.deltaSeconds;
   const elapsedSeconds = state.elapsedSeconds + elapsedDelta;
   const contiguousWithPrevious = state.cursor === null
-    || elapsedDelta > 0;
+    || continuity.contiguous;
   const pitchAdmitted = !observation.discontinuity && contiguousWithPrevious;
   let activeVoicedRun = pitchAdmitted ? state.activeVoicedRun : null;
   if (pitchAdmitted && qualifiedVoicedObservation(observation, state.scoringProfile)) {
@@ -518,7 +491,7 @@ export function advanceAttempt<Configuration>(
       state.scoringProfile,
       pitchAdmitted,
     ),
-    cursor: cursorFor(observation),
+    cursor: continuity.authority,
   };
 }
 

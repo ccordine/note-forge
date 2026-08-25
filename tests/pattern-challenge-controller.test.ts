@@ -103,7 +103,10 @@ describe("Pattern Challenge sample-authoritative scoring", () => {
     session = scorePatternObservation(session, observation(5_056), 0.2, true);
     expect(session.steps[0]!.heldSeconds).toBeCloseTo(0.2);
 
-    session = scorePatternObservation(session, observation(6_016, { midiFloat: 61 }), 0.3, true);
+    session = scorePatternObservation(session, observation(6_016, {
+      midiFloat: 61,
+      confidence: 0.01,
+    }), 0.3, true);
     expect(session.steps[0]).toMatchObject({ heldSeconds: 0, progress: 0, firstMatchedAtSeconds: null });
 
     session = scorePatternObservation(session, observation(6_976), 0.4, true);
@@ -208,7 +211,7 @@ describe("Pattern Challenge sample-authoritative scoring", () => {
     expect(game.phase).toBe("playing");
     expect(game.liveMidi).toBe(60);
     expect(game.elapsedSeconds).toBeGreaterThan(elapsedAfterPhrase);
-    expect(game.clock?.lastEndSample).toBe(WINDOW_SIZE + HOP_SIZE * 180_001);
+    expect(game.clock?.authority.endSample).toBe(WINDOW_SIZE + HOP_SIZE * 180_001);
     expect(game.result).toBeNull();
     expect(game.scoreAggregate).toBe(aggregateAfterHour);
     const stillLive = game;

@@ -75,6 +75,10 @@ export function normalizeProgress(candidate: unknown): LoopProgress {
         ...record,
         passedMidis: completeButUnfinalized ? [] : passedMidis,
         parkedMidis,
+        // The final dwell is already earned evidence. If persistence captured
+        // it before the following UI action finalized the lap, normalize the
+        // transaction forward instead of silently deleting the completed lap.
+        cyclesCompleted: record.cyclesCompleted + Number(completeButUnfinalized),
       };
     }
   }

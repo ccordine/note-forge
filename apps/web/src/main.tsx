@@ -5,6 +5,7 @@ import { App } from "./App";
 import { MusicalProvider } from "./state/MusicalContext";
 import { UserPreferencesProvider } from "./state/UserPreferencesContext";
 import { AudioInputProvider } from "./audio/use-audio-input";
+import { SustainedNotePlaybackProvider } from "./audio/use-sustained-note";
 import "./styles.css";
 import "./styles-responsive.css";
 
@@ -12,7 +13,7 @@ const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("NoteForge requires a #root mount element.");
 
 createRoot(rootElement).render(
-  <StrictMode><HashRouter><AudioInputProvider><MusicalProvider><UserPreferencesProvider><App /></UserPreferencesProvider></MusicalProvider></AudioInputProvider></HashRouter></StrictMode>
+  <StrictMode><HashRouter><AudioInputProvider><SustainedNotePlaybackProvider><MusicalProvider><UserPreferencesProvider><App /></UserPreferencesProvider></MusicalProvider></SustainedNotePlaybackProvider></AudioInputProvider></HashRouter></StrictMode>
 );
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {

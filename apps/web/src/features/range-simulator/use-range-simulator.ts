@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { playTone } from "@/audio/synth";
 import { useAudioInput, type AudioInputController } from "@/audio/use-audio-input";
-import { queueRangeLoopHandoff } from "@/features/range-loop/handoff";
 import {
-  BRIEF_REFERENCE_SECONDS,
-  useSessionEffectScope,
-} from "@/features/training-session/use-session-effect-scope";
+  useSustainedNote,
+  type SustainedNoteControl,
+} from "@/audio/use-sustained-note";
+import { queueRangeLoopHandoff } from "@/features/range-loop/handoff";
 import {
   DEFAULT_BASELINE_MIDI,
   VOCAL_PROFILE_STORAGE_KEY,
@@ -41,12 +40,13 @@ export interface RangeSimulatorWorkspace {
   readonly persistenceState: RangeSimulatorPersistenceState;
   readonly toleranceCents: number;
   readonly begin: () => void;
-  readonly hearReference: () => void;
+  readonly referencePlayback: Readonly<SustainedNoteControl>;
   readonly chooseRating: (rating: EffortRating) => void;
   readonly setCoordinationChange: (value: boolean) => void;
   readonly retry: () => void;
   readonly saveRating: () => void;
   readonly finish: () => void;
+  readonly recheck: () => void;
   readonly startFresh: (anchorMidi: number, preparation: RangePreparation) => void;
   readonly openEndlessLoop: (baselineMidi: number) => void;
 }
@@ -76,7 +76,6 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
   );
   const state = realtime.state;
   const activeToleranceCents = state.dwell.toleranceCents;
-  const { abort: abortEffects, playReference } = useSessionEffectScope();
   const [hydrated, setHydrated] = useState(false);
   const [persistenceState, setPersistenceState] = useState<RangeSimulatorPersistenceState>("loading");
   const persistenceRef = useRef<SettingsPersistence<RangeSimulatorStorageKey> | null>(null);
@@ -89,15 +88,6 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
   const persistence = persistenceRef.current;
 
   const input = useAudioInput({
-    diagnostics: {
-      flow: "range-simulator",
-      phase: state.status,
-      targetMidi: activeRangeSimulatorTarget(state),
-      toleranceCents: activeToleranceCents,
-      stableMs: state.dwell.heldSeconds * 1_000,
-      requiredHoldMs: state.dwell.requiredHoldSeconds * 1_000,
-      resetReason: null,
-    },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
 
@@ -137,25 +127,19 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
   }, [hydrated, persistence, state.persistenceRevision, state.profile, state.session]);
 
   const targetMidi = activeRangeSimulatorTarget(state);
+  const referencePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(targetMidi),
+    timbre,
+    amplitude: 0.2,
+  });
   useEffect(() => {
     setSelectedMidi(targetMidi);
     setCentsOffset(0);
   }, [setCentsOffset, setSelectedMidi, targetMidi]);
 
   const begin = useCallback(() => {
-    abortEffects();
     realtime.dispatch({ type: "begin", toleranceCents: activeToleranceCents });
-  }, [abortEffects, activeToleranceCents, realtime.dispatch]);
-
-  const hearReference = useCallback(() => {
-    playReference("Range Simulator reference tone", () => playTone({
-      frequencyHz: continuousMidiToHz(activeRangeSimulatorTarget(state)),
-      timbre,
-      duration: BRIEF_REFERENCE_SECONDS,
-      amplitude: 0.2,
-      release: 0.06,
-    }));
-  }, [playReference, state, timbre]);
+  }, [activeToleranceCents, realtime.dispatch]);
 
   const chooseRating = useCallback((rating: EffortRating) => {
     realtime.dispatch({ type: "select-rating", rating });
@@ -164,23 +148,26 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
     realtime.dispatch({ type: "set-coordination", value });
   }, [realtime.dispatch]);
   const retry = useCallback(() => {
-    abortEffects();
     realtime.dispatch({ type: "retry", toleranceCents: activeToleranceCents });
-  }, [abortEffects, activeToleranceCents, realtime.dispatch]);
+  }, [activeToleranceCents, realtime.dispatch]);
   const saveRating = useCallback(() => {
-    abortEffects();
     realtime.dispatch({
       type: "save-rating",
       ratedAt: metadataTimestamp(state.session.updatedAt),
       toleranceCents: activeToleranceCents,
     });
-  }, [abortEffects, activeToleranceCents, realtime.dispatch, state.session.updatedAt]);
+  }, [activeToleranceCents, realtime.dispatch, state.session.updatedAt]);
   const finish = useCallback(() => {
-    abortEffects();
     realtime.dispatch({ type: "finish", stoppedAt: metadataTimestamp(state.session.updatedAt) });
-  }, [abortEffects, realtime.dispatch, state.session.updatedAt]);
+  }, [realtime.dispatch, state.session.updatedAt]);
+  const recheck = useCallback(() => {
+    realtime.dispatch({
+      type: "recheck",
+      startedAt: metadataTimestamp(state.session.updatedAt),
+      toleranceCents: activeToleranceCents,
+    });
+  }, [activeToleranceCents, realtime.dispatch, state.session.updatedAt]);
   const startFresh = useCallback((anchorMidi: number, preparation: RangePreparation) => {
-    abortEffects();
     realtime.dispatch({
       type: "fresh",
       anchorMidi,
@@ -188,9 +175,8 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
       startedAt: new Date().toISOString(),
       toleranceCents: preferenceToleranceCents,
     });
-  }, [abortEffects, preferenceToleranceCents, realtime.dispatch]);
+  }, [preferenceToleranceCents, realtime.dispatch]);
   const openEndlessLoop = useCallback((baselineMidi: number) => {
-    abortEffects();
     void persistence.flushWhileActive().then((active) => {
       if (!active) return;
       queueRangeLoopHandoff(baselineMidi);
@@ -198,7 +184,7 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
       setCentsOffset(0);
       navigate({ surface: "practice", activity: "range-loop" });
     });
-  }, [abortEffects, navigate, persistence, setCentsOffset, setSelectedMidi]);
+  }, [navigate, persistence, setCentsOffset, setSelectedMidi]);
 
   return {
     state,
@@ -207,12 +193,13 @@ export function useRangeSimulator(): RangeSimulatorWorkspace {
     persistenceState,
     toleranceCents: activeToleranceCents,
     begin,
-    hearReference,
+    referencePlayback,
     chooseRating,
     setCoordinationChange,
     retry,
     saveRating,
     finish,
+    recheck,
     startFresh,
     openEndlessLoop,
   };

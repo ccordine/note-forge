@@ -124,18 +124,6 @@ func TestPitchDiagnosticsAcceptAndLogDerivedMetrics(t *testing.T) {
 	var output bytes.Buffer
 	server := newTestServer(&output)
 	batch := validDiagnosticBatch()
-	batch.Events = append(batch.Events, DiagnosticEvent{
-		ElapsedMS: 240,
-		Kind:      "workflow",
-		Workflow: &WorkflowDiagnostic{
-			Phase:          "sustain",
-			State:          "tracking",
-			TargetMIDI:     pointer(48.0),
-			AttemptID:      pointer(uint64(7)),
-			HoldMS:         pointer(180.0),
-			RequiredHoldMS: pointer(1_500.0),
-		},
-	})
 
 	response := performDiagnosticRequest(server, batch, nil)
 	if response.Code != http.StatusNoContent {
@@ -222,15 +210,8 @@ func TestPitchDiagnosticsRejectInvalidRequestsWithoutLoggingBodies(t *testing.T)
 	badHeadroom.Events[0].Pitch.Input.HeadroomDB = 3
 	badClipRatio := validDiagnosticBatch()
 	badClipRatio.Events[0].Pitch.Input.ClipRatio = 0.25
-	badTrackingError := validDiagnosticBatch()
-	badTrackingError.Events[0].Pitch.Tracking.ErrorCents = pointer(50.0)
-	badTrackingBand := validDiagnosticBatch()
-	badTrackingBand.Events[0].Pitch.Tracking.InBand = pointer(false)
-	missingTrackingEvidence := validDiagnosticBatch()
-	missingTrackingEvidence.Events[0].Pitch.Tracking.ErrorCents = nil
-	missingTrackingEvidence.Events[0].Pitch.Tracking.InBand = pointer(true)
 	wrongPayload := validDiagnosticBatch()
-	wrongPayload.Events[0].Workflow = &WorkflowDiagnostic{Phase: "attempt", State: "ready"}
+	wrongPayload.Events[0].Microphone = &MicrophoneDiagnostic{State: "off"}
 	badSession := validDiagnosticBatch()
 	badSession.SessionID = "../../voice"
 	badFlow := validDiagnosticBatch()
@@ -247,7 +228,32 @@ func TestPitchDiagnosticsRejectInvalidRequestsWithoutLoggingBodies(t *testing.T)
 	missingFrameTime := validDiagnosticBatch()
 	missingFrameTime.Events[0].Pitch.Frame.TimeSeconds = nil
 	badFrameSampleRate := validDiagnosticBatch()
-	badFrameSampleRate.Events[0].Pitch.Frame.SampleRate = pointer(7_999.0)
+	badFrameSampleRate.Events[0].Pitch.Frame.SampleRate = pointer(2_400.0)
+	belowLiveFrequency := validDiagnosticBatch()
+	belowLiveFrequency.Events[0].Pitch.Frame.FrequencyHz = pointer(20.0)
+	belowLiveFrequency.Events[0].Pitch.Frame.MIDIFloat = pointer(15.4868)
+	belowLiveFrequency.Events[0].Pitch.Frame.NearestMIDI = pointer(15)
+	belowLiveFrequency.Events[0].Pitch.Frame.CentsFromNearest = pointer(48.68)
+	activeMicrophoneMissingRange := validDiagnosticBatch()
+	activeMicrophoneMissingRange.Events = []DiagnosticEvent{{
+		Kind: "microphone-state",
+		Microphone: &MicrophoneDiagnostic{
+			State:      "ready",
+			SampleRate: pointer(48_000.0),
+			BufferSize: pointer(uint64(4_096)),
+		},
+	}}
+	wrongMicrophoneRange := validDiagnosticBatch()
+	wrongMicrophoneRange.Events = []DiagnosticEvent{{
+		Kind: "microphone-state",
+		Microphone: &MicrophoneDiagnostic{
+			State:          "ready",
+			SampleRate:     pointer(48_000.0),
+			BufferSize:     pointer(uint64(4_096)),
+			MinFrequencyHz: pointer(50.0),
+			MaxFrequencyHz: pointer(1_200.0),
+		},
+	}}
 	emptyFrameWindow := validDiagnosticBatch()
 	emptyFrameWindow.Events[0].Pitch.Frame.StartSample = emptyFrameWindow.Events[0].Pitch.Frame.EndSample
 	badProcessedCount := validDiagnosticBatch()
@@ -289,6 +295,9 @@ func TestPitchDiagnosticsRejectInvalidRequestsWithoutLoggingBodies(t *testing.T)
 		{name: "uncertain kind with admitted pitch", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, uncertainWithPitch), status: http.StatusBadRequest},
 		{name: "missing frame time", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, missingFrameTime), status: http.StatusBadRequest},
 		{name: "invalid frame sample rate", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badFrameSampleRate), status: http.StatusBadRequest},
+		{name: "frequency below canonical transport allowance", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, belowLiveFrequency), status: http.StatusBadRequest},
+		{name: "active microphone missing canonical range", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, activeMicrophoneMissingRange), status: http.StatusBadRequest},
+		{name: "active microphone changed canonical range", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, wrongMicrophoneRange), status: http.StatusBadRequest},
 		{name: "empty frame window", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, emptyFrameWindow), status: http.StatusBadRequest},
 		{name: "processed count disagrees with frame end", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badProcessedCount), status: http.StatusBadRequest},
 		{name: "unsafe frame coordinate", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, unsafeFrameCoordinate), status: http.StatusBadRequest},
@@ -303,9 +312,6 @@ func TestPitchDiagnosticsRejectInvalidRequestsWithoutLoggingBodies(t *testing.T)
 		{name: "contradictory cents coordinate", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badCentsCoordinate), status: http.StatusBadRequest},
 		{name: "contradictory input headroom", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badHeadroom), status: http.StatusBadRequest},
 		{name: "contradictory input clip ratio", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badClipRatio), status: http.StatusBadRequest},
-		{name: "contradictory tracking error", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badTrackingError), status: http.StatusBadRequest},
-		{name: "contradictory tracking band", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badTrackingBand), status: http.StatusBadRequest},
-		{name: "tracking band without evidence", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, missingTrackingEvidence), status: http.StatusBadRequest},
 		{name: "multiple payloads", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, wrongPayload), status: http.StatusBadRequest},
 		{name: "invalid session", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badSession), status: http.StatusBadRequest},
 		{name: "invalid flow", method: http.MethodPost, contentType: "application/json", body: mustMarshal(t, badFlow), status: http.StatusBadRequest},
@@ -362,23 +368,22 @@ func TestPitchDiagnosticsAcceptEveryTypedEvent(t *testing.T) {
 	t.Parallel()
 	bufferSize := uint64(4_096)
 	sampleRate := 48_000.0
+	minFrequencyHz := 45.0
+	maxFrequencyHz := 1_200.0
 	batch := validDiagnosticBatch()
 	batch.Events = []DiagnosticEvent{
 		{
 			ElapsedMS: 0,
 			Kind:      "microphone-state",
 			Microphone: &MicrophoneDiagnostic{
-				State:      "ready",
-				SampleRate: &sampleRate,
-				BufferSize: &bufferSize,
+				State:          "ready",
+				SampleRate:     &sampleRate,
+				BufferSize:     &bufferSize,
+				MinFrequencyHz: &minFrequencyHz,
+				MaxFrequencyHz: &maxFrequencyHz,
 			},
 		},
 		validDiagnosticBatch().Events[0],
-		{
-			ElapsedMS: 30,
-			Kind:      "workflow",
-			Workflow:  &WorkflowDiagnostic{Phase: "sustain", State: "tracking"},
-		},
 	}
 	var output bytes.Buffer
 	response := performDiagnosticRequest(newTestServer(&output), batch, nil)
@@ -392,19 +397,27 @@ func TestPitchDiagnosticsAcceptEveryTypedEvent(t *testing.T) {
 
 func TestPitchDiagnosticsAcceptClientRoundedCrossFieldEvidence(t *testing.T) {
 	t.Parallel()
-	for _, frequencyHz := range []float64{45, 440, 1_200} {
+	precisionScale := math.Pow10(diagnosticSignalBounds.FrequencyDecimalPlaces)
+	roundedDetectorMinimum := math.Round(
+		diagnosticSignalBounds.DetectorFrequencyHz.Minimum*precisionScale,
+	) / precisionScale
+	roundedDetectorMaximum := math.Round(
+		diagnosticSignalBounds.DetectorFrequencyHz.Maximum*precisionScale,
+	) / precisionScale
+	for _, frequencyHz := range []float64{
+		roundedDetectorMinimum,
+		45,
+		440,
+		1_200,
+		roundedDetectorMaximum,
+	} {
 		frequencyHz := frequencyHz
-		t.Run(fmt.Sprintf("%.0f Hz", frequencyHz), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%.4f Hz", frequencyHz), func(t *testing.T) {
 			t.Parallel()
 			midiRaw := 69 + 12*math.Log2(frequencyHz/440)
 			midiRounded := math.Round(midiRaw*10_000) / 10_000
 			nearest := int(math.Floor(midiRaw + 0.5))
 			centsRounded := math.Round((midiRaw-float64(nearest))*100*10_000) / 10_000
-			target := float64(nearest)
-			errorCents := (midiRaw - target) * 100
-			tolerance := 50.0
-			inBand := math.Abs(errorCents) <= tolerance
-
 			batch := validDiagnosticBatch()
 			batch.Events[0].Pitch.Frame.FrequencyHz = pointer(frequencyHz)
 			batch.Events[0].Pitch.Frame.MIDIFloat = pointer(midiRounded)
@@ -415,10 +428,6 @@ func TestPitchDiagnosticsAcceptClientRoundedCrossFieldEvidence(t *testing.T) {
 			batch.Events[0].Pitch.Input.ClippedSampleCount = 1
 			batch.Events[0].Pitch.Input.SampleCount = 3
 			batch.Events[0].Pitch.Input.ClipRatio = 0.333333
-			batch.Events[0].Pitch.Tracking.TargetMIDI = &target
-			batch.Events[0].Pitch.Tracking.ErrorCents = &errorCents
-			batch.Events[0].Pitch.Tracking.ToleranceCents = &tolerance
-			batch.Events[0].Pitch.Tracking.InBand = &inBand
 
 			if err := validateDiagnosticBatch(batch); err != nil {
 				t.Fatalf("client-rounded diagnostic was rejected: %v", err)
@@ -442,8 +451,6 @@ func TestPitchDiagnosticsAcceptExplicitUnvoicedAndUncertainObservations(t *testi
 			frame := unvoicedFrame(test.reason)
 			frame.ObservationKind = test.kind
 			batch.Events[0].Pitch.Frame = frame
-			batch.Events[0].Pitch.Tracking.ErrorCents = nil
-			batch.Events[0].Pitch.Tracking.InBand = nil
 			if err := validateDiagnosticBatch(batch); err != nil {
 				t.Fatalf("%s observation was rejected: %v", test.kind, err)
 			}
@@ -683,12 +690,6 @@ func validDiagnosticBatch() DiagnosticBatch {
 	period := 366.94
 	brightness := 0.24
 	brightnessConfidence := 0.91
-	target := 48.0
-	tolerance := 25.0
-	errorCents := 0.1
-	inBand := true
-	stable := 120.0
-	required := 1_500.0
 	frame := FrameDiagnostic{
 		ObservationKind:      "voiced",
 		TimeSeconds:          &timeSeconds,
@@ -716,10 +717,10 @@ func validDiagnosticBatch() DiagnosticBatch {
 		Reason:               "detected",
 	}
 	return DiagnosticBatch{
-		Version:       3,
+		Version:       4,
 		SessionID:     "pitch-a1b2c3d4",
 		Sequence:      42,
-		Flow:          "range-simulator",
+		Flow:          "audio-input",
 		DroppedEvents: 2,
 		Events: []DiagnosticEvent{{
 			ElapsedMS: 140,
@@ -734,15 +735,6 @@ func validDiagnosticBatch() DiagnosticBatch {
 					ClipRatio:          0,
 					ClippedSampleCount: 0,
 					SampleCount:        4_096,
-				},
-				Tracking: &TrackingDiagnostic{
-					Phase:          "sustain",
-					TargetMIDI:     &target,
-					ToleranceCents: &tolerance,
-					ErrorCents:     &errorCents,
-					InBand:         &inBand,
-					StableMS:       &stable,
-					RequiredHoldMS: &required,
 				},
 			},
 		}},

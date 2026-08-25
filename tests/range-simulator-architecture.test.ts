@@ -60,11 +60,16 @@ describe("Range Simulator continuous-input architecture guard", () => {
     for (const pattern of forbidden) expect(ACTIVE_SOURCE).not.toMatch(pattern);
   });
 
-  it("uses a brief state-neutral reference and never invokes capture for playback", () => {
-    expect(HOOK_SOURCE).toContain("duration: BRIEF_REFERENCE_SECONDS");
-    expect(HOOK_SOURCE).toContain("playReference(\"Range Simulator reference tone\"");
+  it("uses the app-owned sustained target toggle and never couples it to workflow commands", () => {
+    expect(HOOK_SOURCE).toContain("useSustainedNote");
+    expect(HOOK_SOURCE).toContain("referencePlayback");
+    expect(UI_SOURCE).toContain("<NotePlaybackToggle");
+    expect(UI_SOURCE).toContain("playback={workspace.referencePlayback}");
+    expect(ACTIVE_SOURCE).not.toMatch(/BRIEF_REFERENCE_SECONDS|useSessionEffectScope|\bplayTone\s*\(|\bDrone\b/);
     expect(HOOK_SOURCE).not.toMatch(/\bActiveVoice\b|\bpromptVoice\w*\b|\bpromptTimer\w*\b/);
     expect(HOOK_SOURCE).not.toMatch(/\binput\.(?:enable|disable|getStream)\s*\(/);
+    const commands = HOOK_SOURCE.slice(HOOK_SOURCE.indexOf("const begin ="), HOOK_SOURCE.indexOf("return {"));
+    expect(commands).not.toMatch(/referencePlayback|\.toggle\s*\(|\.release\s*\(/);
   });
 
   it("keeps the state model to idle, tracking, and complete", () => {

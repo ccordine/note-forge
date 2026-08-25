@@ -37,19 +37,19 @@ analysis hop. This is evidence for the checked-in Chromium software path, not a
 claim about every physical microphone, room, operating-system audio stack, or
 browser engine.
 
-## Verified result — 2026-08-24
+## Verified result — 2026-08-25
 
-The final production run consumed all 1,734 pre-exit AudioWorklet observations
-and retained exact sample identity in 718 bounded React publications. Route exit
-left the one track alive while worklet evidence advanced to 1,826 windows; there
-were zero track writes or stops. The same-F0 fixture measured brightness
-`0.00428` dark versus `0.26584` bright at MIDI `48.0000`/`47.9999`, while the
-neutral envelope measured `0.09466`. Normalized gameplay reached `+0.713960`
-and `-0.682013` on isolated pitch, `-1` dark roll, and `+1` bright roll. Silence,
+The final production run consumed all 1,735 pre-exit AudioWorklet observations
+and retained exact sample identity in 715 bounded React publications. Route exit
+left the one track alive while worklet evidence advanced to 1,852 windows; there
+were zero track writes or stops. Each neutral/upper/lower/dark/bright calibration
+segment supplied 116 derived frames. Normalized gameplay reached `+0.699017`
+and `-0.682006` on isolated pitch, `-0.999914` dark roll, and `+1` bright roll. Silence,
 the exact resumed authority frame, combined input, aircraft response, and
-independent rAF presentation all passed.
+independent rAF presentation all passed. After visible **Finish**, observations
+advanced from 1,788 to 1,818 while simulation remained exactly 970 frames.
 
-Maximum combined production detector/brightness time was 9.8 ms. Calibration
+Maximum combined production detector/brightness time was 10.8 ms. Calibration
 and active flight passed horizontal containment, vertical reachability, and
 control hit testing at 1440, 760, 430, 390, and 320 CSS pixels. The run used one
 permission request, stream, track, context, source, worklet, root, and canvas;

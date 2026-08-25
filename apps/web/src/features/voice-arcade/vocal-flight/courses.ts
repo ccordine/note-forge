@@ -7,6 +7,7 @@ import type {
   VocalFlightState,
   Vector3,
 } from "./types";
+import { clampUnit } from "@/lib/numeric";
 
 interface CourseInput extends Omit<VocalFlightCourseDefinition, "gates" | "disturbances"> {
   readonly gates?: readonly VocalFlightGate[];
@@ -326,7 +327,7 @@ export function vocalFlightDesiredPoint(
     return Object.freeze({ x: nextCenter.x, y: nextCenter.y, z: position.z });
   }
   const span = Math.max(0.001, nextCenter.z - previousCenter.z);
-  const progress = Math.min(1, Math.max(0, (position.z - previousCenter.z) / span));
+  const progress = clampUnit((position.z - previousCenter.z) / span);
   return Object.freeze({
     x: previousCenter.x + (nextCenter.x - previousCenter.x) * progress,
     y: previousCenter.y + (nextCenter.y - previousCenter.y) * progress,

@@ -1,5 +1,6 @@
 import { splitMidiPitch } from "@noteforge/music-core";
-import { detectPitch, smoothPitchFrames } from "@noteforge/pitch-engine";
+import { smoothPitchFrames, YinDetector } from "@noteforge/pitch-engine";
+import { clamp } from "@/lib/numeric";
 import { resolveSongLaneOptions } from "./song-lane-options";
 import type {
   ResolvedSongLaneOptions,
@@ -56,10 +57,9 @@ export function resampleMonoPcm(
     let weightedSum = 0;
     let totalWeight = 0;
     for (let sourceIndex = firstSourceIndex; sourceIndex < finalSourceIndex; sourceIndex += 1) {
-      const overlap = Math.max(
-        0,
-        Math.min(sourceEnd, sourceIndex + 1) - Math.max(sourceStart, sourceIndex),
-      );
+      const overlapStart = Math.max(sourceStart, sourceIndex);
+      const overlapEnd = Math.min(sourceEnd, sourceIndex + 1);
+      const overlap = Math.max(0, overlapEnd - overlapStart);
       if (overlap > 0 && sourceIndex < pcm.length) {
         weightedSum += pcm[sourceIndex] * overlap;
         totalWeight += overlap;
@@ -143,8 +143,9 @@ export function extractSongPitchFrames(
   options: ResolvedSongLaneOptions,
 ): SongPitchFrame[] {
   const chunks = chunksForResolvedOptions(pcm.length, options);
+  const detector = new YinDetector();
   const detected = chunks.map<SongPitchFrame>((chunk) => ({
-    ...detectPitch(pcm.subarray(chunk.startSample, chunk.endSample), {
+    ...detector.detectPitch(pcm.subarray(chunk.startSample, chunk.endSample), {
       sampleRate: options.analysisSampleRate,
       minFrequency: options.minFrequencyHz,
       maxFrequency: options.maxFrequencyHz,
@@ -179,8 +180,8 @@ export function extractSongPitchFrames(
       : (frame.timeSeconds + next.timeSeconds) / 2;
     return {
       ...frame,
-      startSeconds: Math.max(0, Math.min(durationSeconds, startSeconds)),
-      endSeconds: Math.max(0, Math.min(durationSeconds, endSeconds)),
+      startSeconds: clamp(startSeconds, 0, durationSeconds),
+      endSeconds: clamp(endSeconds, 0, durationSeconds),
     };
   });
   return quantizeFrames(timed, options.quantizationHysteresisCents);

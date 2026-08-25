@@ -203,7 +203,9 @@ export function completeRangeLoopFamily(
       [familyId]: {
         ...record,
         passedMidis: [],
-        parkedMidis: [],
+        // "Outside my current range" is explicit physical-profile evidence,
+        // not per-lap presentation state. Only Recheck may clear it.
+        parkedMidis: record.parkedMidis,
         cyclesCompleted: record.cyclesCompleted + 1,
       },
     },

@@ -12,7 +12,6 @@ import type { SongWorkspaceAction, VoiceTake } from "./song-workspace";
 
 const WAVEFORM_BIN_COUNT = 240;
 const MEDIA_RECORDER_TIMESLICE_MS = 1_000;
-export const MAX_VOICE_TAKES = 4;
 
 export interface SongWorkspaceEnvironment {
   readonly decodeAudio: (encoded: ArrayBuffer) => Promise<AudioBuffer>;
@@ -48,13 +47,11 @@ export interface SongFileRequest extends SongPlaybackRequest {
 export interface SongRecordingRequest extends SongPlaybackRequest {
   readonly inputRunning: boolean;
   readonly createRecorder: () => MediaRecorder;
-  readonly takes: readonly VoiceTake[];
 }
 
 interface ActiveTake {
   readonly recorder: MediaRecorder;
   readonly storage: LocalRecordingChunkSession;
-  readonly priorTakes: readonly VoiceTake[];
   writeQueue: Promise<void>;
   discardReason: string;
   finalized: boolean;
@@ -278,7 +275,6 @@ export class SongWorkspaceRuntime {
       const active: ActiveTake = {
         recorder,
         storage,
-        priorTakes: request.takes,
         writeQueue: Promise.resolve(),
         discardReason: "",
         finalized: false,
@@ -512,9 +508,7 @@ export class SongWorkspaceRuntime {
       const url = this.environment.createObjectURL(blob);
       this.managedObjectUrls.add(url);
       const take = { id: this.environment.createId(), url, createdAt: this.environment.now() };
-      const removed = active.priorTakes.slice(MAX_VOICE_TAKES - 1);
-      for (const oldTake of removed) this.revoke(oldTake.url);
-      this.dispatch({ type: "take-added", take, maximum: MAX_VOICE_TAKES });
+      this.dispatch({ type: "take-added", take });
     } catch (error) {
       try {
         await active.storage.discard();

@@ -1,12 +1,21 @@
 import { frequencyToMidi, splitMidiPitch } from "@noteforge/music-core";
+import { clamp } from "@/lib/numeric";
+import { LIVE_DIAGNOSTIC_SIGNAL_BOUNDS } from "@/diagnostics/live-signal-contract";
 
 const DATABASE_NAME = "noteforge";
 const DATABASE_VERSION = 1;
 const MAX_RECENT_ATTEMPTS = 100;
-const MAX_STORED_ATTEMPTS = 500;
 const MAX_ATTEMPT_PITCH_FRAMES = 2_048;
 const MAX_SETTING_ENTRIES_PER_TRANSACTION = 64;
 const MAX_STORAGE_KEY_LENGTH = 128;
+const LOCAL_PITCH_MINIMUM_FREQUENCY_HZ =
+  LIVE_DIAGNOSTIC_SIGNAL_BOUNDS.detectorFrequencyHz.minimum;
+const LOCAL_PITCH_MAXIMUM_FREQUENCY_HZ =
+  LIVE_DIAGNOSTIC_SIGNAL_BOUNDS.detectorFrequencyHz.maximum;
+const LOCAL_PITCH_MINIMUM_MIDI = frequencyToMidi(LOCAL_PITCH_MINIMUM_FREQUENCY_HZ);
+const LOCAL_PITCH_MAXIMUM_MIDI = frequencyToMidi(LOCAL_PITCH_MAXIMUM_FREQUENCY_HZ);
+const LOCAL_PITCH_MINIMUM_NEAREST_MIDI = splitMidiPitch(LOCAL_PITCH_MINIMUM_MIDI).nearestMidi;
+const LOCAL_PITCH_MAXIMUM_NEAREST_MIDI = splitMidiPitch(LOCAL_PITCH_MAXIMUM_MIDI).nearestMidi;
 
 /** The derived contour fields that may be retained locally for an attempt. */
 export interface LocalPitchFrame {
@@ -175,51 +184,10 @@ async function writeTransaction(
 }
 
 async function writeAttempt(attempt: LocalAttempt): Promise<void> {
-  const database = await openDatabase();
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const transaction = database.transaction("attempts", "readwrite");
-    const store = transaction.objectStore("attempts");
-    const rejectTransaction = (error: DOMException | Error | null, fallback: string) => {
-      if (settled) return;
-      settled = true;
-      reject(error ?? new Error(fallback));
-    };
-    transaction.oncomplete = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    transaction.onerror = () => rejectTransaction(transaction.error, "The attempt write failed.");
-    transaction.onabort = () => rejectTransaction(transaction.error, "The attempt write was aborted.");
-
-    try {
-      store.put(attempt);
-      const count = store.count();
-      count.onerror = () => rejectTransaction(count.error, "Could not count stored attempts.");
-      count.onsuccess = () => {
-        let remaining = Math.max(0, count.result - MAX_STORED_ATTEMPTS);
-        if (remaining === 0) return;
-        const cursorRequest = store.index("completedAt").openCursor(null, "next");
-        cursorRequest.onerror = () => rejectTransaction(cursorRequest.error, "Could not trim stored attempts.");
-        cursorRequest.onsuccess = () => {
-          const cursor = cursorRequest.result;
-          if (!cursor || remaining === 0) return;
-          try {
-            cursor.delete();
-            remaining -= 1;
-            if (remaining > 0) cursor.continue();
-          } catch (error) {
-            try { transaction.abort(); } catch { /* It may already be inactive. */ }
-            rejectTransaction(error instanceof Error ? error : null, "Could not trim stored attempts.");
-          }
-        };
-      };
-    } catch (error) {
-      try { transaction.abort(); } catch { /* It may already be inactive. */ }
-      rejectTransaction(error instanceof Error ? error : null, "Could not start the attempt write.");
-    }
-  });
+  // Attempts are user history, not a presentation cache. Browser quota errors
+  // are reported by the transaction; a successful new write never authorizes
+  // silently deleting older sessions.
+  return writeTransaction("attempts", (store) => { store.put(attempt); });
 }
 
 interface MetadataBudget {
@@ -326,21 +294,37 @@ function sanitizePitchFrame(frame: Readonly<LocalPitchFrame>, index: number): Lo
       voiced: false,
     };
   }
-  const frequencyHz = finiteNumber(frame.frequencyHz, `Pitch frame ${index} frequency`, 10, 20_000);
-  const midiFloat = finiteNumber(frame.midiFloat, `Pitch frame ${index} MIDI`, 0, 127);
-  const nearestMidi = finiteNumber(frame.nearestMidi, `Pitch frame ${index} nearest MIDI`, 0, 127);
+  const frequencyHz = finiteNumber(
+    frame.frequencyHz,
+    `Pitch frame ${index} frequency`,
+    LOCAL_PITCH_MINIMUM_FREQUENCY_HZ,
+    LOCAL_PITCH_MAXIMUM_FREQUENCY_HZ,
+  );
+  const midiFloat = finiteNumber(
+    frame.midiFloat,
+    `Pitch frame ${index} MIDI`,
+    LOCAL_PITCH_MINIMUM_MIDI,
+    LOCAL_PITCH_MAXIMUM_MIDI,
+  );
+  const nearestMidi = finiteNumber(
+    frame.nearestMidi,
+    `Pitch frame ${index} nearest MIDI`,
+    LOCAL_PITCH_MINIMUM_NEAREST_MIDI,
+    LOCAL_PITCH_MAXIMUM_NEAREST_MIDI,
+  );
   if (!Number.isInteger(nearestMidi)) throw new RangeError(`Pitch frame ${index} nearest MIDI must be an integer.`);
   const centsFromNearest = finiteNumber(
     frame.centsFromNearest,
     `Pitch frame ${index} cents`,
-    -100,
-    100,
+    -50,
+    50,
   );
   const midiFromFrequency = frequencyToMidi(frequencyHz);
   const splitPitch = splitMidiPitch(midiFloat);
-  if (Math.abs(midiFromFrequency - midiFloat) > 0.01
+  if (Math.abs(midiFromFrequency - midiFloat) > LIVE_DIAGNOSTIC_SIGNAL_BOUNDS.midiTolerance
     || nearestMidi !== splitPitch.nearestMidi
-    || Math.abs(splitPitch.centsFromNearest - centsFromNearest) > 0.1) {
+    || Math.abs(splitPitch.centsFromNearest - centsFromNearest)
+      > LIVE_DIAGNOSTIC_SIGNAL_BOUNDS.centsTolerance) {
     throw new RangeError(`Pitch frame ${index} contains contradictory pitch coordinates.`);
   }
   return {
@@ -402,7 +386,7 @@ export async function saveAttempt(attempt: LocalAttempt): Promise<void> {
 
 export async function recentAttempts(limit = 12): Promise<LocalAttempt[]> {
   const boundedLimit = Number.isFinite(limit)
-    ? Math.min(MAX_RECENT_ATTEMPTS, Math.max(0, Math.floor(limit)))
+    ? clamp(Math.floor(limit), 0, MAX_RECENT_ATTEMPTS)
     : 12;
   if (boundedLimit === 0) return [];
 

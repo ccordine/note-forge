@@ -44,10 +44,25 @@ describe("Pattern Challenge continuous-input architecture guard", () => {
   });
 
   it("uses a pure sample-coordinate controller instead of callback or wall-clock time", () => {
-    expect(controller).toContain("observation.endSample - state.clock.lastEndSample");
-    expect(controller).toContain("observation.sampleRate");
-    expect(controller).toContain("observation.discontinuity");
+    expect(controller).toContain("observationContinuity(state.clock?.authority ?? null, observation)");
+    expect(controller).toContain("continuity.deltaSeconds");
+    expect(controller).toContain("continuity.contiguous");
     expect(controller).not.toMatch(/observation\.timeSeconds|performance\.now|Date\.now|requestAnimationFrame|setTimeout/);
+  });
+
+  it("projects full detector depth and removes the live marker on silence with exact sample identity", () => {
+    expect(component).toContain("pitchMeterPositionPercent(");
+    expect(component).toContain("liveMidi !== null && liveY !== null");
+    expect(component).not.toContain('echo-voice-cursor ${liveMidi === null ? "silent"');
+    for (const attribute of [
+      "data-start-sample",
+      "data-end-sample",
+      "data-processed-sample-count",
+      "data-worklet-process-count",
+      "data-capture-epoch",
+      "data-continuity-epoch",
+      "data-graph-generation",
+    ]) expect(component).toContain(attribute);
   });
 
   it("keeps phrase achievement inside the live stage and reserves results for explicit Stop", () => {

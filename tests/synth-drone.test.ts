@@ -134,6 +134,27 @@ describe("Sound Lab tonic drone", () => {
       .toBe(true);
   });
 
+  it("stops a voice that arrives after an explicit off during async startup", async () => {
+    let resolveContext!: (context: ReturnType<typeof fakeAudioContext>["context"]) => void;
+    const contextReady = new Promise<ReturnType<typeof fakeAudioContext>["context"]>((resolve) => {
+      resolveContext = resolve;
+    });
+    ensureAudioReady.mockReturnValue(contextReady);
+    const audio = fakeAudioContext();
+    const drone = new Drone();
+
+    const starting = drone.start(220, "sine", 0.18);
+    drone.stop();
+    resolveContext(audio.context);
+
+    await expect(starting).resolves.toBe(false);
+    expect(audio.oscillators).toHaveLength(4);
+    expect(audio.oscillators.every((oscillator) => oscillator.start.mock.calls.length === 1))
+      .toBe(true);
+    expect(audio.oscillators.every((oscillator) => oscillator.stop.mock.calls.length === 1))
+      .toBe(true);
+  });
+
   it("cannot regress to a long scheduled tone masquerading as an indefinite drone", () => {
     const source = readFileSync(
       new URL("../apps/web/src/audio/synth.ts", import.meta.url),

@@ -2,9 +2,10 @@ import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative, resolve } from "node:path";
 import process from "node:process";
 import ts from "typescript";
+import { auditNumericBoundaryAuthority } from "./audit-support/numeric-boundary-authority.mjs";
+import { auditObservationContinuityAuthority } from "./audit-support/observation-continuity-authority.mjs";
 import { printArchitectureReport } from "./audit-support/report.mjs";
 import { auditUserOwnedLiveLifetime } from "./audit-support/user-owned-live-lifetime.mjs";
-
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 const APPLICATION_ROOT = join(REPOSITORY_ROOT, "apps/web/src");
 const SCAN_ROOTS = [REPOSITORY_ROOT];
@@ -19,7 +20,6 @@ const REVIEWED_LARGE_SUPPORT_FILES = new Map([
   ["scripts/prove-voice-draw-browser.mjs", "cabinet browser assertion/report coordinator over shared proof support"],
   ["scripts/audit-support/user-owned-live-lifetime.mjs", "single AST authority registry and verifier for every user-owned live reducer"],
   ["tests/note-input-engine.test.ts", "exhaustive detector range, timbre, sample-rate, and confounder matrix"],
-  ["tests/pitch-diagnostic-transport.test.ts", "exact diagnostic transport schema and sample-identity matrix"],
   ["tests/range-simulator.test.ts", "range-profile migration and full-depth probing matrix"],
 ]);
 function isSupportSource(relativePath) {
@@ -28,7 +28,6 @@ function isSupportSource(relativePath) {
     || relativePath.includes("/test/")
     || /(?:\.test\.[cm]?[jt]sx?|_test\.go)$/u.test(relativePath);
 }
-
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
@@ -40,11 +39,9 @@ async function walk(directory) {
   }
   return files;
 }
-
 function lineNumber(sourceFile, position) {
   return sourceFile.getLineAndCharacterOfPosition(position).line + 1;
 }
-
 function functionName(node) {
   if (node.name && ts.isIdentifier(node.name)) return node.name.text;
   if (
@@ -55,7 +52,6 @@ function functionName(node) {
   ) return node.parent.name.text;
   return "<anonymous>";
 }
-
 function calledName(expression) {
   if (ts.isIdentifier(expression)) return expression.text;
   if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
@@ -421,7 +417,11 @@ const unreachableApplicationFiles = records.filter((record) =>
   && !reachable.has(record.path));
 
 const violations = [];
-violations.push(...auditUserOwnedLiveLifetime(records));
+violations.push(
+  ...auditNumericBoundaryAuthority(records),
+  ...auditObservationContinuityAuthority(records),
+  ...auditUserOwnedLiveLifetime(records),
+);
 for (const record of records) {
   const extension = extname(record.path);
   const supportSource = isSupportSource(record.relativePath);

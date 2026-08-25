@@ -114,7 +114,7 @@ describe("range-loop stored progress normalization", () => {
     });
   });
 
-  it("resets a complete-but-unfinalized passed snapshot so it cannot restore an empty queue", () => {
+  it("commits a complete-but-unfinalized lap forward so no earned cycle is lost", () => {
     const naturalTargets = targetsForFamily("low", "natural");
     const chromaticTargets = targetsForFamily("middle", "chromatic");
     const normalized = normalizeProgress({
@@ -137,12 +137,12 @@ describe("range-loop stored progress normalization", () => {
     expect(normalized.natural.low).toEqual({
       passedMidis: [],
       parkedMidis: [],
-      cyclesCompleted: 4,
+      cyclesCompleted: 5,
     });
     expect(normalized.chromatic.middle).toEqual({
       passedMidis: [],
       parkedMidis: [61],
-      cyclesCompleted: 2,
+      cyclesCompleted: 3,
     });
     expect(buildFamilyQueue(normalized, "natural", "low", "ascending"))
       .toEqual(naturalTargets);

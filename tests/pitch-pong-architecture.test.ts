@@ -18,6 +18,10 @@ const PITCH_PONG_SESSION = readFileSync(new URL(
   "../apps/web/src/features/voice-arcade/pitch-pong-session.ts",
   import.meta.url,
 ), "utf8");
+const PITCH_PONG_STYLES = readFileSync(new URL(
+  "../apps/web/src/styles-pitch-pong.css",
+  import.meta.url,
+), "utf8");
 const PONG_IMPLEMENTATION = [
   PITCH_PONG_SOURCE,
   PITCH_PONG_HOOK,
@@ -65,6 +69,12 @@ describe("Pitch Pong continuous-input architecture guard", () => {
     expect(PITCH_PONG_SOURCE).not.toContain('variant="scope"');
   });
 
+  it("positions every pitch label through the same controller mapping as the paddle", () => {
+    expect(PITCH_PONG_HOOK).toContain("mapPitchToNormalizedVertical(midi, spec.voiceAxisOptions)");
+    expect(PITCH_PONG_SOURCE).toContain("data-controller-position={topPercent}");
+    expect(PITCH_PONG_STYLES).not.toMatch(/pong-range-label:nth-of-type|pong-range-high|pong-range-low/);
+  });
+
   it("keeps runtime ownership out of the compact presentation component", () => {
     const presentationAt = PITCH_PONG_SOURCE.indexOf("export function PitchPong");
     expect(presentationAt).toBeGreaterThan(-1);
@@ -87,8 +97,9 @@ describe("Pitch Pong continuous-input architecture guard", () => {
   });
 
   it("reduces detector callbacks and physics from sample coordinates outside React", () => {
-    expect(PITCH_PONG_SESSION).toContain("observation.endSample - previous.endSample");
-    expect(PITCH_PONG_SESSION).toContain("hop / observation.sampleRate");
+    expect(PITCH_PONG_SESSION).toContain("observationContinuity(state.lastAuthority, observation)");
+    expect(PITCH_PONG_SESSION).toContain("const deltaSeconds = continuity.deltaSeconds");
+    expect(PITCH_PONG_SESSION).not.toMatch(/endSample\s*-\s*previous\.endSample/);
     expect(PITCH_PONG_SESSION).toContain("updatePongState(previousGame");
     expect(PITCH_PONG_SESSION).not.toMatch(/\bset[A-Z]\w*\s*\(|\bdispatch\s*\(/);
   });

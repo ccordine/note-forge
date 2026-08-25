@@ -1,5 +1,6 @@
 import type { PitchObservation, PitchObservationKind } from "@/audio/note-input";
 import { MICROPHONE_ANALYSIS_HOP_SECONDS } from "@/audio/microphone";
+import type { ObservationSampleAuthority } from "@/realtime/observation-continuity";
 
 export type PitchTunnelStatus = "idle" | "tracking" | "complete";
 
@@ -30,16 +31,7 @@ export interface ResolvedPitchTunnelOptions {
   readonly maximumCreditedIntervalSeconds: number;
 }
 
-export interface PitchTunnelAuthority {
-  readonly sampleRate: number;
-  readonly startSample: number;
-  readonly endSample: number;
-  readonly processedSampleCount: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly workletProcessCount: number;
-}
+export type PitchTunnelAuthority = ObservationSampleAuthority;
 
 export interface PitchTunnelAnchorCandidate {
   readonly midiFloat: number;

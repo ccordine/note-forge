@@ -16,7 +16,6 @@ import type {
 } from "./song-workspace";
 import { useSongWorkspace } from "./use-song-workspace";
 
-const MAX_MARKERS = 200;
 const MAX_PHRASE_TEXT_LENGTH = 500;
 const AUDIO_ACCEPT = "audio/*,.mp3,.m4a,.wav,.ogg,.flac";
 
@@ -185,7 +184,6 @@ function ConfigureSong({ workspace }: { workspace: Workspace }) {
   const addMarker = (type: "phrase" | "breath") => act({
     type: "marker-added",
     marker: { time: state.currentTime, type },
-    maximum: MAX_MARKERS,
   });
   return (
     <section className="song-current-stage" aria-labelledby="song-configure-title">
@@ -218,7 +216,7 @@ function ConfigureSong({ workspace }: { workspace: Workspace }) {
         </Panel>
         <Panel className="phrase-markers">
           <Eyebrow>Phrase notes</Eyebrow>
-          <div><ActionButton disabled={state.markers.length >= MAX_MARKERS} onClick={() => addMarker("phrase")}>+ Phrase</ActionButton><ActionButton disabled={state.markers.length >= MAX_MARKERS} onClick={() => addMarker("breath")}>+ Breath</ActionButton></div>
+          <div><ActionButton onClick={() => addMarker("phrase")}>+ Phrase</ActionButton><ActionButton onClick={() => addMarker("breath")}>+ Breath</ActionButton></div>
           <label className="field"><span>Notes / degrees</span><input value={state.phraseNote} maxLength={MAX_PHRASE_TEXT_LENGTH} onChange={(event) => act({ type: "phrase-note-changed", phraseNote: event.target.value })} placeholder="3 – 2 – 1 · land on E" /></label>
           <small>{state.markers.length} markers · {state.phraseNote.length}/{MAX_PHRASE_TEXT_LENGTH} characters</small>
         </Panel>

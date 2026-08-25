@@ -67,10 +67,10 @@
 .pitch-module.locked .scope-cents b { color: var(--lime); }
 .scope-cents b small { margin-left: 2px; color: inherit; font-size: 9px; }
 .scope-cents > span { display: block; max-width: 100px; margin-top: 5px; color: var(--dim); font: 7px/1.4 var(--mono); }
-.scope-pitch-lane { position: relative; height: 25px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),rgba(239,242,224,.06) 25%); }
+.scope-pitch-lane { position: relative; height: 25px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: linear-gradient(90deg,rgba(99,215,255,.08),transparent 36%,transparent 64%,rgba(255,132,100,.08)); }
 .scope-pitch-lane .lane-tolerance { position: absolute; inset-block: 0; background: rgba(216,255,62,.09); border-inline: 1px solid rgba(216,255,62,.24); }
-.scope-pitch-lane .lane-center { position: absolute; left: 50%; inset-block: 0; width: 1px; background: var(--lime); opacity: .75; }
-.scope-pitch-lane > b { position: absolute; top: 4px; width: 15px; height: 15px; margin-left: -7.5px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 12px rgba(255,107,69,.45); transition: left .08s linear; }
+.scope-pitch-lane .lane-center { position: absolute; inset-block: 0; width: 1px; background: var(--lime); opacity: .75; }
+.scope-pitch-lane > b { position: absolute; top: 4px; width: 15px; height: 15px; margin-left: -7.5px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 12px rgba(255,107,69,.45); }
 .scope-pitch-lane > b.in-band { background: var(--lime); box-shadow: 0 0 12px rgba(216,255,62,.4); }
 
 .scope-stats { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 1px; margin-top: 17px; padding: 1px; overflow: hidden; border-radius: 9px; background: var(--line); }

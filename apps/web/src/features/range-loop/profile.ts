@@ -19,8 +19,9 @@ export interface RegisterShiftMarker {
 }
 
 /**
- * The current persisted voice-map authority. `usableMidis` is replaced from a
- * Range Simulator summary; it is not inferred from exercise history.
+ * The current persisted voice-map authority. `usableMidis` is replaced only
+ * by a naturally completed Range Simulator summary; an explicitly stopped
+ * partial assessment cannot erase untested established range evidence.
  */
 export interface PersonalRangeProfile {
   baseline: ComfortableBaseline;

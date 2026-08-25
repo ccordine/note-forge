@@ -3,6 +3,7 @@ import {
   type SeedValue,
   type VoiceArcadeDifficulty,
 } from "./model";
+import { clamp } from "@/lib/numeric";
 import type {
   FrequencyTunedResonator,
   ResonanceLevelDefinition,
@@ -219,7 +220,7 @@ export function generateResonanceLevel(
       id: `gate-resonator-${index + 1}`,
       position: { x: gateX, y: gapCenter },
       targetMidi: notes[index]!,
-      bandwidthCents: Math.max(16, preset.bandwidthCents - Math.min(level - 1, 10)),
+      bandwidthCents: Math.max(16, preset.bandwidthCents - clamp(level - 1, 0, 10)),
       gain: preset.resonatorGain,
       // A resonator must reach the entire approach segment, including the
       // largest seeded vertical offset. The force still falls off smoothly and
@@ -236,7 +237,7 @@ export function generateResonanceLevel(
     id: "goal-resonator",
     position: { x: 10.85, y: finalY },
     targetMidi: notes.at(-1)!,
-    bandwidthCents: Math.max(16, preset.bandwidthCents - Math.min(level - 1, 10)),
+    bandwidthCents: Math.max(16, preset.bandwidthCents - clamp(level - 1, 0, 10)),
     gain: preset.resonatorGain * 1.2,
     influenceRadius: 9.5,
     mode: "attract",

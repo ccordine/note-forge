@@ -626,15 +626,22 @@ microphone
 getUserMedia
    │
    ▼
-AudioWorklet PCM window
+AudioWorklet overlapping PCM window
    │
    ▼
-stateless pitch detector ─────► shared live frame ─────► rendered note
-   │                                  │
-   └──► voicing/confidence result     └──► feature-local scorer
-                                                │
-                                                ▼
-                                         exercise state
+raw YIN / harmonic-family candidate
+   │
+   ▼
+shared target-independent temporal tracker
+   │
+   ▼
+one immutable PitchObservation per window
+   │
+   ├──► rendered live evidence
+   └──► feature-local derivation / scoring
+                 │
+                 ▼
+          exercise state
 
 AudioWorklet level window ─────► diagnostic meter (never pitch admission)
 
@@ -666,14 +673,38 @@ Implementation strategy:
 * regular hop size;
 * parabolic interpolation;
 * confidence/periodicity threshold;
-* one direct result for every live PCM window;
+* one raw musical candidate and one authoritative observation for every live
+  PCM window;
 * optional post-hoc smoothing for recorded contours and aggregate scoring only.
 
-Live note display must not wait for smoothing, multi-frame agreement, calibration,
-an amplitude gate, or a lesson/scoring phase. Once microphone input is enabled,
-every worklet pitch window is analyzed across the canonical 45–1,200 Hz range
-until explicit Stop or stream failure. Prompts and navigation do not pause,
-mute, clear, or replace that result.
+Live note display must not wait for post-hoc smoothing, feature- or target-aware
+agreement, calibration, an amplitude gate, or a lesson/scoring phase. The one
+shared temporal tracker performs only causal sensor interpretation. A cold
+attack and fine motion up to 45 cents are authoritative immediately. A single
+remote candidate is published on its exact window as
+`uncertain`/`temporally-ambiguous`, with the raw candidate preserved and no stale
+previous note displayed; one coherent candidate on the next 20 ms hop confirms
+the real step. The rule is independent of the requested note and every scorer.
+
+Once microphone input is enabled, every worklet pitch window is analyzed across
+the canonical 45–1,200 Hz range until the user explicitly chooses the global
+**Disable voice** action or the media resource actually fails. Prompts,
+navigation, silence, uncertainty, scoring, and feature completion do not pause,
+mute, clear, or replace that stream.
+
+Every user-started live vocal workflow has an indefinite lifetime. Start accepts
+no duration, deadline, timeout, countdown, or automatic-completion condition;
+only the user's visible **Finish** or **Stop** command may end that feature
+session. A threshold may record an achievement or enable **Next**, but the live
+surface and exact sample-time evidence continue until that explicit command.
+
+Every user-facing isolated note or tonic uses the one app-owned sustained-note
+lane. The only lifetime control is one visible **Play / Stop** toggle. Its
+request contains frequency, timbre, and amplitude but no duration or automatic
+cutoff. Start, Finish, reset, scoring, target achievement, detector evidence,
+and workflow transitions cannot stop it; changing target or timbre retunes the
+same running lane. Authored intervals, chords, melodies, and songs remain a
+separate temporal transport and may have musical durations.
 
 Use a capture window long enough for the 45 Hz lower boundary at every supported
 sample rate. The production capture-size function and detector proof must verify

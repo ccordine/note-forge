@@ -28,15 +28,19 @@ describe("non-Arcade live trainer architecture", () => {
     expect(source).not.toMatch(/\bActiveVoice\b|guideVoice|promptVoice|CONNECTING|STARTING AUDIO/);
     expect(source).not.toMatch(/input\.(?:frames|liveFrame|telemetry)\b/);
     expect(source).toContain("useAttemptRunner");
-    expect(source).toContain("BRIEF_REFERENCE_SECONDS");
+    expect(source).toContain("useSustainedNote");
+    expect(source).toContain("<NotePlaybackToggle");
+    expect(source).not.toMatch(/BRIEF_REFERENCE_SECONDS|attempt\.playReference|\bplayTone\s*\(/);
   });
 
-  it("keeps prompt playback independent from starting a measurement", () => {
-    for (const source of Object.values(sources)) {
-      expect(source).toMatch(/const (?:hearTarget|hearReference) = \(\) => attempt\.playReference/);
+  it("keeps the one sustained note toggle independent from measurement lifetime", () => {
+    for (const [name, source] of Object.entries(sources)) {
+      expect(source.match(/useSustainedNote\s*\(/g), name).toHaveLength(1);
+      expect(source.match(/<NotePlaybackToggle\b/g), name).toHaveLength(1);
       expect(source).toMatch(/attempt\.begin\(/);
       const beginBody = source.match(/const begin = \(\) => \{([\s\S]*?)\n  \};/)?.[1] ?? "";
-      expect(beginBody).not.toMatch(/playTone|input\.(?:enable|disable)/);
+      expect(beginBody).not.toMatch(/playback|\.toggle\s*\(|playTone|input\.(?:enable|disable)/i);
+      expect(source).not.toMatch(/(?:attempt\.(?:begin|finish|reset)|resetAttempt)\s*\([^)]*\)[\s\S]{0,120}(?:Playback)?\.toggle\s*\(/i);
     }
   });
 
@@ -98,14 +102,16 @@ describe("non-Arcade live trainer architecture", () => {
     }
   });
 
-  it("owns prompt cancellation in one shared abort scope", () => {
+  it("reserves the abort scope for authored gestures, never isolated notes", () => {
     expect(effectScope.match(/new AbortController\s*\(/g)).toHaveLength(1);
     expect(effectScope).not.toMatch(/\bsetTimeout\b|\bsetInterval\b|generation|mounted/);
     expect(effectScope).toContain("attachVoiceToScope");
+    expect(effectScope).not.toContain("BRIEF_REFERENCE_SECONDS");
     expect(family).toContain("useSessionEffectScope");
     expect(family).not.toContain("playSafely");
-    expect(rangeLoopSession).toContain("useSessionEffectScope");
-    expect(rangeSimulator).toContain("useSessionEffectScope");
+    expect(rangeLoopSession).not.toContain("useSessionEffectScope");
+    expect(rangeSimulator).not.toContain("useSessionEffectScope");
+    for (const source of Object.values(sources)) expect(source).not.toContain("useSessionEffectScope");
     for (const source of [...Object.values(sources), family, rangeLoopSession, rangeSimulator]) {
       expect(source).not.toMatch(/\bActiveVoice\b|\bplaySafely\b|input\.(?:enable|disable)\s*\(/);
     }

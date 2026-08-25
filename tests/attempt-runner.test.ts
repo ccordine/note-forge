@@ -94,10 +94,10 @@ describe("sample-authoritative AttemptRunner", () => {
     expect(state.elapsedSeconds).toBeCloseTo(0.02, 8);
     const scoringFrames = attemptScoringFrames(state);
     expect(scoringFrames.map((frame) => frame.timeSeconds))
-      .toEqual([0, 0, 0, 0, 0.02]);
+      .toEqual([0, 0, 0, 0.02]);
     expect(scoringFrames.map((frame) => frame.voiced))
-      .toEqual([true, false, false, false, true]);
-    expect(state.scoringAggregate.totalFrameCount).toBe(5);
+      .toEqual([true, false, false, true]);
+    expect(state.scoringAggregate.totalFrameCount).toBe(4);
     expect(state.scoringAggregate.analyzedFrameCount).toBe(2);
   });
 

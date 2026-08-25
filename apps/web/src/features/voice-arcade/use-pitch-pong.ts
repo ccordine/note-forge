@@ -5,16 +5,13 @@ import {
   type CSSProperties,
 } from "react";
 import { useAudioInput } from "@/audio/use-audio-input";
+import { clampPercent } from "@/lib/numeric";
 import {
   PitchPongRuntime,
 } from "./pitch-pong-runtime";
-import { getDifficultyPreset } from "./model";
+import { getDifficultyPreset, mapPitchToNormalizedVertical } from "./model";
 import { createPitchPongSpec } from "./pitch-pong-session";
 import type { ArcadeGameProps } from "./types";
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 /** React subscribes to one bounded runtime snapshot; detector callbacks stay imperative. */
 export function usePitchPongRuntime({
@@ -70,7 +67,11 @@ export function usePitchPongRuntime({
     voiceRange.lowMidi,
   ].filter((_, index) => spec.curriculum.feedback.rangeLabelDensity === "full"
     || spec.curriculum.feedback.rangeLabelDensity === "anchors"
-      && (index === 0 || index === 2 || index === 4));
+      && (index === 0 || index === 2 || index === 4))
+    .map((midi) => Object.freeze({
+      midi,
+      topPercent: mapPitchToNormalizedVertical(midi, spec.voiceAxisOptions).normalizedY * 100,
+    }));
 
   return {
     cancelBeforePlay: runtime.cancel,
@@ -84,7 +85,7 @@ export function usePitchPongRuntime({
     achievementCount: state.achievementCount,
     latestAchievement: state.latestAchievement,
     maximumRally: state.stats.maximumRally,
-    maximumRallyPercent: clamp(state.stats.maximumRally / 10 * 100, 0, 100),
+    maximumRallyPercent: clampPercent(state.stats.maximumRally / 10 * 100),
     phase: state.phase,
     preset: getDifficultyPreset(difficulty),
     rangeLabels,

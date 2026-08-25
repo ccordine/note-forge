@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
-  VOICE_DRAW_MAX_RETAINED_SEGMENTS,
   centerVoiceDrawCursor,
   clearVoiceDraw,
   configureVoiceDrawState,
@@ -174,7 +173,7 @@ describe("Voice Draw deterministic engine", () => {
     expect(state.cursor.x).toBeGreaterThan(finishedCursor.x);
   });
 
-  it("bounds adversarial alternating direction/style history without ending live drawing", () => {
+  it("preserves the beginning and whole-session aggregates beyond the former 2,048-segment cutoff", () => {
     const bank = createVoiceDrawNoteBank(RANGE);
     const left = bank.mappings.find(({ direction }) => direction === "left")!;
     const right = bank.mappings.find(({ direction }) => direction === "right")!;
@@ -185,7 +184,7 @@ describe("Voice Draw deterministic engine", () => {
       observation(4_800, { nearestMidi: right.midi }),
     );
 
-    const emittedSegments = VOICE_DRAW_MAX_RETAINED_SEGMENTS + 3_000;
+    const emittedSegments = 2_048 + 256;
     for (let command = 0; command < emittedSegments; command += 1) {
       state = configureVoiceDrawState(state, {
         style: {
@@ -202,19 +201,26 @@ describe("Voice Draw deterministic engine", () => {
       );
     }
 
-    expect(state.segments).toHaveLength(VOICE_DRAW_MAX_RETAINED_SEGMENTS);
-    expect(state.retiredSegmentCount).toBe(emittedSegments - VOICE_DRAW_MAX_RETAINED_SEGMENTS);
+    expect(state.segments).toHaveLength(emittedSegments);
+    expect(state.segments[0]).toMatchObject({
+      startSample: 4_800,
+      endSample: 5_760,
+      direction: "right",
+    });
     expect(state.observedFrameCount).toBe(emittedSegments + 1);
     expect(state.movementFrameCount).toBe(emittedSegments);
     expect(state.lastAuthority?.endSample).toBe(4_800 + emittedSegments * 960);
     expect(state.activeDirection).toBe("left");
+    expect(state.totalDistance).toBeGreaterThan(0);
 
     const continued = updateVoiceDrawFromObservation(
       state,
       observation(4_800 + (emittedSegments + 1) * 960, { nearestMidi: right.midi }),
     );
     expect(continued.observedFrameCount).toBe(state.observedFrameCount + 1);
-    expect(continued.segments.length).toBeLessThanOrEqual(VOICE_DRAW_MAX_RETAINED_SEGMENTS);
+    expect(continued.segments).toHaveLength(emittedSegments + 1);
+    expect(continued.segments[0]).toBe(state.segments[0]);
+    expect(continued.totalDistance).toBeGreaterThanOrEqual(state.totalDistance);
   });
 
   it("maps eight consecutive chromatic notes clockwise through every direction", () => {
@@ -276,7 +282,7 @@ describe("Voice Draw deterministic engine", () => {
     expect(highBank.mappings.every(({ inProfileRange }) => inProfileRange)).toBe(true);
   });
 
-  it("integrates identical sample time identically at different observation cadences", () => {
+  it("never catches up motion across a lower observation cadence", () => {
     const midi = createVoiceDrawNoteBank(RANGE).mappings[2]!.midi;
     const coarse = feed(engineAtCenter(), [
       observation(4_800, { nearestMidi: midi }),
@@ -289,11 +295,12 @@ describe("Voice Draw deterministic engine", () => {
       )),
     ]);
 
-    expect(coarse.cursor.x).toBeCloseTo(0.6, 12);
-    expect(fine.cursor.x).toBeCloseTo(coarse.cursor.x, 12);
+    expect(coarse.cursor.x).toBeCloseTo(0.5, 12);
+    expect(fine.cursor.x).toBeCloseTo(0.6, 12);
     expect(fine.cursor.y).toBeCloseTo(coarse.cursor.y, 12);
-    expect(fine.activeHeldSeconds).toBeCloseTo(coarse.activeHeldSeconds, 12);
-    expect(coarse.segments).toHaveLength(1);
+    expect(coarse.activeHeldSeconds).toBe(0);
+    expect(fine.activeHeldSeconds).toBeCloseTo(0.1, 12);
+    expect(coarse.segments).toHaveLength(0);
     expect(fine.segments).toHaveLength(1);
     expect(fine.segments[0]?.durationSeconds).toBeCloseTo(0.1, 12);
   });

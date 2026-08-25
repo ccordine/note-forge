@@ -1,8 +1,10 @@
 import { useReducer } from "react";
-import { playSafely, playTone, playToneSequence, type Timbre } from "@/audio/synth";
+import { playSafely, playToneSequence, type Timbre } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { continuousMidiToHz, noteLabel, pitchClassLabel } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, PlayButton } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import {
   advancedAnswerIsCorrect,
   advancedAnswerKind,
@@ -51,11 +53,6 @@ function playAdvancedTrial(
   crossTimbre: boolean,
 ): void {
   if (mode === "pitch-class" || mode === "octave" || mode === "complete") {
-    playSafely(playTone({
-      frequencyHz: continuousMidiToHz(trial.targetMidi),
-      timbre: crossTimbre ? trial.timbreB : timbre,
-      duration: 1.15,
-    }), "Ear-training tone");
     return;
   }
 
@@ -88,6 +85,30 @@ function playAdvancedTrial(
       amplitude: 0.24,
     },
   ]), "Ear-training comparison");
+}
+
+function AdvancedSingleNoteToggle({
+  trial,
+  timbre,
+  crossTimbre,
+  labelsHidden,
+}: {
+  readonly trial: ReturnType<typeof createAdvancedEarTrial>;
+  readonly timbre: Timbre;
+  readonly crossTimbre: boolean;
+  readonly labelsHidden: boolean;
+}) {
+  const playback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(trial.targetMidi),
+    timbre: crossTimbre ? trial.timbreB : timbre,
+    amplitude: 0.22,
+  });
+  return (
+    <NotePlaybackToggle
+      label={labelsHidden ? "prompt" : noteLabel(trial.targetMidi)}
+      playback={playback}
+    />
+  );
 }
 
 function familyTimbre(
@@ -286,6 +307,7 @@ export function AdvancedEarActivity({
   const kind = advancedAnswerKind(mode);
   const pitchClass = targetPitchClass(state.trial);
   const octave = targetOctave(state.trial);
+  const singleNotePrompt = mode === "pitch-class" || mode === "octave" || mode === "complete";
   const replay = () => playAdvancedTrial(mode, state.trial, timbre, crossTimbre);
 
   const completePrimaryAction = () => {
@@ -351,20 +373,29 @@ export function AdvancedEarActivity({
           <div className="trial-index">
             TRIAL {String(state.score.attempts + 1).padStart(2, "0")} <span /> {mode}
           </div>
-          <button className="sound-orb" type="button" onClick={replay} aria-label="Play prompt">
+          <div className="sound-orb" aria-hidden="true">
             <div className="orb-ring one" />
             <div className="orb-ring two" />
             <div className="orb-ring three" />
             <Icon name="play" size={32} />
-            <span>PLAY SOUND</span>
-          </button>
+            <span>{singleNotePrompt ? "SOUND" : "PLAY SOUND"}</span>
+          </div>
           <h2>{advancedEarPrompt(mode)}</h2>
           <p>
             {crossTimbre
               ? `Timbres vary independently: ${state.trial.timbreA} → ${state.trial.timbreB}.`
               : `Every sound uses the selected ${timbre} timbre.`}
           </p>
-          <PlayButton label="Replay prompt" onClick={replay} />
+          {singleNotePrompt
+            ? (
+              <AdvancedSingleNoteToggle
+                trial={state.trial}
+                timbre={timbre}
+                crossTimbre={crossTimbre}
+                labelsHidden={labelsHidden}
+              />
+            )
+            : <PlayButton label="Play prompt" onClick={replay} />}
         </Panel>
 
         <Panel className="answer-card">

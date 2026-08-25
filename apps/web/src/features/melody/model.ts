@@ -132,7 +132,9 @@ export function appendDrawPoint(
 ): readonly DrawPoint[] {
   const previous = points.at(-1);
   if (previous && point.x < previous.x + 3) return points;
-  return [...points.slice(-199), point];
+  // Pointer spacing already bounds a 600 px gesture to about 201 meaningful
+  // points. Retain its beginning: eviction changes both the drawing and audio.
+  return [...points, point];
 }
 
 export function drawPointsToMidi(points: readonly DrawPoint[]): readonly number[] {

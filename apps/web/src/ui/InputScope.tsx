@@ -12,23 +12,23 @@ import {
   type InputTelemetry,
 } from "@/audio/use-audio-input";
 import type { PitchObservation } from "@/audio/note-input";
+import {
+  AUDIO_LEVEL_DISPLAY_MAXIMUM_DBFS,
+  AUDIO_LEVEL_DISPLAY_MINIMUM_DBFS,
+  dbfsDisplayPercent,
+} from "@/lib/audio-level-display";
+import { clamp } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  pitchMeterBandPercent,
+  pitchMeterPositionPercent,
+} from "@/ui/voice/pitch-meter-scale";
 
 export interface InputScopeProps {
   input: AudioInputController;
   targetMidiFloat?: number;
   toleranceCents?: number;
   title?: string;
-}
-
-const METER_MIN_DBFS = -96;
-const METER_MAX_DBFS = 0;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function meterPercent(dbfs: number): number {
-  return clamp((dbfs - METER_MIN_DBFS) / (METER_MAX_DBFS - METER_MIN_DBFS), 0, 1) * 100;
 }
 
 function formatDb(value: number | null | undefined): string {
@@ -76,7 +76,7 @@ function diagnosis(input: Readonly<{
     };
   }
   const frame = input.liveFrame;
-  if (frame?.voiced && frame.nearestMidi !== null) {
+  if (frame && isAuthoritativeVoicedPitch(frame)) {
     return {
       label: `${noteLabel(frame.nearestMidi)} detected`,
       detail: "Direct result from the current PCM window with no acquisition delay.",
@@ -114,7 +114,9 @@ function AdvancedInputDiagnostics({
   const { telemetry } = useAudioTelemetrySnapshot(input);
   const { telemetryHistory } = useAudioHistorySnapshot(input);
   const { state, microphoneInfo, transportRepairCount } = transport;
-  const inputPercent = meterPercent(telemetry?.rmsDbfs ?? METER_MIN_DBFS);
+  const inputPercent = dbfsDisplayPercent(
+    telemetry?.rmsDbfs ?? AUDIO_LEVEL_DISPLAY_MINIMUM_DBFS,
+  );
   const windowDurationMs = microphoneInfo
     ? microphoneInfo.analysisWindowSize / microphoneInfo.sampleRate * 1_000
     : null;
@@ -125,7 +127,7 @@ function AdvancedInputDiagnostics({
     if (telemetryHistory.length < 2) return "";
     return telemetryHistory.map((item, index) => {
       const x = index / (telemetryHistory.length - 1) * 640;
-      const y = 104 - meterPercent(item.rmsDbfs) / 100 * 96;
+      const y = 104 - dbfsDisplayPercent(item.rmsDbfs) / 100 * 96;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(" ");
   }, [telemetryHistory]);
@@ -133,7 +135,7 @@ function AdvancedInputDiagnostics({
     if (telemetryHistory.length < 2) return "";
     return telemetryHistory.map((item, index) => {
       const x = index / (telemetryHistory.length - 1) * 640;
-      const y = 104 - meterPercent(item.peakDbfs) / 100 * 96;
+      const y = 104 - dbfsDisplayPercent(item.peakDbfs) / 100 * 96;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(" ");
   }, [telemetryHistory]);
@@ -150,7 +152,7 @@ function AdvancedInputDiagnostics({
             {peakHistoryPoints && <polyline className="scope-peak-line" points={peakHistoryPoints} />}
             {telemetryHistory.map((item, index) => hasMeaningfulClipping(item) && <circle key={`clip-${index}`} className="clip-point" cx={index / Math.max(1, telemetryHistory.length - 1) * 640} cy="7" r="2.5" />)}
           </svg>
-          <div className="scope-level-bar" role="meter" aria-label="Current microphone level" aria-valuemin={METER_MIN_DBFS} aria-valuemax={METER_MAX_DBFS} aria-valuenow={telemetry ? Math.round(clamp(telemetry.rmsDbfs, METER_MIN_DBFS, METER_MAX_DBFS)) : undefined}>
+          <div className="scope-level-bar" role="meter" aria-label="Current microphone level" aria-valuemin={AUDIO_LEVEL_DISPLAY_MINIMUM_DBFS} aria-valuemax={AUDIO_LEVEL_DISPLAY_MAXIMUM_DBFS} aria-valuenow={telemetry ? Math.round(clamp(telemetry.rmsDbfs, AUDIO_LEVEL_DISPLAY_MINIMUM_DBFS, AUDIO_LEVEL_DISPLAY_MAXIMUM_DBFS)) : undefined}>
             <span style={{ width: `${inputPercent}%` }} />
           </div>
         </div>
@@ -195,17 +197,42 @@ export function InputScope({
   const pitch = useAudioPitchSnapshot(input);
   const { state, error } = transport;
   const frame = state === "running" ? pitch.liveFrame : undefined;
+  const voicedFrame = frame && isAuthoritativeVoicedPitch(frame) ? frame : undefined;
   const liveNote = state === "running" ? pitch.liveNote : null;
   const status = diagnosis({ state, error, liveFrame: frame });
-  const pitchError = frame?.midiFloat == null
+  const pitchError = voicedFrame?.midiFloat == null
     ? null
     : targetMidiFloat === undefined
-      ? frame.centsFromNearest
-      : (frame.midiFloat - targetMidiFloat) * 100;
-  const pitchPosition = pitchError === null
-    ? 50
-    : clamp((pitchError + 100) / 200, 0, 1) * 100;
+      ? voicedFrame.centsFromNearest
+      : (voicedFrame.midiFloat - targetMidiFloat) * 100;
+  const pitchPosition = pitchMeterPositionPercent(
+    voicedFrame?.midiFloat ?? null,
+    targetMidiFloat,
+  );
+  const targetBand = targetMidiFloat === undefined
+    ? null
+    : pitchMeterBandPercent(targetMidiFloat, toleranceCents);
+  const targetPosition = targetMidiFloat === undefined
+    ? null
+    : pitchMeterPositionPercent(targetMidiFloat, targetMidiFloat);
   const confidence = frame?.confidence ?? 0;
+  const pitchInBand = pitchError !== null
+    && Math.abs(pitchError) <= toleranceCents;
+  const pitchPresentationClaim = frame === undefined
+    ? ""
+    : JSON.stringify([
+        frame.endSample,
+        frame.captureEpoch,
+        frame.continuityEpoch,
+        frame.graphGeneration,
+        frame.observationKind,
+        frame.pitchTrackingDecision ?? null,
+        frame.pitchCandidate?.nearestMidi ?? null,
+        frame.pitchCandidate?.frequencyHz ?? null,
+        frame.pitchCandidate?.rawCandidate?.frequencyHz ?? null,
+        voicedFrame?.nearestMidi ?? null,
+        state,
+      ]);
   const livePathLabel = state === "running"
     ? "LIVE PCM → NOTE · CONTINUOUS"
     : state === "opening"
@@ -222,10 +249,16 @@ export function InputScope({
       data-input-state={state}
       data-frame-count={input.processedWindowCount}
       data-frame-time={frame?.timeSeconds ?? ""}
-      data-end-sample={pitch.liveFrame?.endSample ?? ""}
-      data-capture-epoch={pitch.liveFrame?.captureEpoch ?? ""}
-      data-continuity-epoch={pitch.liveFrame?.continuityEpoch ?? ""}
-      data-graph-generation={pitch.liveFrame?.graphGeneration ?? ""}
+      data-observation-kind={frame?.observationKind ?? ""}
+      data-end-sample={frame?.endSample ?? ""}
+      data-capture-epoch={frame?.captureEpoch ?? ""}
+      data-continuity-epoch={frame?.continuityEpoch ?? ""}
+      data-graph-generation={frame?.graphGeneration ?? ""}
+      data-pitch-tracking-decision={frame?.pitchTrackingDecision ?? ""}
+      data-pitch-candidate-midi={frame?.pitchCandidate?.nearestMidi ?? ""}
+      data-pitch-candidate-frequency={frame?.pitchCandidate?.frequencyHz ?? ""}
+      data-pitch-candidate-raw-frequency={frame?.pitchCandidate?.rawCandidate?.frequencyHz ?? ""}
+      data-pitch-presentation-claim={pitchPresentationClaim}
       data-held-samples={liveNote?.heldSamples ?? ""}
       data-held-seconds={liveNote?.heldSeconds ?? ""}
     >
@@ -242,16 +275,30 @@ export function InputScope({
 
       {error && <div className="scope-error"><b>Microphone error</b><span>{error}</span></div>}
 
-      <div className={`scope-module pitch-module scope-primary-result ${frame?.voiced ? "locked" : ""}`}>
+      <div className={`scope-module pitch-module scope-primary-result ${pitchInBand ? "locked" : ""}`}>
         <div className="scope-module-label"><span>DIRECT NOTE RESULT</span><b>{frame ? `${Math.round(confidence * 100)}% confidence` : "waiting"}</b></div>
-        <div className="scope-pitch-readout" data-detected-note={frame?.voiced && frame.nearestMidi !== null ? noteLabel(frame.nearestMidi) : ""}>
-          <div><strong>{frame?.voiced && frame.nearestMidi !== null ? noteLabel(frame.nearestMidi) : "—"}</strong><span>{frame?.frequencyHz == null ? "No periodic pitch in this window" : `${frame.frequencyHz.toFixed(2)} Hz · ${liveNote?.heldSeconds.toFixed(2) ?? "0.00"} s in note region`}</span></div>
+        <div className="scope-pitch-readout" data-detected-note={voicedFrame ? noteLabel(voicedFrame.nearestMidi) : ""}>
+          <div><strong>{voicedFrame ? noteLabel(voicedFrame.nearestMidi) : "—"}</strong><span>{!voicedFrame ? "No periodic pitch in this window" : `${voicedFrame.frequencyHz.toFixed(2)} Hz · ${liveNote?.heldSeconds.toFixed(2) ?? "0.00"} s in note region`}</span></div>
           <div className="scope-cents"><b>{pitchError === null ? "—" : signed(pitchError, 0)}{pitchError !== null && <small>¢</small>}</b><span>{targetMidiFloat === undefined ? "cents from nearest note" : "cents from target"}</span></div>
         </div>
-        <div className="scope-pitch-lane" aria-label={pitchError === null ? "No pitch coordinate" : `${signed(pitchError, 0)} cents`}>
-          <span className="lane-tolerance" style={{ left: `${50 - toleranceCents / 2}%`, width: `${toleranceCents}%` }} />
-          <i className="lane-center" />
-          {pitchError !== null && <b className={Math.abs(pitchError) <= toleranceCents ? "in-band" : ""} style={{ left: `${pitchPosition}%` }} />}
+        <div
+          className="scope-pitch-lane"
+          data-live-pitch-meter
+          data-live-midi={voicedFrame?.midiFloat ?? ""}
+          data-pitch-position={pitchPosition ?? ""}
+          data-pitch-scale={targetMidiFloat === undefined ? "full-detector-range" : "full-depth-target-lens"}
+          aria-label={pitchError === null ? "No pitch coordinate" : `${signed(pitchError, 0)} cents`}
+        >
+          {targetBand && <span className="lane-tolerance" style={{ left: `${targetBand.leftPercent}%`, width: `${targetBand.widthPercent}%` }} />}
+          {targetPosition !== null && <i
+            className="lane-center"
+            style={{ left: `${targetPosition}%` }}
+          />}
+          {pitchPosition !== null && <b
+            className={pitchError !== null && Math.abs(pitchError) <= toleranceCents ? "in-band" : ""}
+            data-live-pitch-marker
+            style={{ left: `${pitchPosition}%` }}
+          />}
         </div>
       </div>
 

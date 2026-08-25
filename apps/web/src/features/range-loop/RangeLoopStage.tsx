@@ -1,5 +1,6 @@
 import { noteLabel } from "@/lib/music-display";
-import { ActionButton, Panel, PlayButton } from "@/ui/Controls";
+import { ActionButton, Panel } from "@/ui/Controls";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import { RangeLoopSettings } from "./RangeLoopSettings";
 import type { RangeLoopSession } from "./use-range-loop-session";
@@ -18,11 +19,10 @@ function RangeLoopToolbar({ session }: { readonly session: RangeLoopSession }) {
         <span className="range-loop-input-guidance">Enable voice in the header.</span>
       )}
       <span className="range-loop-reference-action">
-        <PlayButton
-          label={`Hear ${noteLabel(session.targetMidi)}`}
-          onClick={session.hearReference}
+        <NotePlaybackToggle
+          label={noteLabel(session.targetMidi)}
+          playback={session.referencePlayback}
         />
-        <small>short reference</small>
       </span>
       {session.phase === "tracking" && (
         <ActionButton onClick={session.resetHold}>Reset hold</ActionButton>
@@ -121,7 +121,6 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
         }}
         holdMode="occupancy"
         title={`Range Loop live target ${noteLabel(session.targetMidi)}`}
-        diagnosticsFlow="range-loop"
       />
 
       <RangeLoopSequence session={session} />

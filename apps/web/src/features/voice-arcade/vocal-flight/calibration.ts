@@ -1,4 +1,6 @@
-import { authorityOf, continuousSampleDelta } from "./vocal-control";
+import { hasQualifiedBrightnessEvidence } from "@/audio/vocal-brightness";
+import { clamp } from "@/lib/numeric";
+import { observationContinuity } from "@/realtime/observation-continuity";
 import type {
   SampleAuthority,
   VocalControlCalibration,
@@ -137,17 +139,12 @@ function reliablePitch(sample: Readonly<VocalTelemetrySample>): boolean {
     && Number.isFinite(sample.frequencyHz)
     && sample.frequencyHz > 0
     && sample.midiFloat !== null
-    && Number.isFinite(sample.midiFloat)
-    && sample.confidence >= 0.55;
+    && Number.isFinite(sample.midiFloat);
 }
 
 function reliableBrightness(sample: Readonly<VocalTelemetrySample>): boolean {
   return sample.observationKind === "voiced"
-    && sample.brightness !== null
-    && Number.isFinite(sample.brightness)
-    && sample.brightness >= 0
-    && sample.brightness <= 1
-    && sample.brightnessConfidence >= 0.55;
+    && hasQualifiedBrightnessEvidence(sample);
 }
 
 function centerValues(measurements: Readonly<VocalCalibrationMeasurements>): {
@@ -366,12 +363,13 @@ function observe(
   sample: Readonly<VocalTelemetrySample>,
 ): VocalCalibrationState {
   if (state.stage === "complete") return state as VocalCalibrationState;
-  const deltaSeconds = continuousSampleDelta(state.lastAuthority, sample);
-  const lastAuthority = authorityOf(sample);
+  const continuity = observationContinuity(state.lastAuthority, sample);
+  const deltaSeconds = continuity.deltaSeconds;
+  const lastAuthority = continuity.authority;
   // Authority boundaries seed only. They are never calibration evidence.
-  if (deltaSeconds <= 0) return Object.freeze({
+  if (!continuity.accepted || deltaSeconds <= 0) return Object.freeze({
     ...state,
-    lastAuthority,
+    lastAuthority: continuity.accepted ? lastAuthority : state.lastAuthority,
     lastPitchQualified: false,
     lastBrightnessQualified: false,
     recoveryArmed: false, currentRecoverySeconds: 0, recoveryCenterEngaged: false,
@@ -497,7 +495,7 @@ function moveStage(state: Readonly<VocalCalibrationState>, direction: 1 | -1): V
     if (message !== null) return Object.freeze({ ...state, validationMessage: message });
   }
   const currentIndex = STAGES.indexOf(state.stage);
-  const ordinaryStage = STAGES[Math.max(0, Math.min(STAGES.length - 1, currentIndex + direction))]!;
+  const ordinaryStage = STAGES[clamp(currentIndex + direction, 0, STAGES.length - 1)]!;
   const stage = direction === 1
     && state.brightnessCapability === "limited"
     && state.stage === "pitch-lower"

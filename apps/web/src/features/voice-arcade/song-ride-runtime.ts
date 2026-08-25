@@ -1,4 +1,5 @@
 import type { PitchObservation } from "@/audio/note-input";
+import { clamp } from "@/lib/numeric";
 import {
   RealtimeSessionStore,
   type PresentationScheduler,
@@ -284,9 +285,10 @@ export class SongRideRuntime {
     if (this.disposed || session.analysis === null || session.phase !== "playing") return;
     this.abortActive();
     this.audio?.pause();
-    const playedSeconds = Math.max(
+    const playedSeconds = clamp(
+      this.audio?.currentTime ?? session.currentTime,
       0,
-      Math.min(this.audio?.currentTime ?? session.currentTime, session.analysis.durationSeconds),
+      session.analysis.durationSeconds,
     );
     const completed = session.playbackState === "ended"
       || playedSeconds >= session.analysis.durationSeconds;

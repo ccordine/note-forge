@@ -100,6 +100,7 @@ describe("Range Loop architecture guard", () => {
     expect(stage).toContain('data-live-lifetime="user-owned"');
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.getCurrent().phase === "tracking"');
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "start" })');
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("dwellSession.flushPresentation()");
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "finish" })');
   });
 
@@ -113,10 +114,18 @@ describe("Range Loop architecture guard", () => {
     expect(stage).toContain("no temporary target is scoring");
   });
 
-  it("uses the shared abort-scoped brief reference", () => {
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain("useSessionEffectScope");
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain("BRIEF_REFERENCE_SECONDS");
-    expect(implementationSource).not.toContain("playSafely");
+  it("uses the one app-owned sustained target toggle independently of session state", () => {
+    const stage = activeSources.find(({ fileName }) => fileName === "RangeLoopStage.tsx")?.source ?? "";
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("useSustainedNote");
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("referencePlayback");
+    expect(stage).toContain("<NotePlaybackToggle");
+    expect(stage).toContain("playback={session.referencePlayback}");
+    expect(implementationSource).not.toMatch(/BRIEF_REFERENCE_SECONDS|useSessionEffectScope|\bplayTone\s*\(|\bDrone\b|playSafely/);
+    const startAndFinish = RANGE_LOOP_HOOK_SOURCE.slice(
+      RANGE_LOOP_HOOK_SOURCE.indexOf("const start ="),
+      RANGE_LOOP_HOOK_SOURCE.indexOf("const changeFamily ="),
+    );
+    expect(startAndFinish).not.toMatch(/referencePlayback|\.toggle\s*\(|\.release\s*\(/);
   });
 
   it("keeps all six full-depth families data-driven in the settings surface", () => {

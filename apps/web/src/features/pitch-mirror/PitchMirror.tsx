@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import "../../styles-pitch-mirror.css";
-import { smoothPitchFrames } from "@noteforge/pitch-engine";
 import { type AttemptMetrics } from "@noteforge/trainer-core";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { playTone, type Timbre } from "@/audio/synth";
+import { type Timbre } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import {
   attemptRecentScoringFrames,
   attemptScoringFrames,
@@ -12,15 +12,15 @@ import {
 } from "@/features/training-session/attempt-runner";
 import { useAttemptRunner } from "@/features/training-session/use-attempt-runner";
 import { scoreWeightedSustainedNote } from "@/features/training-session/attempt-scoring";
-import { BRIEF_REFERENCE_SECONDS } from "@/features/training-session/use-session-effect-scope";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import type { MirrorMode } from "@/navigation";
 import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
 import { useAppNavigation } from "@/routing/use-app-navigation";
 import { saveAttempt } from "@/storage/database";
-import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
+import { ActionButton, Eyebrow, Panel, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import { PitchRibbon } from "./PitchRibbon";
 
@@ -36,8 +36,8 @@ const TRACE_WINDOW_SECONDS = 8;
 
 const modeInfo: Record<MirrorMode, { label: string; instruction: string; detail: string }> = {
   glide: { label: "Glide", instruction: "Let your voice find the lane.", detail: "Start the trace, then slide toward the remembered target." },
-  delayed: { label: "Delayed", instruction: "Hold the sound after it disappears.", detail: "Play the brief reference, wait as long as you choose, then measure." },
-  cold: { label: "Cold attack", instruction: "Predict first. Arrive directly.", detail: "Play the brief reference once, then measure the first voiced arrival." },
+  delayed: { label: "Delayed", instruction: "Hold the target in memory.", detail: "Toggle the reference off, wait as long as you choose, then measure." },
+  cold: { label: "Cold attack", instruction: "Predict first. Arrive directly.", detail: "Use the reference toggle if needed, turn it off, then measure the first voiced arrival." },
   anchor: { label: "Memory anchor", instruction: "Recover the session anchor.", detail: "A4 is the fixed coordinate; produce it from memory whenever you are ready." },
   silent: { label: "Silent prep", instruction: "Configure before you phonate.", detail: "Simulate the target internally, then begin the trace without playback." },
 };
@@ -133,7 +133,14 @@ export function PitchMirror() {
   const effectiveCents = activeMode === "anchor" ? 0 : configuredCents;
   const targetMidiFloat = effectiveMidi + effectiveCents / 100;
   const targetFrequency = continuousMidiToHz(effectiveMidi, effectiveCents);
-  const shownFrames = smoothPitchFrames(attemptRecentScoringFrames(attempt.state), { correctOctaveJumps: true });
+  const targetPlayback = useSustainedNote({
+    frequencyHz: targetFrequency,
+    timbre: activeTimbre,
+    amplitude: 0.22,
+  });
+  // The visible evidence trace is the detector stream itself. Smoothing or
+  // octave correction would rewrite a frame while retaining its sample ID.
+  const shownFrames = attemptRecentScoringFrames(attempt.state);
   const resetAttempt = attempt.reset;
 
   useEffect(() => {
@@ -155,12 +162,6 @@ export function PitchMirror() {
     setMetrics(null);
     attempt.begin({ mode, midi: selectedMidi, centsOffset, timbre, toleranceCents });
   };
-  const hearTarget = () => attempt.playReference("Pitch Mirror reference", () => playTone({
-    frequencyHz: targetFrequency,
-    timbre: activeTimbre,
-    duration: BRIEF_REFERENCE_SECONDS,
-    amplitude: 0.22,
-  }));
   const resultHeading = metrics ? "The trace is measured from continuous PCM." : "Finalizing the trace…";
 
   let currentStep: ReactNode;
@@ -176,7 +177,6 @@ export function PitchMirror() {
         </div>
         <div className="target-display"><span className="target-kicker">TARGET</span><strong>{noteLabel(effectiveMidi)}</strong><span>{targetFrequency.toFixed(2)} Hz</span></div>
         <div className="stage-actions">
-          <PlayButton label="Hear" aria-label={`Hear ${noteLabel(effectiveMidi)} target`} onClick={hearTarget} />
           <ActionButton data-pitch-mirror-action="start-trace" className="primary attempt-button" disabled={input.state !== "running"} onClick={begin}><Icon name="mic" size={18} /> Start trace</ActionButton>
         </div>
       </Panel>
@@ -186,11 +186,10 @@ export function PitchMirror() {
       <Panel className="mirror-stage active" data-workflow-step="tracking" data-trace-lifetime="user-owned">
         <div className="target-display">
           <span className="target-kicker">TARGET</span><strong>{noteLabel(effectiveMidi)}</strong><span>{targetFrequency.toFixed(2)} Hz</span>
-          <button className="round-play" onClick={hearTarget} aria-label={`Hear ${noteLabel(effectiveMidi)} target`}><Icon name="play" size={21} /></button>
         </div>
         <div className="stage-status"><span>{takeStatus(attempt.state.status, input.state)}</span><b>{attempt.state.elapsedSeconds.toFixed(2)} s</b><small>The canonical live note remains in the input scope above.</small></div>
         <PitchRibbon frames={shownFrames} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} windowSeconds={TRACE_WINDOW_SECONDS} />
-        <div className="stage-actions"><PlayButton label="Hear" aria-label={`Hear ${noteLabel(effectiveMidi)} target`} onClick={hearTarget} /><ActionButton data-pitch-mirror-action="finish-trace" onClick={attempt.finish}>Finish trace</ActionButton></div>
+        <div className="stage-actions"><ActionButton data-pitch-mirror-action="finish-trace" onClick={attempt.finish}>Finish trace</ActionButton></div>
       </Panel>
     );
   } else {
@@ -227,6 +226,7 @@ export function PitchMirror() {
       {saveError && <div className="error-banner"><strong>Local history needs attention.</strong><span>{saveError}</span></div>}
 
       <NoteInput variant="scope" input={input} targetMidiFloat={targetMidiFloat} toleranceCents={activeToleranceCents} title="Pitch mirror input" />
+      {(activeMode !== "silent" || targetPlayback.playing) && <div className="practice-reference-control"><NotePlaybackToggle playback={targetPlayback} label={noteLabel(effectiveMidi)} /></div>}
       <section className="practice-current-step">{currentStep}</section>
     </div>
   );

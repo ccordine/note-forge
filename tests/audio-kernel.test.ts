@@ -11,6 +11,7 @@ import type {
   MicrophoneCapture,
   MicrophoneInfo,
 } from "../apps/web/src/audio/microphone";
+import { pitchDiagnostics } from "../apps/web/src/diagnostics/pitch-diagnostics";
 
 const SAMPLE_RATE = 48_000;
 const WINDOW = 4_096;
@@ -123,6 +124,38 @@ class FakeCapture {
 }
 
 describe("AudioKernel external realtime store", () => {
+  it("delivers authoritative observations even when optional diagnostics reject a frame", async () => {
+    const capture = new FakeCapture();
+    const kernel = new AudioKernel(
+      capture as unknown as MicrophoneCapture,
+      new ManualScheduler(),
+    );
+    const consumed = vi.fn();
+    kernel.attach(Symbol("diagnostic-failure-consumer"), () => ({ onFrame: consumed }));
+    await kernel.controller.enable();
+    pitchDiagnostics.setEnabled(true);
+    const diagnosticFailure = vi.spyOn(pitchDiagnostics, "record")
+      .mockImplementation(() => { throw new RangeError("diagnostic schema mismatch"); });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    capture.emit(WINDOW, { discontinuity: true });
+
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(consumed).toHaveBeenCalledWith(expect.objectContaining({
+      observationKind: "voiced",
+      endSample: WINDOW,
+    }));
+    expect(kernel.controller.liveFrame?.endSample).toBe(WINDOW);
+    expect(consoleError).toHaveBeenCalledWith(
+      "NoteForge pitch diagnostics discarded an invalid event.",
+      expect.any(RangeError),
+    );
+    diagnosticFailure.mockRestore();
+    consoleError.mockRestore();
+    pitchDiagnostics.setEnabled(false);
+    kernel.destroy();
+  });
+
   it("consumes every 50 Hz observation while bounding stable React publication", async () => {
     const capture = new FakeCapture();
     const scheduler = new ManualScheduler();
@@ -193,6 +226,7 @@ describe("AudioKernel external realtime store", () => {
       nearestMidi: number | null;
       endSample: number;
       discontinuity: boolean;
+      pitchTrackingDecision: string | undefined;
     }> = [];
     kernel.controller.subscribePitch(() => {
       const frame = kernel.controller.getPitchSnapshot().liveFrame;
@@ -202,6 +236,7 @@ describe("AudioKernel external realtime store", () => {
           nearestMidi: frame.nearestMidi,
           endSample: frame.endSample,
           discontinuity: frame.discontinuity,
+          pitchTrackingDecision: frame.pitchTrackingDecision,
         });
       }
     });
@@ -215,11 +250,20 @@ describe("AudioKernel external realtime store", () => {
 
     scheduler.currentTime = 40;
     capture.emit(WINDOW + HOP * 2, { frequencyHz: 146.8324 });
+    expect(kernel.controller.liveFrame).toMatchObject({
+      observationKind: "uncertain",
+      nearestMidi: null,
+      endSample: WINDOW + HOP * 2,
+      pitchTrackingDecision: "pending-transition",
+      pitchCandidate: { nearestMidi: 50 },
+    });
+    expect(kernel.controller.getPitchSnapshot().liveFrame?.endSample)
+      .toBe(WINDOW + HOP * 2);
     scheduler.currentTime = 60;
     capture.emit(WINDOW + HOP * 3, { frequencyHz: 146.8324 });
     expect(kernel.controller.liveFrame?.endSample).toBe(WINDOW + HOP * 3);
     expect(kernel.controller.getPitchSnapshot().liveFrame?.endSample)
-      .toBe(WINDOW + HOP * 2);
+      .toBe(WINDOW + HOP * 3);
 
     scheduler.currentTime = 80;
     capture.emit(WINDOW + HOP * 4, { amplitude: 0 });
@@ -227,10 +271,11 @@ describe("AudioKernel external realtime store", () => {
     capture.emit(WINDOW + HOP * 5, { amplitude: 0, discontinuity: true });
 
     expect(published).toEqual([
-      { observationKind: "voiced", nearestMidi: 48, endSample: WINDOW, discontinuity: false },
-      { observationKind: "voiced", nearestMidi: 50, endSample: WINDOW + HOP * 2, discontinuity: false },
-      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 4, discontinuity: false },
-      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 5, discontinuity: true },
+      { observationKind: "voiced", nearestMidi: 48, endSample: WINDOW, discontinuity: false, pitchTrackingDecision: "accepted-cold-attack" },
+      { observationKind: "uncertain", nearestMidi: null, endSample: WINDOW + HOP * 2, discontinuity: false, pitchTrackingDecision: "pending-transition" },
+      { observationKind: "voiced", nearestMidi: 50, endSample: WINDOW + HOP * 3, discontinuity: false, pitchTrackingDecision: "accepted-confirmed-transition" },
+      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 4, discontinuity: false, pitchTrackingDecision: "no-pitch" },
+      { observationKind: "unvoiced", nearestMidi: null, endSample: WINDOW + HOP * 5, discontinuity: true, pitchTrackingDecision: "no-pitch" },
     ]);
     kernel.destroy();
   });
@@ -312,7 +357,7 @@ describe("AudioKernel architecture guard", () => {
     expect(publication).toContain("AUDIO_REACT_MAXIMUM_PRESENTATION_HZ = 30");
     expect(publication).toContain("publishPitchTransition");
     expect(kernel).toContain("observationRequiresImmediatePublication");
-    expect(kernel).toContain("options.onFrame?.(observation)");
+    expect(kernel).toContain("this.notifyObservationConsumers(observation)");
     const recordObservation = kernel.match(
       /private recordObservation[\s\S]*?\n  readonly enable/,
     )?.[0] ?? "";

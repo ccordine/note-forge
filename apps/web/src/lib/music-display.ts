@@ -31,6 +31,25 @@ export function signed(value: number, digits = 0): string {
   return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(digits)}`;
 }
 
+/**
+ * Project the nearest-note cents interval onto its visual track.
+ *
+ * This is deliberately a musical coordinate, not generic saturation. Callers
+ * must supply the canonical nearest-note interval; silently pinning arbitrary
+ * pitch evidence to an edge would make distinct coordinates look identical.
+ */
+export function nearestNoteCentsPositionPercent(
+  centsFromNearest: number,
+): number {
+  if (!Number.isFinite(centsFromNearest)) {
+    throw new TypeError("Nearest-note cents must be finite.");
+  }
+  if (centsFromNearest < -50 || centsFromNearest > 50) {
+    throw new RangeError("Nearest-note cents must be within -50 through +50.");
+  }
+  return centsFromNearest + 50;
+}
+
 export const INTERVAL_SHORT = Object.freeze(Array.from({ length: 13 }, (_, semitones) => getIntervalMetadata(semitones).shortName));
 export const INTERVAL_LONG = Object.freeze(Array.from({ length: 13 }, (_, semitones) => getIntervalMetadata(semitones).name));
 

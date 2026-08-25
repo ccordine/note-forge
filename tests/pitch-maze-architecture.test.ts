@@ -83,11 +83,16 @@ describe("Pitch Maze continuous-input architecture guard", () => {
     for (const pattern of forbidden) expect(ACTIVE_SOURCE).not.toMatch(pattern);
   });
 
-  it("keeps reference playback brief and state-neutral", () => {
+  it("separates the sustained direction toggle from the authored compass gesture", () => {
+    expect(UI_SOURCE).toContain("useSustainedNote");
+    expect(UI_SOURCE).toContain("<NotePlaybackToggle");
+    expect(UI_SOURCE).toContain("playback={directionPlayback}");
+    expect(UI_SOURCE).not.toMatch(/BRIEF_REFERENCE_SECONDS|\bplayTone\s*\(/);
+    expect(UI_SOURCE).toContain("function compassReference");
+    expect(UI_SOURCE).toContain("playToneSequence");
     expect(UI_SOURCE).toContain("duration: 0.24");
-    expect(UI_SOURCE).toContain("duration: 0.32");
     expect(UI_SOURCE).toContain("useSessionEffectScope");
-    expect(UI_SOURCE).toContain("reference.playReference(");
+    expect(UI_SOURCE).toContain("reference.playGesture(");
     expect(UI_SOURCE).not.toContain("playSafely");
     expect(UI_SOURCE).not.toMatch(/\bActiveVoice\b|\bpromptVoice\w*\b|\bpromptTimer\w*\b/);
   });
@@ -106,6 +111,7 @@ describe("Pitch Maze continuous-input architecture guard", () => {
     expect(UI_SOURCE).toContain("onClick={exitGame}");
     expect(UI_SOURCE).toContain("onExit={exitGame}");
     expect(UI_SOURCE).toContain("reference.abort();");
+    expect(UI_SOURCE).not.toMatch(/directionPlayback\.(?:toggle|release)\s*\(/);
   });
 
   it("latches maze achievements without ending the live campaign", () => {

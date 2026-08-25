@@ -15,7 +15,9 @@ one app-owned MediaStream
   -> monotonic PCM ring buffer
   -> deep overlapping analysis windows
   -> short analysis hops
-  -> one PitchObservation per window
+  -> raw YIN/harmonic-family candidate
+  -> one shared target-independent temporal pitch tracker
+  -> one authoritative PitchObservation per window
   -> one shared live stream
   -> any number of downstream consumers
 ```
@@ -63,14 +65,28 @@ type PitchObservation = {
   confidence: number;
   periodicity: number;
   rms: number;
+  pitchCandidate?: PitchCandidateTelemetry;
+  pitchTrackingDecision?: PitchTrackingDecision;
 };
 ```
 
 - Silence and non-periodic noise are `unvoiced` observations.
 - Ambiguous or invalid detector evidence is an `uncertain` observation.
 - A credible F0 is a `voiced` observation.
+- `pitchCandidate` preserves the estimator's raw per-window musical candidate;
+  `pitchTrackingDecision` records the target-independent causal admission
+  decision. Neither field grants a feature permission to reinterpret pitch.
 - No observation kind changes microphone lifecycle state.
 - A discontinuity is explicit sample authority, not a user-facing recovery mode.
+
+The shared temporal tracker is the only authority between an independently
+estimated detector candidate and musical pitch state. Fine motion up to 45 cents
+and a cold attack are immediate. A single remote candidate is published on its
+exact window as `uncertain`/`temporally-ambiguous`, with its candidate telemetry
+preserved and no stale previous note displayed; one coherent candidate on the
+next 20 ms hop confirms a real step or fast contour. Silence is immediate. This
+rule is target-, activity-, and score-independent: it rejects physically
+incoherent one-window teleports without making the requested answer sticky.
 
 The pure `LiveNote` reducer derives the current nearest note, continuous F0,
 entry sample, held samples/seconds, and stability from that stream. Sustain,
@@ -130,6 +146,35 @@ React component tree.
   continuity/graph authority, and continues. Games do not participate.
 - Never add a V2 path, compatibility shim, legacy fallback, second detector,
   or feature-specific capture implementation. Replace and delete in place.
+
+## Sample authority and diagnostic boundaries
+
+`realtime/observation-continuity.ts` is the only application authority for
+deciding whether two observations are consecutive. A feature may consume its
+accepted/boundary/delta result; it may not compare epochs, reconstruct hops,
+divide sample deltas, or invent a local `sameAuthority` helper.
+
+- Inside one capture, continuity epoch, graph generation, sample coordinates,
+  processed-sample count, and worklet count are monotonic. A graph advance
+  requires a continuity advance; a sample-rate change requires both. A new
+  capture may reset subordinate coordinates.
+- Only the exact next configured overlapping hop is continuous. Missing windows,
+  explicit discontinuities, and valid authority changes establish fresh
+  authority with zero catch-up time.
+- Invalid, malformed, duplicate, reordered, or regressed observations are
+  rejected and may not replace retained authority. They are not fabricated
+  boundaries. A changed window depth under unchanged capture configuration is
+  malformed framing, not an ordinary gap.
+- `AudioKernel` owns capture, detection, immutable observation publication,
+  counters, bounded local history, and low-level transport/detector diagnostics
+  only. It may never accept or derive an activity target, tolerance, hold,
+  workflow phase, in-band result, reset reason, score, or curriculum state.
+- Remote derived diagnostics are off by default and require a visible explicit
+  user opt-in. Turning them off clears queued events. Diagnostic conversion,
+  validation, storage, or transport failure is deliberately lossy and may never
+  delay, reject, or alter an authoritative observation. Remote events contain no
+  PCM and no activity/workflow semantics; local live diagnostics do not depend
+  on remote sharing.
 
 ## Complexity and interaction-authority rules
 
@@ -204,11 +249,21 @@ exercise scheduler, timer graph, or workflow interpreter.
 - Unvoiced or uncertain evidence may pause qualified-time accumulation; it may
   not erase already observed in-range sample time. Only a credible voiced
   observation outside the target region can reset target occupancy.
-- Reference playback is an explicit, short, one-shot user action. It never
-  changes detector state, clears occupancy, gates the live readout, starts a
-  quieter sustained replacement, or opens an isolation sub-workflow. Sustained
-  accompaniment belongs in a separately requested and independently proven
-  music feature, not a default pitch-input path.
+- Every user-facing isolated note, target, tonic, or reference uses the one
+  app-owned sustained-note lane and the one canonical visible **Play / Stop**
+  toggle. Its public request contains frequency, timbre, and amplitude only;
+  duration, deadline, schedule time, decay, automatic cutoff, and a quieter
+  replacement voice are deliberately unrepresentable.
+- The user's visible toggle is the playback lifetime authority. Start, Finish,
+  reset, scoring, target achievement, workflow transitions, persistence,
+  silence, and detector evidence may not stop playback. Changing the selected
+  target or timbre retunes the same running lane in place. Only the same visible
+  toggle's explicit **Stop** action or unmounting the owning product surface may
+  release it.
+- Authored temporal gestures are a separate transport. Intervals, comparisons,
+  chords, melodies, compass demonstrations, songs, and accompaniments may have
+  authored note durations, but they may not impersonate an isolated-note
+  toggle or become its fallback implementation.
 - Do not preserve a removed interaction through dormant enums, branches,
   storage fields, compatibility adapters, or tests. Delete the obsolete model
   so it cannot become authoritative again.
@@ -307,6 +362,39 @@ source/component, duplicated `NoteInput`, capture ownership violation, excessive
 control depth, or unreachable application module must be resolved or narrowed
 by improving the audit itself when it has produced a documented false positive.
 
+## Numeric boundary authority
+
+`AudioKernel` stores and publishes exact sensor evidence. It never clamps a
+frequency, MIDI coordinate, cents error, confidence value, brightness value, or
+sample coordinate on behalf of a view. Downstream projections may saturate only
+at a real declared domain boundary, through one reviewable authority:
+
+- `lib/numeric.ts` owns generic interval, unit-axis, signed-axis, and percentage
+  saturation syntax for the web application. Features may not declare private
+  `clamp`, `clamp01`, or `clampUnit` helpers or hide saturation inside nested
+  `Math.min`/`Math.max` expressions.
+- `pitch-meter-scale.ts` owns the musical-coordinate-to-pixel projection for
+  live pitch meters and traces. A target lens may compress the outer detector
+  depth, but it may not alias distinct supported pitches or mutate the stored
+  observation.
+- A game or exercise may define a named physical boundary such as canvas edge,
+  paddle travel, asymmetric calibrated control extent, or score percentage.
+  Its named adapter may use the shared numeric primitive; it may not become a
+  competing sensor, confidence, musical-range, or session-lifetime authority.
+- Detector search heuristics must not silently become stronger admission gates
+  than the canonical live-input policy. Level is diagnostic, literal silence is
+  ordinary unvoiced evidence, and arbitrarily quiet nonzero periodic evidence
+  must reach the same detector/confidence policy.
+- Capacity bounds may limit a presentation snapshot or storage query. They may
+  not evict user-created artifacts without an explicit command, truncate the
+  authoritative session used for scoring/profile evidence, overwrite prior
+  accomplishments with a partial run, or terminate a live workflow.
+
+The architecture audit enforces the generic numeric owner and inline-saturation
+ban. Domain tests must additionally prove monotonic pitch projection, asymmetric
+control normalization, geometry boundaries, whole-session aggregates, and
+evidence behavior immediately below every former detector gate.
+
 ## Detector contract
 
 - Canonical live range is 45–1,200 Hz everywhere.
@@ -317,12 +405,54 @@ by improving the audit itself when it has produced a documented false positive.
 - Preserve `frequencyHz` and `midiFloat`; nearest-note interpretation must not
   destroy bends, vibrato, blue notes, glides, or microtonal coordinates.
 - Level/clipping telemetry is diagnostic only and never admits pitch.
-- High-rate hardware PCM may be downsampled for bounded detector work, but
-  observation coordinates and sample authority remain in the original capture
-  rate and sample domain.
+- High-rate hardware PCM may be normalized for bounded detector work, but every
+  decimation stage must low-pass before halving. Sample dropping, stride-only
+  decimation, and detector fallback at the unfiltered rate are prohibited
+  because they fold out-of-band energy into false vocal fundamentals. The
+  production normalizer uses a private allocation-stable cascade of 129-tap
+  Kaiser half-band FIR stages until analysis is at most 48 kHz; capture rates up
+  to 768 kHz remain valid. Observation coordinates and sample authority remain
+  in the original capture-rate sample domain.
+- Realtime detector scratch is instance-owned, private, grow-only workspace.
+  Steady capture may not allocate lag/Hann/harmonic typed arrays per frame;
+  workspaces may never be module globals or escape into immutable observations.
+  Independent engines must remain reentrant-safe and sample-exact when
+  interleaved or resized.
 - Use WASM/Worker/SIMD only if production profiling proves JavaScript detector
   work cannot remain below the hop cadence. WASM must never be used to disguise
   a lifecycle or ownership bug.
+
+## Live pitch presentation contract
+
+The visible meter and trace are evidence, not decorative approximations. A
+correct detected note whose marker is pinned, aliased, stale, or drawn from a
+different frame is a product failure.
+
+- Every credible voiced coordinate across the complete 45–1,200 Hz detector
+  range has one unique monotonic visual coordinate. Every enclosed semitone,
+  MIDI 30–86, must move strictly left-to-right on a horizontal meter and
+  bottom-to-top on a vertical trace. Only the literal detector boundaries may
+  occupy the visual edges.
+- Target-relative displays may reserve a wide central lens for fine intonation,
+  but pitches outside that lens remain monotonically visible in the outer
+  wings. Never clamp all errors below or above an arbitrary cents limit onto
+  one edge.
+- Every live pitch meter and trace uses the shared full-depth projection. A
+  feature may choose its focus width; it may not recreate the projection with
+  local clamp, percentage, or CSS math.
+- Note text, cents, marker geometry, and scrolling trace geometry must identify
+  the exact authoritative detector frame that produced them. A trace segment
+  exposes capture epoch, continuity epoch, graph generation, start sample, end
+  sample, and live MIDI for its actual last point; proof may not pair it with a
+  newer independently coalesced readout.
+- Unvoiced and uncertain frames remove the live marker rather than leaving a
+  stale pitch in place. They do not reset, stop, or recover microphone input.
+- The built Chromium release proof must drive production PCM through all 57
+  supported semitones, read computed marker pixels from the rendered page,
+  require 57 distinct strictly monotonic positions, reject non-boundary edge
+  aliases, and reconcile representative scrolling-trace points by exact sample
+  identity. Label-only, DOM-string-only, or pure-function tests are not
+  sufficient release evidence.
 
 ## Pitch Tunnel contract
 
@@ -397,7 +527,9 @@ VocalControlVector -> deterministic flight/course/scoring runtime -> renderer`.
 - `-42 dBFS` sensitivity admission and saved calibration thresholds.
 - Acquiring, provisional, held, paused, waiting-for-agreement, or stalled
   detector states.
-- First-note and note-change multi-frame gates.
+- Feature- or target-aware note-agreement gates and stale-pitch holding. The one
+  shared target-independent temporal tracker above is sensor interpretation,
+  never a scoring exception or feature-owned gate.
 - Prompt-time live-note hiding.
 - `MediaStreamTrack.enabled = false` on consumer changes.
 - Callbacks that skip detector work when no React consumer exists.
@@ -420,8 +552,11 @@ microphone, and crosses:
 
 ```text
 permission -> getUserMedia -> MediaStreamAudioSourceNode -> AudioWorklet
--> MicrophoneCapture -> NoteInputEngine -> diagnostics -> React -> rendered DOM
+-> MicrophoneCapture -> NoteInputEngine -> AudioKernel -> React -> rendered DOM
 ```
+
+Remote derived diagnostics are a lossy, opt-in side branch from published
+observations. They are not between detection and any realtime consumer.
 
 It must fail unless all of the following hold:
 
@@ -430,11 +565,14 @@ It must fail unless all of the following hold:
 2. All 18 low notes MIDI 30–47 render below the removed level gate.
 3. Silence and loud deterministic broadband noise continuously emit unvoiced
    detector evidence and never render a note.
-4. Every native worklet window has exactly one diagnostic observation with the
-   same capture epoch and half-open sample interval.
+4. After the proof visibly opts into remote diagnostics, every native worklet
+   window has exactly one diagnostic observation with the same capture epoch
+   and half-open sample interval.
 5. Worklet and detector coordinates advance by the configured overlapping hop.
-6. The first detector frame that changes to each challenge note is the exact
-   `endSample` rendered in the DOM; a hidden agreement gate cannot pass.
+6. A remote raw candidate is exposed on its exact first window while the DOM
+   becomes uncertain with no stale note. One coherent next-hop candidate makes
+   the new authoritative note render at that exact `endSample`; no feature or
+   target-specific agreement gate may delay it further.
 7. PCM, worklet, detector, and DOM counters advance during silence, prompts,
    navigation, games, and periods with no microphone consumer mounted.
 8. One `getUserMedia` call owns one track across navigation; there are no false
@@ -449,18 +587,48 @@ The proof may observe native calls, diagnostics, and DOM mutations. It may not
 inject pitch frames, call the detector directly, fabricate a controller, start
 message delivery on production's behalf, or weaken a missing/wrong-note result.
 
-`npm run proof:sustained-note:browser` is the long-form continuity authority.
+`npm run proof:sustained-note:browser` is the long-form continuity and isolated-
+note-playback authority.
 It drives 8.5-second voice-like sustains at F-sharp1, quiet C3 below the former
 level gate, C4, and D6 through the real production microphone path. Every
 target must retain at least eight seconds of correct contiguous detector
 evidence while PCM/worklet/window counters remain monotonic. The same still-live
 track then enters Range Loop, proves that no dwell is credited before the
 visible Start command, retains one tuner DOM identity through wrong pitch,
-silence, reference playback, and achievement, and continues accumulating exact
-sample-timed C3 dwell beyond the former three-second requirement. Only the
-visible Finish command may freeze feature dwell, and shared PCM/live-note
-telemetry must continue afterward. No stream, track, context, or worklet
-replacement and no pre-Disable stop is permitted.
+silence, playback, and achievement, and continues accumulating exact sample-
+timed C3 dwell beyond the former three-second requirement. Its visible note
+toggle must start one sustained lane, remain pressed with zero oscillator stops
+beyond every former cutoff and across Start, achievement, and Finish, and use
+that same still-mounted control for the first oscillator stop. No lower-volume
+replacement or second oscillator bank is permitted. Only visible Finish may
+freeze feature dwell, and shared PCM/live-note telemetry must continue
+afterward. No stream, track, context, or worklet replacement and no pre-Disable
+microphone stop is permitted.
+
+`npm run proof:range-loop-noisy:browser` is the user-facing sustained-note
+authority. It constructs one deterministic fake microphone containing a
+continuous C3 plus changing interference, then crosses the built production
+path through `getUserMedia`, `MediaStreamAudioSourceNode`, `AudioWorklet`, the
+real pitch engine, the shared temporal tracker, shared `NoteInput`, and the
+actual Range Loop DOM. Browser stages include clean C3, a known failing seed,
++30, +20, +10, +6, and +3 dB SNR, impulses, dominant second/third harmonics,
+brief amplitude drops, changing noise amplitude, and clean recovery. The 0 dB
+sweep belongs to the supplemental detector matrix, not this browser proof.
+
+The proof must show that sufficient dominant C3 evidence earns the real range
+dwell without any regression, enables and visibly advances to D3, and that a
+persistent D3 then earns its own dwell in the same mounted component. A raw
+contradictory candidate may become an uncertain authoritative observation, but
+no C3 stage may publish a contradictory authoritative note. Uncertain evidence
+may pause new dwell credit; it may not erase prior credit. The D3 half is
+mandatory: a fix that merely makes C3 sticky fails. No detector mock, injected
+observation, test-only scorer, or duplicated range component is permitted.
+
+`npm run proof:mobile-note-playback:layout` is the mobile note-control authority.
+At 320x568 and 390x844 it traverses every surface that offers an isolated-note
+control, proves page-end reachability, descendant containment and hit testing,
+and operates the canonical toggle through Play -> Stop -> Play. Hiding document
+overflow without making the controls reachable is a failure.
 
 `npm run proof:voice-draw:browser` is the cabinet-level authority for Vocal
 Canvas. It must enter the built Voice Arcade through the real cabinet button,
@@ -542,89 +710,109 @@ both phone widths. A root `scrollWidth` assertion alone is never sufficient.
    route/history, workflow identity, audio-playback, and responsive proofs.
    **Complete.**
 8. Build and deploy the production container only after every release gate is
-   green. **Complete; image `sha256:954b37169341…` is deployed on the production
-   Docker context and the routed HTTPS health check is green.**
+   green. **Complete; image index `sha256:63993ae781d3…` is the running healthy
+   container and the exact routed bundle matches local and container bytes.**
 
 ## Final-tree release evidence — 2026-08-25
 
 The authoritative built-bundle Chromium proofs passed with:
 
-- 57/57 semitones MIDI 30–86;
-- 45 Hz measured at 45.000 Hz (-0.02 cents) and 1,200 Hz at 1,200.372 Hz
-  (+0.54 cents);
-- 18/18 quiet low notes at median -60.0 dBFS;
-- 56 silence observations and 213/213 loud-noise observations unvoiced;
-- exact 2,170/2,170 native AudioWorklet-to-detector `(captureEpoch, endSample)`
+- 57/57 semitones MIDI 30–86 plus literal 45 and 1,200 Hz boundaries; the
+  boundaries measured 45.000 Hz (+0.01 cents) and 1,200.373 Hz (+0.54 cents);
+- 18/18 quiet low notes near -60 dBFS and 196/196 loud seeded-noise frames
+  unvoiced;
+- exact 2,177/2,177 native AudioWorklet-to-detector `(captureEpoch, endSample)`
   pairs at a 960-sample hop;
-- immediate DOM changes on the first C3, E3, and G3 detector frames, matched by
-  exact `endSample`;
-- detector time 2.2 ms median, 3.0 ms p95, and 10.9 ms maximum, every frame
-  below the 20 ms hop budget;
+- C3 was accepted at `endSample=85696`; E3's raw candidate was exposed at
+  `120256` as uncertain/no-stale-note and accepted on the coherent next hop at
+  `121216`; G3 followed the same exact rule at `153856` -> `154816`;
+- all 57 supported notes at distinct strictly monotonic meter positions from
+  0.48% through 99.55%, with no non-boundary edge aliases; the full-depth ribbon
+  independently placed F-sharp1, C3, E3, and G3 at y=299.0, 262.4, 254.2, and
+  248.1 from the same exact sample authority;
+- detector time 2.5 ms median, 3.9 ms p95, and 13.0 ms maximum in the complete
+  note-input proof, every frame below the 20 ms hop;
 - a real AudioContext suspension automatically resumed with continuity epoch
-  0→1 and `discontinuity=true`, while stream, track, and worklet ownership all
-  remained singular;
-- one `getUserMedia`, zero track disables, zero pre-Disable stops, and exactly
-  one explicit global Disable stop;
-- the sustained-note proof paired 2,589/2,589 native windows and detector
-  frames; F-sharp1 held for 8.420 seconds, quiet C3 at -62.9 dBFS for 8.360
-  seconds, C4 for 8.440 seconds, and D6 for 8.440 seconds; Range Loop credited
-  zero before visible Start, grew C3 dwell from 3.08 to 3.60 seconds beyond its
-  achievement, and froze it only on visible Finish while PCM and live C3 kept
-  advancing;
-- the shared live-trace proof kept Pitch Match active for 4.82 seconds, Hum Lab
-  for 8.82 seconds, and Pitch Control for 12.82 seconds beyond their deleted
-  automatic cutoffs; only each visible Finish command completed the session,
-  with one capture and zero pre-Disable stops;
-- Vocal Canvas used one stream, track, source, and worklet to consume all 459
-  native PCM windows while React emitted 204 bounded publications; silence was
-  stationary, C3/D3/E3/F-sharp3 moved Up/Right/Down/Left, four SVG strokes
-  closed exactly, and visible Finish froze the canvas while shared telemetry
-  continued;
-- Pitch Tunnel consumed 978/978 post-anchor observations in exact order while
-  React emitted 438 exact bounded publications across 19.54 seconds of sample
-  time; its nine independently reconstructed dwells were exactly 1.00 second,
-  silence retained 0.46 seconds, credible wrong pitch reset only current dwell,
-  achievement remained tracking, scoring grew from 9.40 to 10.14 seconds after
-  achievement, and visible Finish alone froze scoring while telemetry continued;
-- Vocal Flight consumed all 1,771 worklet observations before its authority
-  snapshot and 1,889 after route exit, retained exact sample identity in 728
-  bounded React publications, reached +0.713954/-0.682011 elevator input and
-  -1/+1 roll from same-F0 dark/bright spectra, and applied zero vocal force
-  during silence;
-- after visible Vocal Flight Finish, authoritative observations advanced from
-  1,823 to 1,853 while simulated frames remained exactly 1,005; the achieved
-  course had continued flight and scoring until that command, and route exit
-  still produced zero capture stops;
-- Vocal Flight calibration and active flight passed containment, reachability,
-  and hit testing at 1440, 760, 430, 390, and 320 CSS pixels; its maximum shared
-  pitch-plus-brightness processing time was 11.4 ms against the 20 ms hop;
-- Pitch Match passed 55 idle mode/viewport combinations at all 11 shell and
-  feature breakpoint widths, plus real idle/tracking/complete/reset workflows
-  at 390 and 320 pixels; every visible control remained horizontally contained,
-  vertically reachable, and hit-testable with one canonical `NoteInput`;
+  0→1 and `discontinuity=true`, while stream, track, and worklet ownership stayed
+  singular; one `getUserMedia`, zero track disables, zero pre-Disable stops, and
+  exactly one explicit global Disable stop;
+- the sustained proof paired 2,602/2,602 windows: F-sharp1 held for 8.420
+  seconds/422 frames, quiet C3 for 8.460/424, C4 for 8.460/424, and D6 for
+  8.480/425; its maximum detector time was 16.2 ms. Range Loop credited zero
+  before visible Start, grew C3 dwell from 3.04 to 3.54 seconds beyond its
+  achievement, and froze only on visible Finish while PCM/live C3 continued;
+- the real Range Loop accepted 16.32 seconds of continuous C3 across 13 clean,
+  seeded-noise, SNR, impulse, harmonic, dropout, changing-noise, and recovery
+  stages with zero hold regression and zero contradictory authoritative notes.
+  It then visibly advanced the same mounted workflow to D3 and a persistent D3
+  earned 3.10 seconds, proving the tracker is robust but not sticky;
+- steady 48 kHz `NoteInputEngine` work now allocates zero YIN typed arrays after
+  one-time workspace growth. The deleted path allocated 17,104 bytes per frame,
+  about 49 MiB/minute. Controlled A3/C3/marginal p95 was 3.55/3.41/7.31 ms with
+  zero frames over 20 ms;
+- high-rate normalization detected 342/342 supported notes across six standard
+  capture rates, rejected out-of-band aliases, and retained real fundamentals
+  down to -126 dBFS beneath out-of-band interference. The adversarial tracker
+  matrix covers 40 seeded +10 dB streams; +30/+20/+10/+6/+3/0 dB strengths;
+  impulses, harmonics, amplitude drops and changing noise; plus persistent
+  noisy C3 -> C2 transitions that must relinquish C3;
+- the shared live-trace proof kept Pitch Match active for 4.80 seconds, Hum Lab
+  for 8.80 seconds, and Pitch Control for 12.84 seconds beyond their former
+  automatic cutoffs; only visible Finish completed each session, with one
+  capture and zero pre-Disable stops;
+- Vocal Canvas consumed all 641 authoritative windows while React emitted 294
+  bounded exact projections; five silence runs were stationary, C3/D3/E3/
+  F-sharp3 moved Up/Right/Down/Left, four SVG strokes closed at 0.0 px, and
+  visible Finish froze only the canvas;
+- Pitch Tunnel consumed 976 exact post-anchor observations while React emitted
+  447 bounded publications across 19.50 sample-seconds; all nine dwells were
+  exactly 1.00 second, silence retained 0.38 seconds, credible wrong pitch reset
+  only current dwell, achievement remained tracking, scoring grew 9.38→10.12
+  seconds, and visible Finish alone froze scoring;
+- Vocal Flight consumed 1,735 exact worklet windows before exit and 1,852 after,
+  with 715 unique React publications; pitch reached +0.699017/-0.682006 and
+  same-F0 brightness reached -0.999914/+1. Observations advanced 1,788→1,818
+  after Finish while simulated frames remained exactly 970, and route exit caused
+  zero capture stops;
+- Vocal Flight and Pitch Match passed containment, reachability, scrolling, and
+  hit testing down to 320×568. Pitch Match covered 55 mode/viewport combinations
+  plus full idle/tracking/complete/reset workflows at 390 and 320 pixels;
+- fresh-install offline Chromium loaded React and the hashed pitch worklet from
+  service-worker cache across 14 canonical routes; 75 resources were precached
+  and no API/health/missing-asset request received an HTML fallback;
 - the headless kernel consumed 30,000 silence windows—ten minutes of 50 Hz
-  sample time—with no React subscriber or feature attachment and zero capture
-  stops;
-- the final frontend suite passed 901/901 across 90 files;
-- the architecture audit scanned 346 source files and 141 JSX components,
-  reached all 203 application modules, and reported zero violations, zero
+  sample time—with no React subscriber or feature attachment and zero stops;
+- the React publication contract consumed all 50 authoritative observations in
+  its cadence fixture while emitting 26 pitch and 25 auxiliary presentation
+  publications; uncertain-candidate, confirming-note, silence, and
+  discontinuity boundaries retained their exact originating snapshot;
+- the final frontend suite and its separately instrumented run passed
+  1,051/1,051 across 107 files. Coverage is 65.26% statements (7,851/12,029),
+  60.33% branches (5,948/9,858), 56.99% functions (1,466/2,572), and 67.68%
+  lines (7,278/10,753);
+- the architecture audit scanned 388 source files and 143 JSX components,
+  reached all 216 application modules, and reported zero violations, zero
   unreachable application modules, and zero feature raw-stream reads;
-- the production build transformed 284 modules and emitted
-  `index-CNV_v_bg.js`, `VocalFlight-DhT4ywmM.js`,
-  `PitchTunnel-Cye8qQmf.js`, and
-  `pitch-capture-worklet-BImFxh7e.js`; each exact deployed asset returns HTTP
-  200, and service worker `c2182a472eb0` precaches all 70 resources;
-- Go tests, vet, typecheck, production build, static lifetime authority checks,
-  and the exhaustive 14-owner visible Start/Finish inventory all passed;
-- the final hardened container runs as UID/GID 65532 with a read-only root
-  filesystem and all Linux capabilities dropped; Docker reports it healthy on
-  `worknet_net`, the in-container health endpoint returns `ok`, and
-  `https://noteforge.worknet/healthz` returns HTTP 200. The routed homepage
-  serves `index-CNV_v_bg.js`; browser-navigation requests for `/arcade/flight`
-  return the SPA document; and deployed image
-  `sha256:954b37169341ecae558919f19ad55406c28c04dd7de8a59fe703cc5e995dbcfc`
-  has manifest
-  `sha256:108910a5254e7bfd023c0dd1de3b5d6449924a031de848e2b896d1d749aef258`.
+- the production build transformed 302 modules and emitted
+  `index-C_5EpVLQ.js`, `pitch-meter-scale-Ci4b38XK.js`,
+  `PitchMirror-BxX7lBYA.js`, `PitchTunnel-BN4T29qz.js`, and
+  `pitch-capture-worklet-BImFxh7e.js`; service worker `cc5b59194310` precaches
+  75 resources;
+- Go tests, race tests, vet, typecheck, production build, static lifetime
+  authority, and the exhaustive visible Start/Finish inventory all passed;
+- Docker rebuilt the tree while independently rerunning the zero-violation audit,
+  1,051 tests, typecheck/build, Go vet, and Go tests. The deployed OCI image
+  index/container identity is
+  `sha256:63993ae781d3254b42d7701f3c2b4e91b93ec010d5a317947a23c60043286065`;
+  its amd64 manifest is
+  `sha256:6da7d017c7e4106530c8c3cbcebc6771e2d7452ef2280b58ba1387fbc94d5603`;
+- the container is healthy as UID/GID 65532 with a read-only root, all
+  capabilities dropped, `no-new-privileges`, 64 MiB memory, and 64-process
+  limits. Internal `/healthz`, routed HTTPS `/healthz`, and routed `/` (the
+  transport for canonical `/#/arcade/flight`) return HTTP 200;
+- local, container, and routed SHA-256 values match exactly: `index.html`
+  `e2f167352581…`, `sw.js` `89f30048b08f…`, main JS `ab58c49bb83c…`, pitch-meter
+  authority `7f0deee2ba0b…`, and AudioWorklet `1645c857a4ae…`.
 
 These measurements establish the final checked-in software path. They do not
 certify a particular physical microphone, room, OS audio stack, hot-plug event,

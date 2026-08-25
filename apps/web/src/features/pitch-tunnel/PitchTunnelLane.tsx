@@ -1,5 +1,13 @@
 import type { CSSProperties } from "react";
 import { noteLabel } from "@/lib/music-display";
+import { clampPercent } from "@/lib/numeric";
+import {
+  PITCH_METER_MAXIMUM_MIDI,
+  PITCH_METER_MINIMUM_MIDI,
+  pitchMeterBandPercent,
+  pitchMeterMidiIsInRange,
+  pitchMeterPositionPercent,
+} from "@/ui/voice/pitch-meter-scale";
 import type {
   PitchTunnelMetrics,
   PitchTunnelState,
@@ -12,10 +20,6 @@ interface PitchTunnelLaneProps {
 }
 
 const DISPLAY_ERROR_LIMIT_CENTS = 60;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
 
 function signedCents(value: number): string {
   if (Math.abs(value) < .05) return "0¢";
@@ -71,21 +75,34 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
   const errorCents = state.currentErrorCents;
   const currentMidi = state.currentMidiFloat;
   const detectedMidi = currentMidi === null ? null : Math.round(currentMidi);
-  const pointPosition = errorCents === null
+  const targetMidi = checkpoint?.targetMidiFloat;
+  const pointPosition = pitchMeterPositionPercent(
+    currentMidi,
+    targetMidi,
+    DISPLAY_ERROR_LIMIT_CENTS,
+  );
+  const targetPosition = targetMidi === undefined
     ? 50
-    : 50 + clamp(
-      errorCents,
-      -DISPLAY_ERROR_LIMIT_CENTS,
+    : pitchMeterPositionPercent(
+      targetMidi,
+      targetMidi,
       DISPLAY_ERROR_LIMIT_CENTS,
-    ) / (DISPLAY_ERROR_LIMIT_CENTS * 2) * 100;
+    ) ?? 50;
   const heldSeconds = checkpoint?.heldSeconds ?? 0;
   const requiredSeconds = state.options.requiredInLaneSeconds;
-  const holdPercent = clamp(heldSeconds / requiredSeconds * 100, 0, 100);
-  const wallInset = 50
-    - state.options.laneHalfWidthCents / (DISPLAY_ERROR_LIMIT_CENTS * 2) * 100;
+  const holdPercent = clampPercent(heldSeconds / requiredSeconds * 100);
+  const wallBand = targetMidi === undefined
+    ? { leftPercent: 50, widthPercent: 0 }
+    : pitchMeterBandPercent(
+      targetMidi,
+      state.options.laneHalfWidthCents,
+      DISPLAY_ERROR_LIMIT_CENTS,
+    );
   const laneStyle = {
-    "--pitch-tunnel-point-x": `${pointPosition}%`,
-    "--pitch-tunnel-wall-inset": `${wallInset}%`,
+    "--pitch-tunnel-point-x": `${pointPosition ?? 50}%`,
+    "--pitch-tunnel-target-x": `${targetPosition}%`,
+    "--pitch-tunnel-wall-left": `${wallBand.leftPercent}%`,
+    "--pitch-tunnel-wall-width": `${wallBand.widthPercent}%`,
   } as CSSProperties;
   const progressStyle = {
     "--pitch-tunnel-hold": `${holdPercent}%`,
@@ -95,6 +112,53 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
     state.currentInLane === true ? "in-lane" : "",
     currentMidi === null ? "no-pitch" : "",
   ].filter(Boolean).join(" ");
+  const focusAxisPitches = targetMidi === undefined
+    ? []
+    : [
+      {
+        label: `−${DISPLAY_ERROR_LIMIT_CENTS}¢`,
+        midi: targetMidi - DISPLAY_ERROR_LIMIT_CENTS / 100,
+      },
+      { label: "TARGET", midi: targetMidi },
+      {
+        label: `+${DISPLAY_ERROR_LIMIT_CENTS}¢`,
+        midi: targetMidi + DISPLAY_ERROR_LIMIT_CENTS / 100,
+      },
+    ].filter(({ midi }) => (
+      pitchMeterMidiIsInRange(midi)
+      && midi > PITCH_METER_MINIMUM_MIDI
+      && midi < PITCH_METER_MAXIMUM_MIDI
+    ));
+  const axisPitches = targetMidi === undefined
+    ? [
+      {
+        label: noteLabel(Math.round(PITCH_METER_MINIMUM_MIDI)),
+        midi: PITCH_METER_MINIMUM_MIDI,
+      },
+      {
+        label: noteLabel(Math.round(PITCH_METER_MAXIMUM_MIDI)),
+        midi: PITCH_METER_MAXIMUM_MIDI,
+      },
+    ]
+    : [
+      {
+        label: noteLabel(Math.round(PITCH_METER_MINIMUM_MIDI)),
+        midi: PITCH_METER_MINIMUM_MIDI,
+      },
+      ...focusAxisPitches,
+      {
+        label: noteLabel(Math.round(PITCH_METER_MAXIMUM_MIDI)),
+        midi: PITCH_METER_MAXIMUM_MIDI,
+      },
+    ];
+  const axisTicks = axisPitches.map((tick) => ({
+    ...tick,
+    position: pitchMeterPositionPercent(
+      tick.midi,
+      targetMidi,
+      DISPLAY_ERROR_LIMIT_CENTS,
+    ) ?? 50,
+  }));
 
   return (
     <>
@@ -121,6 +185,7 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
       <div
         className={laneClass}
         data-note-input
+        data-live-pitch-meter
         data-pitch-tunnel-lane
         data-workflow-step={state.status}
         data-trace-lifetime={state.status === "tracking" ? "user-owned" : undefined}
@@ -140,6 +205,8 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
         data-target-offset-cents={targetOffset}
         data-target-midi={checkpoint?.targetMidiFloat ?? ""}
         data-live-midi={currentMidi ?? ""}
+        data-pitch-position={pointPosition ?? ""}
+        data-pitch-scale={targetMidi === undefined ? "full-detector-range" : "full-depth-target-lens"}
         data-error-cents={errorCents ?? ""}
         data-confidence={state.currentConfidence}
         data-in-lane={state.currentInLane === null ? "" : String(state.currentInLane)}
@@ -154,14 +221,22 @@ export function PitchTunnelLane({ inputState, state, metrics }: PitchTunnelLaneP
       >
         <span className="pitch-tunnel-lane-label">±{state.options.laneHalfWidthCents}¢ TARGET WALLS</span>
         <span className="pitch-tunnel-centerline" aria-hidden="true" />
-        <span className="pitch-tunnel-point" aria-hidden="true" />
+        {pointPosition !== null && <span
+          className="pitch-tunnel-point"
+          data-live-pitch-marker
+          aria-hidden="true"
+        />}
         <span className="pitch-tunnel-readout" aria-hidden="true">
           <small>CURRENT F0</small>
           <strong>{pitchLabel(currentMidi)}</strong>
           <small>{frequencyLabel(currentMidi)}</small>
         </span>
         <span className="pitch-tunnel-axis" aria-hidden="true">
-          <b>−60¢</b><b>−30¢</b><b>&nbsp;</b><b>+30¢</b><b>+60¢</b>
+          {axisTicks.map((tick) => <b
+            data-pitch-tick-position={tick.position}
+            key={tick.label}
+            style={{ left: `${tick.position}%` }}
+          >{tick.label}</b>)}
         </span>
       </div>
 

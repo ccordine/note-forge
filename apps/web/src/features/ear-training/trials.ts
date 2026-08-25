@@ -1,3 +1,5 @@
+import { clamp } from "@/lib/numeric";
+
 export const NOTE_LETTERS = Object.freeze(["C", "D", "E", "F", "G", "A", "B"] as const);
 
 export type NoteLetter = (typeof NOTE_LETTERS)[number];
@@ -149,7 +151,7 @@ export function normalizeFamilyProgress(candidate: unknown): NoteFamilyProgress 
         ? Math.max(0, Math.floor(stored.attempts))
         : 0;
       const correct = typeof stored.correct === "number" && Number.isFinite(stored.correct)
-        ? Math.max(0, Math.min(attempts, Math.floor(stored.correct)))
+        ? clamp(Math.floor(stored.correct), 0, attempts)
         : 0;
       const storedStreak = typeof stored.correctStreak === "number" && Number.isFinite(stored.correctStreak)
         ? Math.max(0, Math.floor(stored.correctStreak))

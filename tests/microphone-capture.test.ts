@@ -275,18 +275,19 @@ describe("canonical microphone capture", () => {
       const { context, stream, track } = captureHarness();
       const getUserMedia = vi.fn(async () => stream);
       const transportEvents = vi.fn();
+      const onSamples = vi.fn();
       ensureAudioReady.mockResolvedValue(context);
       vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
       const capture = new MicrophoneCapture();
       await capture.start(
-        () => undefined,
+        onSamples,
         4_096,
         undefined,
         undefined,
         transportEvents,
       );
       const firstHandler = FakeAudioWorkletNode.instances[0]!.port.onmessage;
-      firstHandler?.({ data: {
+      const firstMessage = {
         type: "samples",
         samples: new Float32Array(4_096),
         capturedAt: 2_048 / 48_000,
@@ -298,10 +299,16 @@ describe("canonical microphone capture", () => {
         processCount: 32,
         processedSampleCount: 4_096,
         discontinuity: true,
-      } } as MessageEvent);
+      } as const;
+      firstHandler?.({ data: firstMessage } as MessageEvent);
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // Re-delivery is not new PCM and therefore cannot keep the heartbeat
+      // alive or create another authoritative sample window.
+      firstHandler?.({ data: firstMessage } as MessageEvent);
+      await vi.advanceTimersByTimeAsync(1_000);
 
+      expect(onSamples).toHaveBeenCalledOnce();
       expect(getUserMedia).toHaveBeenCalledOnce();
       expect(track.stop).not.toHaveBeenCalled();
       expect(FakeAudioWorkletNode.instances).toHaveLength(2);
@@ -440,6 +447,7 @@ describe("canonical microphone capture", () => {
     expect(() => analysisWindowSizes(0)).toThrow(RangeError);
     expect(() => analysisWindowSizes(Number.NaN)).toThrow(RangeError);
     expect(() => analysisWindowSizes(2_400)).toThrow(/canonical detector range/);
+    expect(() => analysisWindowSizes(768_001)).toThrow(/no greater than 768000/);
     expect(() => analysisWindowSizes(2_401)).not.toThrow();
     expect(() => analysisWindowSizes(20_000_000)).toThrow(/no greater than/);
     expect(() => analysisWindowSizes(48_000, 0)).toThrow(RangeError);

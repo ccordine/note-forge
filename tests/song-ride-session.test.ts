@@ -103,6 +103,18 @@ describe("Song Ride sample-coordinate scoring", () => {
     expect(songHud(runtime, target).accuracyPercent).toBe(100);
   });
 
+  it("scores detector-admitted voiced coordinates without a second confidence floor", () => {
+    const runtime = createSongScoreRuntime();
+    const target = lane();
+    observeSongLane(runtime, target, observation(WINDOW));
+    observeSongLane(runtime, target, observation(WINDOW + HOP, { confidence: 0.01 }));
+    expect(runtime.laneMetrics.get(target.id)).toMatchObject({
+      observedSeconds: 0.02,
+      voicedSeconds: 0.02,
+      inLaneSeconds: 0.02,
+    });
+  });
+
   it("does not fabricate credit across duplicate, reordered, missing, or discontinuous samples", () => {
     const runtime = createSongScoreRuntime();
     const target = lane();

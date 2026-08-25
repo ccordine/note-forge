@@ -74,6 +74,7 @@ function pitchObservation(
     endSample?: number;
     captureEpoch?: number;
     discontinuity?: boolean;
+    confidence?: number;
   }> = {},
 ): PitchObservation {
   const sampleRate = 48_000;
@@ -97,7 +98,7 @@ function pitchObservation(
     midiFloat: midi,
     nearestMidi: midi,
     centsFromNearest: voiced ? 0 : null,
-    confidence: voiced ? 0.98 : 0,
+    confidence: options.confidence ?? (voiced ? 0.98 : 0),
     periodicity: voiced ? 0.98 : 0,
     rms: voiced ? 0.08 : 0,
     voiced,
@@ -187,6 +188,19 @@ describe("sample-authoritative Pitch Pong runtime", () => {
       discontinuity: true,
     }));
     expect(runtime.getCurrent().game.elapsedSeconds).toBe(elapsedBeforeGap);
+    runtime.dispose();
+  });
+
+  it("steers from every detector-admitted voiced coordinate without a second confidence floor", async () => {
+    const { delay, runtime } = createRuntime();
+    await enterPlaying(runtime, delay);
+    runtime.observe(pitchObservation(0, { confidence: 0.01 }));
+    runtime.observe(pitchObservation(1, { confidence: 0.01 }));
+    expect(runtime.getCurrent().stats).toMatchObject({
+      observedFrames: 2,
+      reliableFrames: 2,
+    });
+    expect(runtime.getCurrent().voiceAxis.status).toBe("steering");
     runtime.dispose();
   });
 

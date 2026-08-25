@@ -1,4 +1,11 @@
 import type { PitchObservation } from "@/audio/note-input";
+import { clampUnit } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationAuthority,
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import type { ResonanceVoiceInput } from "./resonance-types";
 
 export type ResonanceControllerStatus = "idle" | "driving" | "unvoiced" | "uncertain";
@@ -24,14 +31,7 @@ export interface ResonancePitchEvidence {
   readonly midiFloat: number;
 }
 
-export interface ResonanceObservationAuthority {
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly sampleRate: number;
-  readonly startSample: number;
-  readonly endSample: number;
-}
+export type ResonanceObservationAuthority = ObservationSampleAuthority;
 
 export interface ResonanceControllerState {
   readonly options: ResolvedResonanceControllerOptions;
@@ -67,14 +67,6 @@ const DEFAULT_OPTIONS = Object.freeze({
 const MAXIMUM_PITCH_HISTORY = 32;
 const VOICED_FIELD_LEVEL = 0.72;
 const MINIMUM_VOICED_DRIVE = 0.34;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function clamp01(value: number): number {
-  return clamp(value, 0, 1);
-}
 
 function requirePositive(value: number, label: string): void {
   if (!Number.isFinite(value) || value <= 0) {
@@ -112,73 +104,21 @@ function quantile(values: readonly number[], position: number): number {
 
 function smoothstep(lower: number, upper: number, value: number): number {
   if (upper <= lower) return value >= upper ? 1 : 0;
-  const normalized = clamp01((value - lower) / (upper - lower));
+  const normalized = clampUnit((value - lower) / (upper - lower));
   return normalized * normalized * (3 - 2 * normalized);
 }
 
-function isFiniteNonNegativeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
-}
-
-function validAuthority(frame: Readonly<PitchObservation>): boolean {
-  return Number.isFinite(frame.sampleRate)
-    && frame.sampleRate > 0
-    && isFiniteNonNegativeInteger(frame.captureEpoch)
-    && isFiniteNonNegativeInteger(frame.continuityEpoch)
-    && isFiniteNonNegativeInteger(frame.graphGeneration)
-    && isFiniteNonNegativeInteger(frame.startSample)
-    && isFiniteNonNegativeInteger(frame.endSample)
-    && frame.endSample > frame.startSample;
-}
-
 function authorityFrom(frame: Readonly<PitchObservation>): ResonanceObservationAuthority {
-  return {
-    captureEpoch: frame.captureEpoch,
-    continuityEpoch: frame.continuityEpoch,
-    graphGeneration: frame.graphGeneration,
-    sampleRate: frame.sampleRate,
-    startSample: frame.startSample,
-    endSample: frame.endSample,
-  };
+  const authority = observationAuthority(frame);
+  if (authority === null) throw new TypeError("Resonance received invalid observation authority.");
+  return authority;
 }
 
 export function resonanceAuthorityChanged(
   previous: Readonly<ResonanceObservationAuthority> | null,
   frame: Readonly<PitchObservation>,
 ): boolean {
-  return previous === null
-    || frame.discontinuity
-    || previous.captureEpoch !== frame.captureEpoch
-    || previous.continuityEpoch !== frame.continuityEpoch
-    || previous.graphGeneration !== frame.graphGeneration
-    || previous.sampleRate !== frame.sampleRate;
-}
-
-function isDuplicateOrReordered(
-  previous: Readonly<ResonanceObservationAuthority> | null,
-  frame: Readonly<PitchObservation>,
-): boolean {
-  return previous !== null
-    && !resonanceAuthorityChanged(previous, frame)
-    && frame.endSample <= previous.endSample;
-}
-
-function credibleVoicedFrame(frame: Readonly<PitchObservation>): boolean {
-  return frame.observationKind === "voiced"
-    && frame.voiced
-    && frame.midiFloat !== null
-    && Number.isFinite(frame.midiFloat)
-    && frame.midiFloat >= 0
-    && frame.midiFloat <= 127
-    && frame.frequencyHz !== null
-    && Number.isFinite(frame.frequencyHz)
-    && frame.frequencyHz > 0
-    && Number.isFinite(frame.confidence)
-    && frame.confidence >= 0
-    && frame.confidence <= 1
-    && Number.isFinite(frame.periodicity)
-    && frame.periodicity >= 0
-    && frame.periodicity <= 1;
+  return observationContinuity(previous, frame).boundary;
 }
 
 function pitchStability(
@@ -207,8 +147,8 @@ function clearCurrentEvidence(
     pitchHistory: authorityChanged ? [] : state.pitchHistory,
     midiFloat: null,
     frequencyHz: null,
-    confidence: clamp01(frame.confidence),
-    periodicity: clamp01(frame.periodicity),
+    confidence: clampUnit(frame.confidence),
+    periodicity: clampUnit(frame.periodicity),
     stability: 0,
     coherence: 0,
     normalizedLevel: 0,
@@ -256,25 +196,18 @@ export function updateResonanceControllerFromFrame(
   state: Readonly<ResonanceControllerState>,
   frame: Readonly<PitchObservation>,
 ): ResonanceControllerFrameUpdate {
-  if (!validAuthority(frame)) {
+  const continuity = observationContinuity(state.authority, frame);
+  if (!continuity.accepted || continuity.authority === null) {
     return {
       state: state as ResonanceControllerState,
       accepted: false,
-      duplicate: false,
+      duplicate: continuity.reason === "duplicate-or-reordered"
+        || continuity.reason === "authority-regression",
       authorityChanged: false,
     };
   }
-  if (isDuplicateOrReordered(state.authority, frame)) {
-    return {
-      state: state as ResonanceControllerState,
-      accepted: false,
-      duplicate: true,
-      authorityChanged: false,
-    };
-  }
-
-  const authorityChanged = resonanceAuthorityChanged(state.authority, frame);
-  if (!credibleVoicedFrame(frame)) {
+  const authorityChanged = continuity.boundary;
+  if (!isAuthoritativeVoicedPitch(frame)) {
     const status = frame.observationKind === "unvoiced" ? "unvoiced" : "uncertain";
     return {
       accepted: false,
@@ -289,10 +222,7 @@ export function updateResonanceControllerFromFrame(
   const retainedHistory = authorityChanged
     ? []
     : state.pitchHistory.filter((evidence) => (
-        evidence.captureEpoch === frame.captureEpoch
-        && evidence.continuityEpoch === frame.continuityEpoch
-        && evidence.sampleRate === frame.sampleRate
-        && evidence.endSample >= historyFloor
+        evidence.endSample >= historyFloor
       ));
   const pitchHistory = [
     ...retainedHistory,
@@ -305,9 +235,9 @@ export function updateResonanceControllerFromFrame(
     },
   ].slice(-MAXIMUM_PITCH_HISTORY);
   const stability = pitchStability(pitchHistory, state.options);
-  const periodicity = clamp01(frame.periodicity);
-  const confidence = clamp01(frame.confidence);
-  const coherence = Math.sqrt(clamp01(periodicity * stability));
+  const periodicity = clampUnit(frame.periodicity);
+  const confidence = clampUnit(frame.confidence);
+  const coherence = Math.sqrt(clampUnit(periodicity * stability));
   const drive = MINIMUM_VOICED_DRIVE + (1 - MINIMUM_VOICED_DRIVE) * coherence;
 
   return {
@@ -327,7 +257,7 @@ export function updateResonanceControllerFromFrame(
       normalizedLevel: VOICED_FIELD_LEVEL,
       drive,
       evidenceReliable: true,
-      authority: authorityFrom(frame),
+      authority: continuity.authority,
       observedFrameCount: state.observedFrameCount + 1,
       reliableFrameCount: state.reliableFrameCount + 1,
     },

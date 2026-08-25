@@ -5,6 +5,7 @@ import type {
   VocalFlightControlMode,
   Vector3,
 } from "./types";
+import { clamp, clampSignedUnit, clampUnit } from "@/lib/numeric";
 
 const EPSILON = 1e-10;
 
@@ -29,10 +30,6 @@ export interface CreateVocalFlightOptions {
   readonly pitchRadians?: number;
   readonly rollRadians?: number;
   readonly headingRadians?: number;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function requireFinite(value: number, label: string): void {
@@ -112,12 +109,12 @@ function integrateStep(
   const active = input.control.active;
   const tutorialScale = mode === "neutral" ? 0.35 : 1;
   const pitchAxis = active && enabled.pitch
-    ? clamp(input.control.pitchAxis, -1, 1) * tutorialScale
+    ? clampSignedUnit(input.control.pitchAxis) * tutorialScale
     : 0;
   const brightnessAxis = active && enabled.brightness
-    ? clamp(input.control.brightnessAxis, -1, 1) * tutorialScale
+    ? clampSignedUnit(input.control.brightnessAxis) * tutorialScale
     : 0;
-  const selfLevelStrength = clamp(input.selfLevelStrength ?? 1, 0, 1);
+  const selfLevelStrength = clampUnit(input.selfLevelStrength ?? 1);
   const pitchAcceleration = state.config.pitchTorque * pitchAxis
     + (input.disturbancePitchTorque ?? 0)
     - state.config.pitchRateDamping * state.pitchRate

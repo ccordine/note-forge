@@ -1,7 +1,6 @@
 /** Every equal-tempered semitone enclosed by the canonical 45–1,200 Hz detector. */
 export const RANGE_SIMULATOR_MIN_MIDI = 30;
 export const RANGE_SIMULATOR_MAX_MIDI = 86;
-export const RANGE_SIMULATOR_MAX_RATED_PROBES = 24;
 export const RANGE_SIMULATOR_INITIAL_RADIUS = 4;
 
 export type EffortRating = 1 | 2 | 3 | 4 | 5;
@@ -47,7 +46,7 @@ export interface ProbeSideState {
 }
 
 export type RangeSimulatorPhase = "baseline" | "probing" | "complete";
-export type RangeSimulatorCompletionStatus = "in-progress" | "complete" | "probe-cap" | "no-usable-baseline" | "stopped";
+export type RangeSimulatorCompletionStatus = "in-progress" | "complete" | "no-usable-baseline" | "stopped";
 
 export interface RangeSimulatorSessionState {
   sessionId: string;
@@ -361,10 +360,6 @@ export function rateRangeSimulatorProbe(
   }
 
   const finalized = finalizeIfFinished(next);
-  if (finalized.phase === "complete") return finalized;
-  if (ratedProbeCount >= RANGE_SIMULATOR_MAX_RATED_PROBES) {
-    return markOpenSidesIncomplete({ ...finalized, phase: "complete", completionStatus: "probe-cap", queue: [] });
-  }
   return finalized;
 }
 

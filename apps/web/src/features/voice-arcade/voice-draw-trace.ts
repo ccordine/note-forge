@@ -5,6 +5,7 @@ import type {
   VoiceDrawTraceTarget,
   VoiceDrawTraceTargetId,
 } from "./voice-draw-types";
+import { clamp, clampPercent, clampUnit } from "@/lib/numeric";
 
 const TRACE_SAMPLE_SPACING = 0.0125;
 const TRACE_COVERAGE_RADIUS = 0.035;
@@ -12,10 +13,6 @@ const TRACE_MAX_DEVIATION = 0.2;
 
 function freezePoint(point: Readonly<VoiceDrawPoint>): VoiceDrawPoint {
   return Object.freeze({ x: point.x, y: point.y });
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function circlePoints(): VoiceDrawPoint[] {
@@ -233,8 +230,8 @@ export function scoreVoiceDrawTrace(
       ))
     )).length;
   const targetCoverage = targetPoints.length === 0 ? 0 : reachedTargetPoints / targetPoints.length;
-  const accuracy = clamp(1 - pathDeviation / TRACE_MAX_DEVIATION, 0, 1) * 100;
-  const score = clamp(accuracy * 0.55 + targetCoverage * 100 * 0.45, 0, 100);
+  const accuracy = clampUnit(1 - pathDeviation / TRACE_MAX_DEVIATION) * 100;
+  const score = clampPercent(accuracy * 0.55 + targetCoverage * 100 * 0.45);
   const roundedScore = rounded(score, 2);
   return Object.freeze({
     targetId,

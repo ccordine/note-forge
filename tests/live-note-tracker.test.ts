@@ -16,8 +16,11 @@ function observation(
     sampleRate: SAMPLE_RATE,
     startSample: 0,
     endSample: 4_096,
+    processedSampleCount: overrides.endSample ?? 4_096,
     captureEpoch: 1,
     continuityEpoch: 1,
+    graphGeneration: 0,
+    workletProcessCount: Math.floor((overrides.endSample ?? 4_096) / 128),
     discontinuity: false,
     observationKind: "voiced",
     frequencyHz: 261.625565,
@@ -45,8 +48,11 @@ describe("continuous live-note tracking", () => {
       sampleRate: SAMPLE_RATE,
       startSample: 0,
       endSample: 4_096,
+      processedSampleCount: 4_096,
       captureEpoch: 1,
       continuityEpoch: 1,
+      graphGeneration: 0,
+      workletProcessCount: 32,
       frequencyHz: 261.625565,
       midiFloat: 60,
       nearestMidi: 60,
@@ -60,25 +66,25 @@ describe("continuous live-note tracking", () => {
   });
 
   it("advances same-note hold time by overlapping-window hops, not window lengths", () => {
-    const options = { stableAfterSeconds: 0.02 } as const;
+    const options = { stableAfterSeconds: 0.04 } as const;
     const first = advance(null, {}, options);
     const second = advance(first, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
       frequencyHz: 261.7,
       confidence: 0.96,
     }, options);
     const third = advance(second, {
-      startSample: 960,
-      endSample: 5_056,
+      startSample: 1_920,
+      endSample: 6_016,
       frequencyHz: 261.6,
       confidence: 0.97,
     }, options);
 
     expect([first?.heldSamples, second?.heldSamples, third?.heldSamples])
-      .toEqual([0, 480, 960]);
+      .toEqual([0, 960, 1_920]);
     expect([first?.heldSeconds, second?.heldSeconds, third?.heldSeconds])
-      .toEqual([0, 0.01, 0.02]);
+      .toEqual([0, 0.02, 0.04]);
     expect([first?.stable, second?.stable, third?.stable])
       .toEqual([false, false, true]);
     expect(third?.enteredAtSample).toBe(4_096);
@@ -87,8 +93,8 @@ describe("continuous live-note tracking", () => {
   it("treats silence and uncertainty as ordinary note-free observations", () => {
     const voiced = advance(null);
     const silence = advance(voiced, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
       observationKind: "unvoiced",
       frequencyHz: null,
       midiFloat: null,
@@ -97,12 +103,12 @@ describe("continuous live-note tracking", () => {
       confidence: 0,
     });
     const afterSilence = advance(silence, {
-      startSample: 960,
-      endSample: 5_056,
+      startSample: 1_920,
+      endSample: 6_016,
     });
     const uncertain = advance(afterSilence, {
-      startSample: 1_440,
-      endSample: 5_536,
+      startSample: 2_880,
+      endSample: 6_976,
       observationKind: "uncertain",
       frequencyHz: 261.4,
       midiFloat: 59.985,
@@ -114,7 +120,7 @@ describe("continuous live-note tracking", () => {
     expect(silence).toBeNull();
     expect(afterSilence).toMatchObject({
       nearestMidi: 60,
-      enteredAtSample: 5_056,
+      enteredAtSample: 6_016,
       heldSamples: 0,
     });
     expect(uncertain).toBeNull();
@@ -123,8 +129,8 @@ describe("continuous live-note tracking", () => {
   it("starts a new occupancy interval immediately when the nearest note changes", () => {
     const c4 = advance(null);
     const cSharp4 = advance(c4, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
       frequencyHz: 277.182631,
       midiFloat: 61,
       nearestMidi: 61,
@@ -133,7 +139,7 @@ describe("continuous live-note tracking", () => {
 
     expect(cSharp4).toMatchObject({
       nearestMidi: 61,
-      enteredAtSample: 4_576,
+      enteredAtSample: 5_056,
       heldSamples: 0,
       heldSeconds: 0,
     });
@@ -147,16 +153,16 @@ describe("continuous live-note tracking", () => {
       confidence: 0.82,
     });
     const second = advance(first, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
       frequencyHz: 264.665,
       midiFloat: 60.2,
       centsFromNearest: 20,
       confidence: 0.91,
     });
     const third = advance(second, {
-      startSample: 960,
-      endSample: 5_056,
+      startSample: 1_920,
+      endSample: 6_016,
       frequencyHz: 260.871,
       midiFloat: 59.95,
       centsFromNearest: -5,
@@ -170,20 +176,20 @@ describe("continuous live-note tracking", () => {
       centsFromNearest: -5,
       confidence: 0.88,
       enteredAtSample: 4_096,
-      heldSamples: 960,
+      heldSamples: 1_920,
     });
   });
 
   it("resets occupancy across explicit discontinuities and epoch changes", () => {
     const first = advance(null);
     const discontinuous = advance(first, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
       discontinuity: true,
     });
     const newContinuityEpoch = advance(discontinuous, {
-      startSample: 960,
-      endSample: 5_056,
+      startSample: 1_920,
+      endSample: 6_016,
       continuityEpoch: 2,
     });
     const newCaptureEpoch = advance(newContinuityEpoch, {
@@ -206,7 +212,7 @@ describe("continuous live-note tracking", () => {
     }
   });
 
-  it("resets on duplicate, regressing, or non-overlapping coordinates", () => {
+  it("ignores duplicate/reordered frames and resets on a real missing window", () => {
     const first = advance(null);
     const duplicate = advance(first);
     const regressing = advance(first, {
@@ -218,10 +224,23 @@ describe("continuous live-note tracking", () => {
       endSample: 9_096,
     });
 
-    for (const live of [duplicate, regressing, gap]) {
-      expect(live).toMatchObject({ heldSamples: 0, heldSeconds: 0 });
-      expect(live?.enteredAtSample).toBe(live?.endSample);
-    }
+    expect(duplicate).toBe(first);
+    expect(regressing).toBe(first);
+    expect(gap).toMatchObject({ heldSamples: 0, heldSeconds: 0 });
+    expect(gap?.enteredAtSample).toBe(gap?.endSample);
+  });
+
+  it("does not let stale nonvoiced evidence clear a newer live note", () => {
+    const first = advance(null);
+    const staleSilence = advance(first, {
+      observationKind: "unvoiced",
+      frequencyHz: null,
+      midiFloat: null,
+      nearestMidi: null,
+      centsFromNearest: null,
+      confidence: 0,
+    } as Partial<TrackablePitchObservation>);
+    expect(staleSilence).toBe(first);
   });
 
   it("clears rather than throwing on malformed or unsafe stream evidence", () => {
@@ -253,12 +272,12 @@ describe("continuous live-note tracking", () => {
       heldSamples: 4_097,
     } as unknown as LiveNote;
     const live = advance(forged, {
-      startSample: 480,
-      endSample: 4_576,
+      startSample: 960,
+      endSample: 5_056,
     });
 
     expect(live).toMatchObject({
-      enteredAtSample: 4_576,
+      enteredAtSample: 5_056,
       heldSamples: 0,
     });
   });
@@ -275,8 +294,8 @@ describe("continuous live-note tracking", () => {
     }).toThrow(TypeError);
   });
 
-  it("validates the one bounded interpretation option", () => {
-    const invalid = [-1, 60.001, Number.NaN, Number.POSITIVE_INFINITY];
+  it("validates the interpretation threshold without imposing a lifetime ceiling", () => {
+    const invalid = [-1, Number.NaN, Number.POSITIVE_INFINITY];
 
     for (const stableAfterSeconds of invalid) {
       expect(() => advance(null, {}, { stableAfterSeconds })).toThrow(RangeError);
@@ -287,6 +306,6 @@ describe("continuous live-note tracking", () => {
       null as never,
     )).toThrow(TypeError);
     expect(advance(null, {}, { stableAfterSeconds: 0 })?.stable).toBe(true);
-    expect(advance(null, {}, { stableAfterSeconds: 60 })?.stable).toBe(false);
+    expect(advance(null, {}, { stableAfterSeconds: 3_600 })?.stable).toBe(false);
   });
 });

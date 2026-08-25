@@ -109,7 +109,7 @@ describe("sample-authoritative Resonance controller", () => {
     }
     expect(state.pitchHistory.length).toBeGreaterThan(1);
 
-    const boundary = updateResonanceControllerFromFrame(state, observation(0, 55, "voiced", {
+    const boundary = updateResonanceControllerFromFrame(state, observation(6, 55, "voiced", {
       continuityEpoch: 1,
       graphGeneration: 1,
       discontinuity: true,

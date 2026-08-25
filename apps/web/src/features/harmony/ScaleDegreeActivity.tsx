@@ -1,6 +1,7 @@
 import { useReducer } from "react";
 import { normalizePitchClass } from "@noteforge/music-core";
-import { playSafely, playTone, playToneSequence } from "@/audio/synth";
+import { playSafely, playToneSequence } from "@/audio/synth";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import {
   continuousMidiToHz,
   isScalePresetId,
@@ -14,6 +15,7 @@ import { useAppNavigation } from "@/routing/use-app-navigation";
 import { useMusicalState } from "@/state/MusicalContext";
 import { ActionButton, Eyebrow, Panel, PlayButton, Segmented, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { CHROMATIC_SCALE_DEGREES } from "@noteforge/music-core";
 import { midiNearMiddleC } from "./model";
 
@@ -132,6 +134,11 @@ function ProductionAnswer({
   readonly onMeasure: (midi: number) => void;
 }) {
   const { timbre } = useMusicalState();
+  const tonicPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(midiNearMiddleC(tonicPitchClass)),
+    timbre,
+    amplitude: 0.22,
+  });
   return (
     <Panel className="degree-answer-card">
       <Eyebrow>Motor prediction mission</Eyebrow>
@@ -140,13 +147,9 @@ function ProductionAnswer({
         <h3>The tonic is {pitchClassLabel(tonicPitchClass)}.</h3>
         <p>Silently locate {pitchClassLabel(tonicPitchClass + degree)}, then begin directly without sliding.</p>
         <div>
-          <PlayButton
-            label="Hear tonic only"
-            onClick={() => playSafely(playTone({
-              frequencyHz: continuousMidiToHz(midiNearMiddleC(tonicPitchClass)),
-              timbre,
-              duration: 1.1,
-            }), "Harmony tonic")}
+          <NotePlaybackToggle
+            label={pitchClassLabel(tonicPitchClass)}
+            playback={tonicPlayback}
           />
           <ActionButton className="primary" onClick={() => onMeasure(targetMidi)}>
             <Icon name="mic" size={17} /> Measure the landing

@@ -95,33 +95,29 @@ describe("song workspace reducer", () => {
     expect(review.stage).toBe("review");
   });
 
-  it("caps markers without mutating the prior state", () => {
-    const loaded = loadedState();
-    const first = reduceSongWorkspace(loaded, {
-      type: "marker-added",
-      marker: { time: 1.25, type: "breath" },
-      maximum: 1,
-    });
-    const capped = reduceSongWorkspace(first, {
-      type: "marker-added",
-      marker: { time: 2, type: "phrase" },
-      maximum: 1,
-    });
-    expect(loaded.markers).toHaveLength(0);
-    expect(first.markers).toEqual([{ time: 1.25, type: "breath" }]);
-    expect(capped).toBe(first);
+  it("retains every authored marker beyond the former 200-marker cutoff", () => {
+    let state = loadedState();
+    for (let index = 0; index < 225; index += 1) {
+      state = reduceSongWorkspace(state, {
+        type: "marker-added",
+        marker: { time: index / 10, type: index % 2 === 0 ? "breath" : "phrase" },
+      });
+    }
+    expect(state.markers).toHaveLength(225);
+    expect(state.markers[0]).toEqual({ time: 0, type: "breath" });
+    expect(state.markers.at(-1)).toEqual({ time: 22.4, type: "breath" });
   });
 
-  it("moves a completed explicit take into review and caps temporary takes", () => {
+  it("moves completed explicit takes into review without evicting older takes", () => {
     const take = (id: string): VoiceTake => ({ id, url: `blob:${id}`, createdAt: new Date(0) });
     let state = loadedState();
     state = reduceSongWorkspace(state, { type: "stage-changed", stage: "practice" });
-    state = reduceSongWorkspace(state, { type: "take-added", take: take("one"), maximum: 2 });
+    state = reduceSongWorkspace(state, { type: "take-added", take: take("one") });
     state = reduceSongWorkspace(state, { type: "stage-changed", stage: "practice" });
-    state = reduceSongWorkspace(state, { type: "take-added", take: take("two"), maximum: 2 });
-    state = reduceSongWorkspace(state, { type: "take-added", take: take("three"), maximum: 2 });
+    state = reduceSongWorkspace(state, { type: "take-added", take: take("two") });
+    state = reduceSongWorkspace(state, { type: "take-added", take: take("three") });
 
     expect(state.stage).toBe("review");
-    expect(state.takes.map(({ id }) => id)).toEqual(["three", "two"]);
+    expect(state.takes.map(({ id }) => id)).toEqual(["three", "two", "one"]);
   });
 });

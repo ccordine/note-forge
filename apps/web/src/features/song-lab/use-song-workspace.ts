@@ -81,7 +81,6 @@ export function useSongWorkspace() {
       ...playbackRequest(),
       inputRunning: input.state === "running",
       createRecorder: input.createRecorder,
-      takes: state.takes,
     });
   };
 

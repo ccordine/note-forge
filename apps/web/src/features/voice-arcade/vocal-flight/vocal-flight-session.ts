@@ -1,4 +1,6 @@
 import type { ArcadeDifficultyId } from "../types";
+import { hasQualifiedBrightnessEvidence } from "@/audio/vocal-brightness";
+import { clamp, clampSignedUnit } from "@/lib/numeric";
 import {
   createVocalCalibrationState,
   reduceVocalCalibration,
@@ -147,16 +149,13 @@ function calibrationVector(
 ): VocalControlVector {
   const voiced = sample.observationKind === "voiced"
     && sample.midiFloat !== null
-    && Number.isFinite(sample.midiFloat)
-    && sample.confidence >= .55;
+    && Number.isFinite(sample.midiFloat);
   if (!voiced || calibration.measurements.neutralPitch.count === 0) return EMPTY_VECTOR;
   const pitchDelta = (sample.midiFloat! - calibration.measurements.neutralPitch.mean) * 100;
   const upper = finiteExtent(calibration.measurements.upperPitchCents.maximum, 180);
   const lower = finiteExtent(calibration.measurements.lowerPitchCents.maximum, 180);
-  const pitchAxis = Math.min(1, Math.max(-1, pitchDelta / (pitchDelta < 0 ? lower : upper)));
-  const brightnessReliable = sample.brightness !== null
-    && Number.isFinite(sample.brightness)
-    && sample.brightnessConfidence >= .55
+  const pitchAxis = clampSignedUnit(pitchDelta / (pitchDelta < 0 ? lower : upper));
+  const brightnessReliable = hasQualifiedBrightnessEvidence(sample)
     && calibration.measurements.neutralBrightness.count > 0;
   const brightnessDelta = brightnessReliable
     ? sample.brightness! - calibration.measurements.neutralBrightness.mean
@@ -166,7 +165,7 @@ function calibrationVector(
   return Object.freeze({
     pitchAxis,
     brightnessAxis: brightnessReliable
-      ? Math.min(1, Math.max(-1, brightnessDelta / (brightnessDelta < 0 ? darker : brighter)))
+      ? clampSignedUnit(brightnessDelta / (brightnessDelta < 0 ? darker : brighter))
       : 0,
     pitchConfidence: sample.confidence,
     brightnessConfidence: sample.brightnessConfidence,
@@ -317,8 +316,8 @@ export function desiredVocalFlightControl(
     const yError = targetY - flight.position.y;
     const finalGate = course?.definition.gates[course.definition.gates.length - 1];
     return {
-      pitchAxis: Math.min(1, Math.max(-1, yError / 8)),
-      brightnessAxis: Math.min(1, Math.max(-1, xError / 8)),
+      pitchAxis: clampSignedUnit(yError / 8),
+      brightnessAxis: clampSignedUnit(xError / 8),
       pathError: Math.hypot(xError, yError),
       tolerance: finalGate?.radius ?? 8,
     };
@@ -327,8 +326,8 @@ export function desiredVocalFlightControl(
   const xError = desired.x - flight.position.x;
   const yError = desired.y - flight.position.y;
   return {
-    pitchAxis: Math.min(1, Math.max(-1, yError / 8)),
-    brightnessAxis: Math.min(1, Math.max(-1, xError / 8)),
+    pitchAxis: clampSignedUnit(yError / 8),
+    brightnessAxis: clampSignedUnit(xError / 8),
     pathError: Math.hypot(xError, yError),
     tolerance: gate.radius,
   };
@@ -455,9 +454,10 @@ function nextUnlockedTutorialOrder(state: Readonly<VocalFlightSessionState>): nu
   if (state.mode !== "training" || state.course?.status !== "complete") {
     return state.unlockedTutorialOrder;
   }
-  return Math.min(
+  return clamp(
+    state.course.definition.order + 1,
+    state.unlockedTutorialOrder,
     VOCAL_FLIGHT_TUTORIALS.length + 1,
-    Math.max(state.unlockedTutorialOrder, state.course.definition.order + 1),
   );
 }
 

@@ -72,7 +72,7 @@ export function IntervalLab() {
       </Panel>
 
       <Activity
-        key={`${mode}-${presentation}`}
+        key={mode === "production" ? mode : `${mode}-${presentation}`}
         presentation={presentation}
         soundFirst={soundFirst}
         timbre={timbre}

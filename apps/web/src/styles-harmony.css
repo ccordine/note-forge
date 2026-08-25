@@ -359,3 +359,46 @@ flex:1}
 .follow-modes>button svg{
 color:var(--lime)}
 
+@media (max-width:760px){
+.harmony-config{
+display:block;
+overflow:hidden}
+.harmony-config>*+*{
+margin-top:10px}
+.harmony-config>.segmented-field .segmented{
+display:grid;
+grid-template-columns:repeat(2,minmax(0,1fr));
+overflow:visible}
+.harmony-config>.segmented-field .segmented button{
+min-width:0;
+min-height:44px;
+padding:5px 7px;
+line-height:1.2;
+white-space:normal}
+.harmony-fields{
+display:grid;
+grid-template-columns:repeat(2,minmax(0,1fr));
+gap:8px}
+.harmony-fields>*{
+min-width:0}
+.harmony-main-grid,.voice-leading-view,.follow-view{
+grid-template-columns:minmax(0,1fr)}
+.harmony-main-grid>*,.voice-leading-view>*,.follow-view>*{
+min-width:0}
+.chord-timeline{
+display:grid;
+grid-template-columns:repeat(2,minmax(0,1fr));
+overflow:visible}
+.chord-timeline button{
+min-width:0}
+.chord-orbit{
+width:min(260px,100%)}}
+
+@media (max-width:430px){
+.harmony-fields{
+grid-template-columns:minmax(0,1fr)}
+.progression-heading{
+flex-wrap:wrap;
+gap:10px}
+.chord-orbit-card,.role-missions-card,.selected-function-card,.voice-map-card,.voice-mission-list,.follow-card,.follow-modes{
+padding:16px}}

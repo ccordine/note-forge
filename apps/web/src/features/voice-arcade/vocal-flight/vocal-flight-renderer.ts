@@ -4,6 +4,7 @@ import type {
   VocalFlightState,
   VocalFlightGate,
 } from "./types";
+import { clamp } from "@/lib/numeric";
 import { vocalFlightGateCenter } from "./courses";
 
 export interface VocalFlightRenderScene {
@@ -20,10 +21,6 @@ interface ProjectedGate {
   readonly y: number;
   readonly radius: number;
   readonly depth: number;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function projectGate(

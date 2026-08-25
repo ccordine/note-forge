@@ -18,6 +18,7 @@ import {
   captureProcessOutput,
   delay,
   DevToolsSession,
+  enableRemotePitchDiagnostics,
   evaluate,
   stopProcessGroup,
   waitForBrowser,
@@ -36,6 +37,11 @@ import {
   SUSTAINED_NOTE_SECONDS,
 } from "./proof-support/note-input-fixture.mjs";
 import { BROWSER_INSTRUMENTATION_SOURCE } from "./proof-support/note-input-instrumentation.mjs";
+import {
+  assertRangeLoopTargetPlaybackUnchanged,
+  startRangeLoopTargetPlayback,
+  stopRangeLoopTargetPlayback,
+} from "./proof-support/sustained-playback-proof.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
@@ -180,6 +186,7 @@ async function main() {
       "document.readyState === 'complete' && Boolean(document.querySelector('[data-global-mic-enable]'))",
       "the production global voice control",
     );
+    await enableRemotePitchDiagnostics(session);
     const clicked = await evaluate(session, `(() => {
       const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
@@ -231,6 +238,9 @@ async function main() {
     }))()`);
     assert(rangeLoopReady.phase === "idle" && rangeLoopReady.heldSeconds === 0,
       `Range Loop scored before its visible Start command: ${JSON.stringify(rangeLoopReady)}.`);
+
+    const playback = await startRangeLoopTargetPlayback(session);
+
     const rangeLoopStarted = await evaluate(session, `(() => {
       const button = [...document.querySelectorAll('button')]
         .find((candidate) => candidate.textContent?.includes('Start Range Loop'));
@@ -244,6 +254,7 @@ async function main() {
       "Range Loop entering tracking from its visible Start command",
       5_000,
     );
+    await assertRangeLoopTargetPlaybackUnchanged(session, playback, "Visible Start");
 
     await waitForBrowser(
       session,
@@ -252,46 +263,22 @@ async function main() {
         const hold = Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds'));
         return detected === 'C3' && hold >= 0.6 && hold < 2.2;
       })()`,
-      "quiet C3 establishing sample-timed dwell before reference playback",
+      "quiet C3 establishing sample-timed dwell while target playback stays on",
       25_000,
     );
-    const referenceBefore = await evaluate(session, `(() => ({
+    const playbackDuringHold = await evaluate(session, `(() => ({
       holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
       sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
-    }))()`);
-    const audioBeforeReference = await browserProofSnapshot(session);
-    const referenceClicked = await evaluate(session, `(() => {
-      const button = document.querySelector('.range-loop-reference-action button');
-      button?.click();
-      return Boolean(button);
-    })()`);
-    assert(referenceClicked, "Range Loop's real short-reference control was unavailable.");
-    await delay(900);
-    const referenceAfter = await evaluate(session, `(() => ({
-      holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
-      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+      sameToggle: window.__noteforgeRangeLoopPlaybackToggle === document.querySelector('.range-loop-reference-action [data-note-playback-toggle]'),
+      playbackPressed: document.querySelector('.range-loop-reference-action [data-note-playback-toggle]')?.getAttribute('aria-pressed') || null,
       inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
     }))()`);
-    const audioAfterReference = await browserProofSnapshot(session);
-    const newStarts = audioAfterReference.oscillatorStarts.slice(audioBeforeReference.oscillatorStarts.length);
-    const newStops = audioAfterReference.oscillatorStops.slice(audioBeforeReference.oscillatorStops.length);
-    assert(referenceBefore.sameTuner === true
-      && referenceAfter.sameTuner === true
-      && referenceAfter.inputState === "running"
-      && referenceAfter.holdSeconds > referenceBefore.holdSeconds,
-    `Reference playback replaced the tuner or interrupted earned dwell: ${JSON.stringify({ referenceBefore, referenceAfter })}.`);
-    assert(audioAfterReference.oscillators === audioBeforeReference.oscillators + 1
-      && newStarts.length === 1
-      && newStops.length === 1
-      && newStops[0].id === newStarts[0].id
-      && newStops[0].when - newStarts[0].when >= 0.55
-      && newStops[0].when - newStarts[0].when <= 0.7,
-    `Reference playback was not one bounded oscillator: ${JSON.stringify({ newStarts, newStops })}.`);
-    await delay(800);
-    const afterReferenceTail = await browserProofSnapshot(session);
-    assert(afterReferenceTail.oscillators === audioAfterReference.oscillators
-      && afterReferenceTail.oscillatorStarts.length === audioAfterReference.oscillatorStarts.length,
-    "A persistent quieter oscillator appeared after the short reference ended.");
+    assert(playbackDuringHold.sameTuner === true
+      && playbackDuringHold.sameToggle === true
+      && playbackDuringHold.playbackPressed === "true"
+      && playbackDuringHold.inputState === "running"
+      && playbackDuringHold.holdSeconds >= 0.6,
+    `Sustained playback replaced the tuner, changed its own toggle, or interrupted earned dwell: ${JSON.stringify(playbackDuringHold)}.`);
 
     await waitForBrowser(
       session,
@@ -370,6 +357,16 @@ async function main() {
       && rangeLoopProof.workletSampleMessages > sustainEndProof.workletSampleMessages
       && rangeLoopProof.trackStopCalls.length === 0,
     `Range Loop replaced or stopped continuous capture: ${JSON.stringify({ sustainEndProof, rangeLoopProof })}.`);
+    await assertRangeLoopTargetPlaybackUnchanged(
+      session,
+      playback,
+      "Achievement or visible Finish",
+    );
+    const { stops: playbackStops } = await stopRangeLoopTargetPlayback(
+      session,
+      playback,
+      rangeLoopProof,
+    );
 
     const stopArmed = await evaluate(session, `(() => {
       const control = window.__noteforgeNoteInputProof;
@@ -488,7 +485,8 @@ async function main() {
       console.log(`  ${proof.label}: detector ${proof.seconds.toFixed(3)}s/${proof.frames} uninterrupted frames, max error ${proof.maximumCents.toFixed(2)}c, median ${proof.medianRmsDbfs.toFixed(1)} dBFS; UI ${rendered.seconds.toFixed(3)}s, hold ${rendered.maximumHeldSeconds.toFixed(3)}s`);
     }
     console.log(`  detector budget: max ${Math.max(...processingMs).toFixed(3)}ms < ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms hop`);
-    console.log(`  Range Loop: idle evidence earned 0.00s until visible Start; one stable tuner retained identity across wrong-note/silence/reference/achievement; quiet C3 continued from ${rangeLoopResult.holdSeconds.toFixed(2)}s to ${uncappedRangeLoop.holdSeconds.toFixed(2)}s beyond the old threshold; visible Finish froze only feature dwell while PCM and live C3 telemetry continued`);
+    console.log(`  Range Loop: idle evidence earned 0.00s until visible Start; one stable tuner retained identity through achievement; quiet C3 continued from ${rangeLoopResult.holdSeconds.toFixed(2)}s to ${uncappedRangeLoop.holdSeconds.toFixed(2)}s beyond the old threshold; visible Finish froze only feature dwell while PCM and live C3 telemetry continued`);
+    console.log(`  target playback: one ${playback.starts.length}-oscillator sustained lane remained at its full attack amplitude with zero stops or gain changes beyond the former cutoff and across Start/achievement/Finish; the same still-mounted Play/Stop toggle issued the first ${playbackStops.length} stops`);
     console.log(`  requested sustain: ${SUSTAINED_NOTE_SECONDS.toFixed(1)}s per note; accepted uninterrupted minimum ${MINIMUM_CONTINUOUS_SECONDS.toFixed(1)}s`);
   } catch (error) {
     const context = [

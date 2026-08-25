@@ -1,5 +1,5 @@
-import { type PitchFrame } from "@noteforge/pitch-engine";
 import { type AttemptMetrics } from "@noteforge/trainer-core";
+import type { PitchObservation } from "@/audio/note-input";
 import type { Timbre } from "@/audio/synth";
 import {
   attemptScoringFrames,
@@ -11,6 +11,7 @@ import {
 import { aggregateMedianMidi } from "@/features/training-session/attempt-scoring-aggregate";
 import { continuousMidiToHz } from "@/lib/music-display";
 import type { HumMode } from "@/navigation";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
 
 export type HumShape = "m" | "n" | "ng";
 
@@ -24,7 +25,7 @@ export interface HumTakeConfiguration {
 }
 
 export interface HumResult {
-  readonly frames: readonly PitchFrame[];
+  readonly frames: readonly Readonly<PitchObservation>[];
   readonly metrics: AttemptMetrics | null;
   readonly anchor: {
     readonly midiFloat: number;
@@ -36,11 +37,15 @@ export interface HumResult {
   readonly continuityRatio: number;
 }
 
-export function median(values: readonly number[]): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+/**
+ * Latch the display coordinate to the first authoritative voiced point.
+ * Appending later evidence must never recenter already drawn trace geometry.
+ */
+export function humRibbonAnchorMidi(
+  frames: readonly Readonly<PitchObservation>[],
+): number | null {
+  const firstVoiced = frames.find(isAuthoritativeVoicedPitch);
+  return firstVoiced?.midiFloat ?? null;
 }
 
 export function scoreHumTake(

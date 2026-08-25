@@ -4,6 +4,7 @@ import {
   detectPitch,
   frequencyToMidi,
   midiToFrequency,
+  YIN_DETECTOR_DEFAULTS,
 } from "../src";
 import {
   centsError,
@@ -40,6 +41,62 @@ describe("pitch conversion", () => {
 });
 
 describe("YIN pitch detection", () => {
+  it("uses the canonical full-depth, zero-floor detector policy for direct callers", () => {
+    const cases = [
+      { midi: 30, amplitude: 0.2 },
+      { midi: 48, amplitude: 0.001 },
+    ] as const;
+    const frames = cases.map(({ midi, amplitude }) => detectPitch(
+      generateSyntheticSignal({
+        sampleRate: SAMPLE_RATE,
+        durationSeconds: 4_096 / SAMPLE_RATE,
+        frequencyHz: midiToFrequency(midi),
+        amplitude,
+        harmonics: [
+          { multiple: 2, amplitude: 0.47 },
+          { multiple: 3, amplitude: 0.23 },
+        ],
+      }),
+      { sampleRate: SAMPLE_RATE },
+    ));
+
+    expect(YIN_DETECTOR_DEFAULTS).toMatchObject({
+      minFrequency: 45,
+      maxFrequency: 1_200,
+      yinThreshold: 0.18,
+      minConfidence: 0.55,
+      rmsThreshold: 0,
+    });
+    expect(frames.map((frame) => frame.nearestMidi)).toEqual([30, 48]);
+    expect(frames.every((frame) => frame.reason === "detected")).toBe(true);
+  });
+
+  it("uses yinThreshold for candidate search without overriding minConfidence admission", () => {
+    const frame = detectPitch(generateSyntheticSignal({
+      sampleRate: SAMPLE_RATE,
+      durationSeconds: 4_096 / SAMPLE_RATE,
+      frequencyHz: midiToFrequency(48),
+      amplitude: 0.02,
+      harmonics: [
+        { multiple: 2, amplitude: 0.3 },
+        { multiple: 3, amplitude: 0.1 },
+      ],
+      noiseAmplitude: 0.013,
+      noiseSeed: 12_345,
+    }), {
+      sampleRate: SAMPLE_RATE,
+      minFrequency: 45,
+      maxFrequency: 1_200,
+      yinThreshold: 0.18,
+      minConfidence: 0.55,
+      rmsThreshold: 0,
+    });
+
+    expect(frame.confidence).toBeGreaterThan(0.8);
+    expect(frame.confidence).toBeLessThan(0.82);
+    expect(frame).toMatchObject({ reason: "detected", voiced: true, nearestMidi: 48 });
+  });
+
   it("tracks every semitone across the intended range with no octave errors", () => {
     const notes = Array.from({ length: 51 }, (_unused, index) => 36 + index);
     let octaveErrors = 0;
@@ -352,6 +409,90 @@ describe("YIN pitch detection", () => {
       .toBeLessThan(3);
   });
 
+  it("does not report an old 614-sample D3 release prefix as current pitch", () => {
+    const samples = new Float32Array(4_096);
+    const frequencyHz = midiFrequency(50);
+    for (let index = 0; index < 614; index += 1) {
+      samples[index] = 0.1 * Math.sin(2 * Math.PI * frequencyHz * index / SAMPLE_RATE + 0.7);
+    }
+
+    const frame = detectPitch(samples, {
+      sampleRate: SAMPLE_RATE,
+      minFrequency: 45,
+      maxFrequency: 1_200,
+      analysisWindowSize: 2_048,
+    });
+
+    expect(frame).toMatchObject({
+      reason: "below-confidence-threshold",
+      voiced: false,
+      frequencyHz: null,
+      confidence: 0,
+    });
+    expect(frame.yinValue).not.toBeNull();
+  });
+
+  it("does not invent pitch from the mirrored 614-sample onset alone", () => {
+    const samples = new Float32Array(4_096);
+    const frequencyHz = midiFrequency(50);
+    const onset = samples.length - 614;
+    for (let index = onset; index < samples.length; index += 1) {
+      samples[index] = 0.1 * Math.sin(
+        2 * Math.PI * frequencyHz * (index - onset) / SAMPLE_RATE + 0.7,
+      );
+    }
+
+    const frame = detectPitch(samples, {
+      sampleRate: SAMPLE_RATE,
+      minFrequency: 45,
+      maxFrequency: 1_200,
+      analysisWindowSize: 2_048,
+    });
+
+    expect(frame.voiced).toBe(false);
+    expect(frame.frequencyHz).toBeNull();
+  });
+
+  it("accepts two genuinely repeating recent candidate periods", () => {
+    const samples = new Float32Array(4_096);
+    const integerPeriod = 327;
+    const frequencyHz = SAMPLE_RATE / integerPeriod;
+    const recentStart = samples.length - 2 * integerPeriod;
+    for (let index = 0; index < samples.length; index += 1) {
+      if (index >= 3_115 && index < recentStart) continue;
+      samples[index] = 0.1 * Math.sin(2 * Math.PI * index / integerPeriod + 0.7);
+    }
+
+    const frame = detectPitch(samples, {
+      sampleRate: SAMPLE_RATE,
+      minFrequency: 45,
+      maxFrequency: 1_200,
+      analysisWindowSize: 2_048,
+    });
+
+    expect(frame).toMatchObject({ reason: "detected", voiced: true, nearestMidi: 50 });
+    expect(Math.abs(centsError(frame.frequencyHz!, frequencyHz))).toBeLessThan(1);
+    expect(frame.confidence).toBeGreaterThan(0.95);
+  });
+
+  it("keeps arbitrarily quiet full-window periodic evidence current", () => {
+    const frequencyHz = midiFrequency(48);
+    const frame = detectPitch(generateSyntheticSignal({
+      sampleRate: SAMPLE_RATE,
+      durationSeconds: 4_096 / SAMPLE_RATE,
+      frequencyHz,
+      amplitude: 1e-7,
+      harmonics: [
+        { multiple: 2, amplitude: 0.47 },
+        { multiple: 3, amplitude: 0.23 },
+      ],
+    }), { sampleRate: SAMPLE_RATE });
+
+    expect(frame).toMatchObject({ reason: "detected", voiced: true, nearestMidi: 48 });
+    expect(Math.abs(centsError(frame.frequencyHz!, frequencyHz))).toBeLessThan(1);
+    expect(frame.rms).toBeGreaterThan(0);
+  });
+
   it("returns direct stateless results when the pitch changes", () => {
     const detectMidi = (midi: number, timeSeconds: number) => detectPitch(
       generateSyntheticSignal({
@@ -444,5 +585,11 @@ describe("observable detection failures", () => {
           yinThreshold: 2,
         }),
     ).toThrow(/yinThreshold/);
+    expect(
+      () => detectPitch(new Float32Array(4_096), {
+        sampleRate: 48_000,
+        currentEdgeSpanSamples: -1,
+      }),
+    ).toThrow(/currentEdgeSpanSamples/);
   });
 });

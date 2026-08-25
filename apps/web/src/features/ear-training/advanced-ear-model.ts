@@ -1,5 +1,6 @@
 import { normalizePitchClass } from "@noteforge/music-core";
 import { TIMBRES, type Timbre } from "@/audio/synth";
+import { clamp } from "@/lib/numeric";
 import type { EarMode } from "@/navigation";
 import type { FoundationEarMode } from "./NoteFamilyTrainer";
 
@@ -108,7 +109,7 @@ export function createAdvancedEarTrial(
     const offsets = [-5, -2, -1, 1, 2, 5] as const;
     const offset = offsets[randomIndex(offsets.length, random)] ?? 1;
     return {
-      firstMidi: Math.max(45, Math.min(76, targetMidi + offset)),
+      firstMidi: clamp(targetMidi + offset, 45, 76),
       targetMidi,
       timbreA,
       timbreB,
@@ -119,7 +120,7 @@ export function createAdvancedEarTrial(
     const distance = 1 + randomIndex(7, random);
     const offset = random() < 0.5 ? -distance : distance;
     return {
-      firstMidi: Math.max(45, Math.min(76, targetMidi + offset)),
+      firstMidi: clamp(targetMidi + offset, 45, 76),
       targetMidi,
       timbreA,
       timbreB,

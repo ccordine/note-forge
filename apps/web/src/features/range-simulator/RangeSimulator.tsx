@@ -3,6 +3,7 @@ import "../../styles-range-simulator.css";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel, Select } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import {
   activeRangeSimulatorTarget,
@@ -12,7 +13,6 @@ import {
 import {
   EFFORT_RATING_LABELS,
   RANGE_SIMULATOR_MAX_MIDI,
-  RANGE_SIMULATOR_MAX_RATED_PROBES,
   RANGE_SIMULATOR_MIN_MIDI,
   currentRangeSimulatorProbe,
   type EffortRating,
@@ -62,7 +62,7 @@ function progressLabel(state: Readonly<RangeSimulatorControllerState>): string {
     const index = probe ? state.session.baselineCandidates.indexOf(probe.midi) + 1 : 0;
     return `HOME ${Math.max(1, index)} / ${state.session.baselineCandidates.length}`;
   }
-  return `PROBE ${state.session.ratedProbeCount} / ${RANGE_SIMULATOR_MAX_RATED_PROBES}`;
+  return `PROBE ${state.session.ratedProbeCount}`;
 }
 
 function PersistenceBadge({ workspace }: { workspace: Readonly<RangeSimulatorWorkspace> }) {
@@ -216,6 +216,9 @@ function AchievementAction({
         <div><dt>Usable · ratings 1–3</dt><dd>{formatBounds(summary.usableBounds)}</dd></div>
       </dl>
       <p>Keep using the live tuner for as long as you want. Only Finish today ends this assessment.</p>
+      <div className="range-sim-action-buttons">
+        <ActionButton onClick={workspace.recheck}>Recheck boundaries</ActionButton>
+      </div>
     </div>
   );
 }
@@ -298,7 +301,10 @@ export function RangeSimulator() {
           <div><Eyebrow>{shellEyebrow}</Eyebrow><h2 id="range-sim-target-title">{shellTitle}</h2><p>{shellDetail}</p></div>
           <div className="range-sim-toolbar">
             <PersistenceBadge workspace={workspace} />
-            <ActionButton onClick={workspace.hearReference}><Icon name="play" size={15} /> Hear {noteLabel(targetMidi)}</ActionButton>
+            <NotePlaybackToggle
+              playback={workspace.referencePlayback}
+              label={noteLabel(targetMidi)}
+            />
             {state.status === "tracking" && <ActionButton onClick={workspace.finish}>Finish today</ActionButton>}
           </div>
         </header>
@@ -313,12 +319,11 @@ export function RangeSimulator() {
             phase={noteInputPhase}
             hold={{ heldSeconds: state.dwell.heldSeconds, requiredSeconds: state.dwell.requiredHoldSeconds, status: holdStatus }}
             holdMode="occupancy"
-            diagnosticsFlow="range-simulator"
           />
         </div>
 
         <div className="range-sim-notice" role="status" aria-live="polite">{state.notice}</div>
-        <details className="range-sim-safety"><summary>Safety and measurement contract</summary><p>Use an easy conversational sound and stop for pain, worsening discomfort, or fatigue. Silence and uncertain observations preserve earned dwell; only a credible different pitch resets it. The Hear button plays one 0.5-second reference and does not change scoring state.</p></details>
+        <details className="range-sim-safety"><summary>Safety and measurement contract</summary><p>Use an easy conversational sound and stop for pain, worsening discomfort, or fatigue. Silence and uncertain observations preserve earned dwell; only a credible different pitch resets it. The Play/Stop toggle is user-owned and does not change scoring state.</p></details>
       </Panel>
     </div>
   );

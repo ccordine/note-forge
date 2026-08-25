@@ -30,10 +30,12 @@ describe("PianoKeyboard layout", () => {
     });
   });
 
-  it("rejects reversed, fractional, and all-black ranges", () => {
+  it("rejects reversed, fractional, and visually clipped black-key bounds", () => {
     expect(() => buildPianoKeyLayout(60, 59)).toThrow(RangeError);
     expect(() => buildPianoKeyLayout(48.5, 59)).toThrow(TypeError);
     expect(() => buildPianoKeyLayout(49, 49)).toThrow(RangeError);
+    expect(() => buildPianoKeyLayout(49, 59)).toThrow(RangeError);
+    expect(() => buildPianoKeyLayout(48, 58)).toThrow(RangeError);
   });
 
   it("renders overlapping caller-supplied roles without inventing a target", () => {

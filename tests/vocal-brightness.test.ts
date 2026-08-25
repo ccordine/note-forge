@@ -5,6 +5,10 @@ import {
   type NoteInputWindow,
   type VocalObservation,
 } from "../apps/web/src/audio/note-input";
+import {
+  hasQualifiedBrightnessEvidence,
+  VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE,
+} from "../apps/web/src/audio/vocal-brightness";
 import { generateSyntheticSignal } from "../packages/pitch-engine/test/synthetic-signals";
 
 const SAMPLE_RATE = 48_000;
@@ -77,6 +81,26 @@ function expectVoicedBrightness(observation: Readonly<VocalObservation>): number
 }
 
 describe("shared vocal brightness telemetry", () => {
+  it("owns one explicit control-evidence confidence policy", () => {
+    expect(VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE).toBe(0.55);
+    expect(hasQualifiedBrightnessEvidence({
+      brightness: 0.4,
+      brightnessConfidence: VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE,
+    })).toBe(true);
+    expect(hasQualifiedBrightnessEvidence({
+      brightness: 0.4,
+      brightnessConfidence: VOCAL_BRIGHTNESS_CONTROL_CONFIDENCE - Number.EPSILON,
+    })).toBe(false);
+    expect(hasQualifiedBrightnessEvidence({
+      brightness: null,
+      brightnessConfidence: 1,
+    })).toBe(false);
+    expect(hasQualifiedBrightnessEvidence({
+      brightness: Number.NaN,
+      brightnessConfidence: 1,
+    })).toBe(false);
+  });
+
   it("separates dark and bright harmonic shapes at the same fundamental", () => {
     const frequencyHz = midiToFrequency(48);
     const dark = observe(harmonicVoice({ frequencyHz, profile: "dark" }));

@@ -1,3 +1,5 @@
+import { clamp } from "@/lib/numeric";
+
 export type SongWorkspaceStage = "configure" | "practice" | "review";
 export type PracticePass = "shadow" | "understand" | "mutate";
 export type SongMarkerKind = "breath" | "phrase";
@@ -84,14 +86,14 @@ export type SongWorkspaceAction =
   | { readonly type: "pass-changed"; readonly pass: PracticePass }
   | { readonly type: "chords-changed"; readonly chords: string }
   | { readonly type: "phrase-note-changed"; readonly phraseNote: string }
-  | { readonly type: "marker-added"; readonly marker: SongMarker; readonly maximum: number }
+  | { readonly type: "marker-added"; readonly marker: SongMarker }
   | { readonly type: "recording-starting" }
   | { readonly type: "recording-started" }
   | { readonly type: "recording-degraded"; readonly message: string }
   | { readonly type: "recording-finalizing" }
   | { readonly type: "recording-stopped" }
   | { readonly type: "recording-failed"; readonly message: string }
-  | { readonly type: "take-added"; readonly take: VoiceTake; readonly maximum: number }
+  | { readonly type: "take-added"; readonly take: VoiceTake }
   | { readonly type: "takes-cleared" };
 
 function finiteNonNegative(value: number): number {
@@ -150,18 +152,21 @@ export function reduceSongWorkspace(
     case "loop-toggled":
       return freezeState({ ...state, loopEnabled: !state.loopEnabled });
     case "loop-start-changed":
+      {
+        const latestStart = Math.max(0, state.loopEnd - 0.1);
       return freezeState({
         ...state,
-        loopStart: Math.min(finiteNonNegative(action.time), Math.max(0, state.loopEnd - 0.1)),
+        loopStart: clamp(finiteNonNegative(action.time), 0, latestStart),
       });
+      }
     case "loop-end-changed":
+      {
+        const earliestEnd = Math.min(state.duration, state.loopStart + 0.1);
       return freezeState({
         ...state,
-        loopEnd: Math.min(
-          state.duration,
-          Math.max(finiteNonNegative(action.time), state.loopStart + 0.1),
-        ),
+        loopEnd: clamp(finiteNonNegative(action.time), earliestEnd, state.duration),
       });
+      }
     case "speed-changed":
       return freezeState({ ...state, speed: action.speed });
     case "transpose-changed":
@@ -176,9 +181,13 @@ export function reduceSongWorkspace(
     case "phrase-note-changed":
       return freezeState({ ...state, phraseNote: action.phraseNote });
     case "marker-added":
-      return state.markers.length >= action.maximum
-        ? state as SongWorkspaceState
-        : freezeState({ ...state, markers: Object.freeze([...state.markers, action.marker]) });
+      return freezeState({
+        ...state,
+        // Markers are explicit user-authored phrase evidence. They remain
+        // until the user replaces the song/workspace; adding one never makes
+        // an earlier marker disappear or silently refuses the new marker.
+        markers: Object.freeze([...state.markers, action.marker]),
+      });
     case "recording-starting":
       return freezeState({ ...state, recordingStatus: "opening", recordError: "" });
     case "recording-started":
@@ -204,7 +213,10 @@ export function reduceSongWorkspace(
         ...state,
         stage: "review",
         recordingStatus: "idle",
-        takes: Object.freeze([action.take, ...state.takes].slice(0, action.maximum)),
+        // Takes are user-created artifacts. They remain until the user clears
+        // them or closes/replaces the workspace; adding one cannot silently
+        // revoke an older recording.
+        takes: Object.freeze([action.take, ...state.takes]),
       });
     case "takes-cleared":
       return freezeState({ ...state, takes: Object.freeze([]) });

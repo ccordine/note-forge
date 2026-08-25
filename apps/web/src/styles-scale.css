@@ -2,6 +2,8 @@
 display:grid;
 grid-template-columns:.8fr 1.2fr;
 gap:13px}
+.scale-degree-workspace>*{
+min-width:0}
 .tonal-prompt-card,.degree-answer-card{
 padding:25px}
 .tonal-prompt-card .panel-heading{
@@ -149,4 +151,5 @@ margin:25px 0}
 .degree-production>.text-button{
 margin:auto}
 
-@media(max-width:760px){.scale-degree-workspace{grid-template-columns:1fr}.tonal-home-map{gap:8px}.home-orb,.degree-orb{width:105px;height:105px}.home-path span:nth-child(2),.home-path span:nth-child(3){display:none}.degree-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.scale-degree-workspace{grid-template-columns:minmax(0,1fr)}.tonal-home-map{gap:8px}.home-orb,.degree-orb{width:105px;height:105px}.home-path span:nth-child(2),.home-path span:nth-child(3){display:none}.degree-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:430px){.tonal-prompt-card,.degree-answer-card{padding:16px}.tonal-home-map{gap:4px}.home-orb,.degree-orb{width:88px;height:88px}.degree-production{padding:8px}.degree-production>div{flex-wrap:wrap}.degree-production>div>.action-button{max-width:100%}}

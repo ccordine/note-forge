@@ -1,4 +1,10 @@
 import type { PitchObservation } from "../../audio/note-input";
+import { clampUnit } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import { createVoiceDrawNoteBank, getVoiceDrawMapping } from "./voice-draw-mapping";
 import type {
   ClearVoiceDrawOptions,
@@ -7,7 +13,6 @@ import type {
   VoiceDrawBrushStyle,
   VoiceDrawNoteMapping,
   VoiceDrawPoint,
-  VoiceDrawSampleAuthority,
   VoiceDrawSegment,
   VoiceDrawSessionAction,
   VoiceDrawState,
@@ -16,8 +21,6 @@ import type {
 
 const DEFAULT_SPEED = 0.24;
 const DEFAULT_MAX_STEP_SECONDS = 0.1;
-/** Fixed vector-history budget. Reaching it never ends or resets live drawing. */
-export const VOICE_DRAW_MAX_RETAINED_SEGMENTS = 2_048;
 const DEFAULT_STYLE = Object.freeze({
   color: "#f5f2df",
   width: 0.012,
@@ -35,10 +38,6 @@ function freezeStyle(style: Readonly<VoiceDrawBrushStyle>): VoiceDrawBrushStyle 
 
 function freezeState(state: VoiceDrawState): VoiceDrawState {
   return Object.freeze(state);
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function pointDistance(first: Readonly<VoiceDrawPoint>, second: Readonly<VoiceDrawPoint>): number {
@@ -91,7 +90,6 @@ export function createVoiceDrawState(
     phase: "idle",
     cursor: freezePoint(cursor),
     segments: Object.freeze([]),
-    retiredSegmentCount: 0,
     noteBank: createVoiceDrawNoteBank(options.voiceRange),
     speedNormalizedPerSecond,
     maxStepSeconds,
@@ -117,24 +115,16 @@ function observeStationary(
   state: Readonly<VoiceDrawState>,
   observation: Readonly<PitchObservation>,
 ): VoiceDrawState {
-  if (!authorityIsValid(observation)) return state as VoiceDrawState;
-  const previous = state.lastAuthority;
-  if (
-    previous !== null
-    && sameAuthority(previous, observation)
-    && observation.endSample <= previous.endSample
-  ) return state as VoiceDrawState;
+  const continuity = observationContinuity(state.lastAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state as VoiceDrawState;
   const mapping = reliableMapping(state, observation);
-  const continuous = previous !== null
-    && !observation.discontinuity
-    && sameAuthority(previous, observation)
-    && (observation.endSample - previous.endSample) / observation.sampleRate
-      <= state.maxStepSeconds;
+  const continuous = continuity.contiguous
+    && continuity.deltaSeconds <= state.maxStepSeconds;
   const heldSeconds = mapping !== null
     && continuous
     && state.activeMidi === mapping.midi
       ? state.activeHeldSeconds
-        + (observation.endSample - previous!.endSample) / observation.sampleRate
+        + continuity.deltaSeconds
       : 0;
   return freezeState({
     ...state,
@@ -149,44 +139,16 @@ function observeStationary(
     stationaryReason: mapping === null ? stationaryReasonFor(observation) : null,
     observedFrameCount: state.observedFrameCount + 1,
     activeStrokeId: null,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: continuity.authority,
     motionAnchorSample: null,
   });
-}
-
-function authorityFromObservation(
-  observation: Readonly<PitchObservation>,
-): VoiceDrawSampleAuthority {
-  return Object.freeze({
-    sampleRate: observation.sampleRate,
-    endSample: observation.endSample,
-    captureEpoch: observation.captureEpoch,
-    continuityEpoch: observation.continuityEpoch,
-    graphGeneration: observation.graphGeneration,
-  });
-}
-
-function sameAuthority(
-  previous: Readonly<VoiceDrawSampleAuthority>,
-  observation: Readonly<PitchObservation>,
-): boolean {
-  return previous.sampleRate === observation.sampleRate
-    && previous.captureEpoch === observation.captureEpoch
-    && previous.continuityEpoch === observation.continuityEpoch
-    && previous.graphGeneration === observation.graphGeneration;
 }
 
 function reliableMapping(
   state: Readonly<VoiceDrawState>,
   observation: Readonly<PitchObservation>,
 ): VoiceDrawNoteMapping | null {
-  if (
-    observation.observationKind !== "voiced"
-    || !observation.voiced
-    || !Number.isFinite(observation.midiFloat)
-  ) {
-    return null;
-  }
+  if (!isAuthoritativeVoicedPitch(observation)) return null;
   return getVoiceDrawMapping(state.noteBank, observation.nearestMidi);
 }
 
@@ -198,23 +160,11 @@ function stationaryReasonFor(
   return "unmapped";
 }
 
-function authorityIsValid(observation: Readonly<PitchObservation>): boolean {
-  return Number.isFinite(observation.sampleRate)
-    && observation.sampleRate > 0
-    && Number.isSafeInteger(observation.endSample)
-    && observation.endSample >= 0
-    && Number.isSafeInteger(observation.captureEpoch)
-    && observation.captureEpoch >= 0
-    && Number.isSafeInteger(observation.continuityEpoch)
-    && observation.continuityEpoch >= 0
-    && Number.isSafeInteger(observation.graphGeneration)
-    && observation.graphGeneration >= 0;
-}
-
 function establishObservation(
   state: Readonly<VoiceDrawState>,
   observation: Readonly<PitchObservation>,
   mapping: Readonly<VoiceDrawNoteMapping> | null,
+  authority: Readonly<ObservationSampleAuthority>,
   elapsedDeltaSeconds = 0,
 ): VoiceDrawState {
   return freezeState({
@@ -231,7 +181,7 @@ function establishObservation(
     observedFrameCount: state.observedFrameCount + 1,
     elapsedSeconds: state.elapsedSeconds + elapsedDeltaSeconds,
     activeStrokeId: null,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: authority,
     motionAnchorSample: mapping === null ? null : observation.endSample,
   });
 }
@@ -242,18 +192,16 @@ export function updateVoiceDrawFromObservation(
   observation: Readonly<PitchObservation>,
 ): VoiceDrawState {
   if (state.phase !== "drawing") return observeStationary(state, observation);
-  if (!authorityIsValid(observation)) return state;
+  const continuity = observationContinuity(state.lastAuthority, observation);
+  if (!continuity.accepted || continuity.authority === null) return state;
   const mapping = reliableMapping(state, observation);
-  const previous = state.lastAuthority;
+  const authority = continuity.authority;
+  if (continuity.boundary) return establishObservation(state, observation, mapping, authority);
+  const previousAuthority = state.lastAuthority!;
 
-  if (previous === null || observation.discontinuity || !sameAuthority(previous, observation)) {
-    return establishObservation(state, observation, mapping);
-  }
-  if (observation.endSample <= previous.endSample) return state;
-
-  const rawDeltaSeconds = (observation.endSample - previous.endSample) / observation.sampleRate;
+  const rawDeltaSeconds = continuity.deltaSeconds;
   if (rawDeltaSeconds > state.maxStepSeconds) {
-    return establishObservation(state, observation, mapping);
+    return establishObservation(state, observation, mapping, authority);
   }
   if (mapping === null) {
     return freezeState({
@@ -266,12 +214,12 @@ export function updateVoiceDrawFromObservation(
       observedFrameCount: state.observedFrameCount + 1,
       elapsedSeconds: state.elapsedSeconds + rawDeltaSeconds,
       activeStrokeId: null,
-      lastAuthority: authorityFromObservation(observation),
+      lastAuthority: authority,
       motionAnchorSample: null,
     });
   }
   if (state.motionAnchorSample === null) {
-    return establishObservation(state, observation, mapping, rawDeltaSeconds);
+    return establishObservation(state, observation, mapping, authority, rawDeltaSeconds);
   }
 
   const anchoredDeltaSeconds = (observation.endSample - state.motionAnchorSample)
@@ -279,12 +227,11 @@ export function updateVoiceDrawFromObservation(
   const deltaSeconds = Math.max(0, anchoredDeltaSeconds);
   const stepDistance = state.speedNormalizedPerSecond * deltaSeconds;
   const cursor = freezePoint({
-    x: clamp(state.cursor.x + mapping.dx * stepDistance, 0, 1),
-    y: clamp(state.cursor.y + mapping.dy * stepDistance, 0, 1),
+    x: clampUnit(state.cursor.x + mapping.dx * stepDistance),
+    y: clampUnit(state.cursor.y + mapping.dy * stepDistance),
   });
   const moved = cursor.x !== state.cursor.x || cursor.y !== state.cursor.y;
   let segments = state.segments;
-  let retiredSegmentCount = state.retiredSegmentCount;
   let nextStrokeId = state.nextStrokeId;
   let activeStrokeId = state.activeStrokeId;
 
@@ -303,7 +250,7 @@ export function updateVoiceDrawFromObservation(
       confidence: observation.confidence,
       captureEpoch: observation.captureEpoch,
       continuityEpoch: observation.continuityEpoch,
-      startSample: previous.endSample,
+      startSample: previousAuthority.endSample,
       endSample: observation.endSample,
       durationSeconds: deltaSeconds,
     }) satisfies VoiceDrawSegment;
@@ -313,9 +260,7 @@ export function updateVoiceDrawFromObservation(
       && priorSegment.direction === mapping.direction
       && priorSegment.targetMidi === mapping.midi
       && priorSegment.style === state.style
-      && priorSegment.captureEpoch === observation.captureEpoch
-      && priorSegment.continuityEpoch === observation.continuityEpoch
-      && priorSegment.endSample === previous.endSample
+      && priorSegment.endSample === previousAuthority.endSample
       && priorSegment.to.x === state.cursor.x
       && priorSegment.to.y === state.cursor.y;
     if (canCoalesce) {
@@ -328,15 +273,10 @@ export function updateVoiceDrawFromObservation(
       }) satisfies VoiceDrawSegment;
       segments = Object.freeze([...state.segments.slice(0, -1), extended]);
     } else {
-      const overflow = Math.max(
-        0,
-        state.segments.length + 1 - VOICE_DRAW_MAX_RETAINED_SEGMENTS,
-      );
-      segments = Object.freeze([
-        ...state.segments.slice(overflow),
-        segment,
-      ]);
-      retiredSegmentCount += overflow;
+      // Every stroke is user-created artwork and trace-scoring authority.
+      // Retain it until explicit Clear/Undo; a presentation budget may not
+      // erase the beginning of a long drawing or score only its tail.
+      segments = Object.freeze([...state.segments, segment]);
     }
   } else if (!state.penDown) {
     activeStrokeId = null;
@@ -347,7 +287,6 @@ export function updateVoiceDrawFromObservation(
     ...state,
     cursor,
     segments,
-    retiredSegmentCount,
     activeDirection: mapping.direction,
     activeMidi: mapping.midi,
     activeCentsFromNearest: observation.centsFromNearest !== null
@@ -362,7 +301,7 @@ export function updateVoiceDrawFromObservation(
     totalDistance: state.totalDistance + pointDistance(state.cursor, cursor),
     nextStrokeId,
     activeStrokeId,
-    lastAuthority: authorityFromObservation(observation),
+    lastAuthority: authority,
     motionAnchorSample: observation.endSample,
   });
 }
@@ -412,7 +351,6 @@ export function clearVoiceDraw(
     ...state,
     cursor: resetCursor ? CENTER : state.cursor,
     segments: Object.freeze([]),
-    retiredSegmentCount: 0,
     activeStrokeId: null,
     activeDirection: resetCursor ? null : state.activeDirection,
     activeMidi: resetCursor ? null : state.activeMidi,

@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { frequencyToMidi, splitMidiPitch } from "@noteforge/music-core";
+import {
+  YIN_DETECTOR_DEFAULTS,
+  YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS,
+} from "@noteforge/pitch-engine";
 
 interface ManualRequest {
   result: unknown;
@@ -246,6 +251,57 @@ describe("IndexedDB storage authority", () => {
     })).rejects.toThrow("frequency");
   });
 
+  it("persists only coherent coordinates from the canonical live detector range", async () => {
+    const harness = indexedDBHarness();
+    const { saveAttempt } = await import("../apps/web/src/storage/database");
+    const frameAt = (frequencyHz: number) => {
+      const midiFloat = frequencyToMidi(frequencyHz);
+      const split = splitMidiPitch(midiFloat);
+      return {
+        ...attempt.pitchFrames[0],
+        frequencyHz,
+        midiFloat,
+        nearestMidi: split.nearestMidi,
+        centsFromNearest: split.centsFromNearest,
+      };
+    };
+    await expect(saveAttempt({
+      ...attempt,
+      id: "fabricated-low-frequency",
+      pitchFrames: [frameAt(20)],
+    })).rejects.toThrow("frequency");
+    await expect(saveAttempt({
+      ...attempt,
+      id: "fabricated-high-frequency",
+      pitchFrames: [frameAt(20_000)],
+    })).rejects.toThrow("frequency");
+    await expect(saveAttempt({
+      ...attempt,
+      id: "fabricated-midi-coordinate",
+      pitchFrames: [{ ...frameAt(440), midiFloat: 48 }],
+    })).rejects.toThrow("contradictory pitch coordinates");
+    expect(harness.factory.open).not.toHaveBeenCalled();
+
+    const boundaryRatio = 2 ** (YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS / 1_200);
+    const boundaryFrames = [
+      YIN_DETECTOR_DEFAULTS.minFrequency / boundaryRatio,
+      YIN_DETECTOR_DEFAULTS.minFrequency,
+      YIN_DETECTOR_DEFAULTS.maxFrequency,
+      YIN_DETECTOR_DEFAULTS.maxFrequency * boundaryRatio,
+    ].map(frameAt);
+    const saved = saveAttempt({
+      ...attempt,
+      id: "canonical-boundary-evidence",
+      pitchFrames: boundaryFrames,
+    });
+    await settleMicrotasks();
+    expect(harness.transactions[0]!.written[0]).toMatchObject({
+      pitchFrames: boundaryFrames,
+    });
+    harness.transactions[0]!.oncomplete?.();
+    await saved;
+  });
+
   it("rejects oversized or non-plain local records before opening IndexedDB", async () => {
     const harness = indexedDBHarness();
     const { saveAttempt, setSetting, setSettings } = await import("../apps/web/src/storage/database");
@@ -268,17 +324,20 @@ describe("IndexedDB storage authority", () => {
     expect(harness.factory.open).not.toHaveBeenCalled();
   });
 
-  it("trims oldest attempts inside the same committed write transaction", async () => {
+  it("never deletes older user history when a new attempt is committed", async () => {
     const oldest = { ...attempt, id: "oldest", completedAt: "2026-08-24T01:00:00.000Z" };
     const middle = { ...attempt, id: "middle", completedAt: "2026-08-24T02:00:00.000Z" };
     const newest = { ...attempt, id: "newest", completedAt: "2026-08-24T03:00:00.000Z" };
     const harness = indexedDBHarness([newest, middle, oldest], 503);
     const { saveAttempt } = await import("../apps/web/src/storage/database");
-    await expect(saveAttempt({ ...attempt, id: "new-write" })).resolves.toBeUndefined();
+    const saved = saveAttempt({ ...attempt, id: "new-write" });
+    await settleMicrotasks();
+    harness.transactions[0]!.oncomplete?.();
+    await expect(saved).resolves.toBeUndefined();
 
     expect(harness.transactions).toHaveLength(1);
     expect(harness.transactions[0]!.written).toHaveLength(1);
-    expect(harness.transactions[0]!.deleted).toEqual(["oldest", "middle", "newest"]);
+    expect(harness.transactions[0]!.deleted).toEqual([]);
   });
 
   it("reads only the requested newest attempts through the descending index", async () => {

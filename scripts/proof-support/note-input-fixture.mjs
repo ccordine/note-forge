@@ -50,6 +50,10 @@ function midiToFrequency(midi) {
 const STANDARD_MICROPHONE_SEGMENTS = Object.freeze([
     // A stable opening note gives the real Pitch Mirror prompt time to run.
     { midi: LOWEST_SUPPORTED_MIDI, durationSeconds: OPENING_SEGMENT_SECONDS, rmsDbfs: NORMAL_RMS_DBFS },
+    // Exercise ordinary unvoiced evidence explicitly while the user-owned
+    // Pitch Mirror trace is active. Detector quality must not be relied on to
+    // manufacture incidental unvoiced frames between otherwise adjacent tones.
+    { kind: "silence", durationSeconds: 0.5, rmsDbfs: Number.NEGATIVE_INFINITY },
     // Each change is correlated by exact production endSample with the first
     // detector frame and the DOM mutation that rendered it. Long stable tones
     // make this an admission-delay proof without asking one 85 ms window to
@@ -100,6 +104,84 @@ export const SUSTAINED_NOTE_MIDIS = Object.freeze([
   60,
   HIGHEST_SUPPORTED_MIDI,
 ]);
+
+export const NOISY_RANGE_C3_MIDI = 48;
+export const NOISY_RANGE_D3_MIDI = 50;
+export const NOISY_RANGE_D3_SECONDS = 6;
+
+const NOISY_RANGE_STAGE_DEFINITIONS = Object.freeze([
+  {
+    id: "noise-10-seed-20",
+    label: "steady C3 + broadband noise at +10 dB SNR, red-team seed 20",
+    durationSeconds: 2.2,
+    noiseSnrDb: 10,
+    noiseSeed: Math.imul(20, 0x9e_37_79_b1) >>> 0,
+    vibratoDepthCents: 0,
+  },
+  { id: "clean", label: "clean C3", durationSeconds: 2.2 },
+  { id: "noise-30", label: "C3 + broadband noise at +30 dB SNR", durationSeconds: 1, noiseSnrDb: 30 },
+  { id: "noise-20", label: "C3 + broadband noise at +20 dB SNR", durationSeconds: 1, noiseSnrDb: 20 },
+  { id: "noise-10", label: "C3 + broadband noise at +10 dB SNR", durationSeconds: 1.4, noiseSnrDb: 10 },
+  { id: "noise-6", label: "C3 + broadband noise at +6 dB SNR", durationSeconds: 1.2, noiseSnrDb: 6 },
+  { id: "noise-3", label: "C3 + broadband noise at +3 dB SNR", durationSeconds: 1.2, noiseSnrDb: 3 },
+  {
+    id: "transients",
+    label: "C3 + short deterministic impulses",
+    durationSeconds: 1.2,
+    noiseSnrDb: 24,
+    impulseAmplitude: 0.8,
+  },
+  {
+    id: "dominant-second",
+    label: "C3 + dominant second harmonic",
+    durationSeconds: 1.2,
+    noiseSnrDb: 24,
+    fundamentalGain: 0.08,
+    secondGain: 1,
+    thirdGain: 0.24,
+  },
+  {
+    id: "dominant-third",
+    label: "C3 + dominant third harmonic",
+    durationSeconds: 1.2,
+    noiseSnrDb: 24,
+    fundamentalGain: 0.15,
+    secondGain: 0.2,
+    thirdGain: 1,
+  },
+  {
+    id: "amplitude-drops",
+    label: "C3 + brief amplitude drops",
+    durationSeconds: 1.2,
+    noiseSnrDb: 16,
+    amplitudeDrops: true,
+  },
+  {
+    id: "changing-noise",
+    label: "C3 + changing broadband noise amplitude",
+    durationSeconds: 2,
+    changingNoise: true,
+  },
+  { id: "clean-recovery", label: "clean C3 recovery", durationSeconds: 1.5 },
+]);
+
+let noisyRangeStageStartSample = 0;
+export const NOISY_RANGE_C3_STAGES = Object.freeze(
+  NOISY_RANGE_STAGE_DEFINITIONS.map((stage) => {
+    const sampleCount = Math.round(stage.durationSeconds * SAMPLE_RATE);
+    const scheduled = Object.freeze({
+      ...stage,
+      startSample: noisyRangeStageStartSample,
+      endSample: noisyRangeStageStartSample + sampleCount,
+    });
+    noisyRangeStageStartSample += sampleCount;
+    return scheduled;
+  }),
+);
+export const NOISY_RANGE_D3_START_SAMPLE = noisyRangeStageStartSample;
+export const NOISY_RANGE_FIXTURE_SAMPLES = NOISY_RANGE_D3_START_SAMPLE
+  + Math.round(NOISY_RANGE_D3_SECONDS * SAMPLE_RATE);
+export const NOISY_RANGE_FIXTURE_SECONDS = NOISY_RANGE_FIXTURE_SAMPLES / SAMPLE_RATE;
 
 const SUSTAINED_MICROPHONE_SEGMENTS = Object.freeze([
   { kind: "silence", durationSeconds: 0.5, rmsDbfs: Number.NEGATIVE_INFINITY },
@@ -203,4 +285,111 @@ export function generatedMicrophoneWav() {
 
 export function generatedSustainedMicrophoneWav() {
   return encodeMicrophoneSegments(SUSTAINED_MICROPHONE_SEGMENTS);
+}
+
+function deterministicNoiseSample(state) {
+  const nextState = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+  return {
+    state: nextState,
+    sample: nextState / 0x1_0000_0000 * 2 - 1,
+  };
+}
+
+/**
+ * A phase-continuous C3 whose interference changes without ever changing the
+ * authored fundamental. The only pitch transition in the fixture is the final
+ * persistent D3. Chromium consumes this WAV as its fake microphone device.
+ */
+export function generatedNoisyRangeLoopMicrophoneWav() {
+  const bytesPerSample = BITS_PER_SAMPLE / 8;
+  const dataByteLength = NOISY_RANGE_FIXTURE_SAMPLES * CHANNEL_COUNT * bytesPerSample;
+  const wav = Buffer.alloc(44 + dataByteLength);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36 + dataByteLength, 4);
+  wav.write("WAVE", 8, "ascii");
+  wav.write("fmt ", 12, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(CHANNEL_COUNT, 22);
+  wav.writeUInt32LE(SAMPLE_RATE, 24);
+  wav.writeUInt32LE(SAMPLE_RATE * CHANNEL_COUNT * bytesPerSample, 28);
+  wav.writeUInt16LE(CHANNEL_COUNT * bytesPerSample, 32);
+  wav.writeUInt16LE(BITS_PER_SAMPLE, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(dataByteLength, 40);
+
+  const c3Frequency = midiToFrequency(NOISY_RANGE_C3_MIDI);
+  const d3Frequency = midiToFrequency(NOISY_RANGE_D3_MIDI);
+  const voiceRms = 10 ** (-24 / 20);
+  const finalFadeSamples = Math.round(0.008 * SAMPLE_RATE);
+  let noiseState = NOISY_RANGE_C3_STAGES[0]?.noiseSeed ?? 0x43_33_4e_4f;
+  let phase = 0;
+  let stageIndex = 0;
+  for (let sampleIndex = 0; sampleIndex < NOISY_RANGE_FIXTURE_SAMPLES; sampleIndex += 1) {
+    while (
+      stageIndex < NOISY_RANGE_C3_STAGES.length - 1
+      && sampleIndex >= NOISY_RANGE_C3_STAGES[stageIndex].endSample
+    ) stageIndex += 1;
+
+    const c3Active = sampleIndex < NOISY_RANGE_D3_START_SAMPLE;
+    const stage = c3Active ? NOISY_RANGE_C3_STAGES[stageIndex] : null;
+    const stageSample = stage ? sampleIndex - stage.startSample : sampleIndex - NOISY_RANGE_D3_START_SAMPLE;
+    const stageProgress = stage
+      ? stageSample / Math.max(1, stage.endSample - stage.startSample - 1)
+      : stageSample / Math.max(1, Math.round(NOISY_RANGE_D3_SECONDS * SAMPLE_RATE) - 1);
+    const vibratoCents = c3Active
+      ? (stage?.vibratoDepthCents ?? 10)
+        * Math.sin(2 * Math.PI * 5.2 * sampleIndex / SAMPLE_RATE)
+      : 8 * Math.sin(2 * Math.PI * 5.05 * stageSample / SAMPLE_RATE);
+    const frequency = c3Active ? c3Frequency : d3Frequency;
+    phase += 2 * Math.PI * frequency * 2 ** (vibratoCents / 1_200) / SAMPLE_RATE;
+
+    const fundamentalGain = stage?.fundamentalGain ?? 1;
+    const secondGain = stage?.secondGain ?? 0.42;
+    const thirdGain = stage?.thirdGain ?? 0.2;
+    const unitRms = Math.sqrt(
+      (fundamentalGain ** 2 + secondGain ** 2 + thirdGain ** 2) / 2,
+    );
+    const dropCycleSeconds = stageSample / SAMPLE_RATE % 0.16;
+    const signalGain = stage?.amplitudeDrops && dropCycleSeconds < 0.035 ? 0.08 : 1;
+    let value = signalGain * voiceRms / unitRms * (
+      fundamentalGain * Math.sin(phase)
+      + secondGain * Math.sin(2 * phase + 0.37)
+      + thirdGain * Math.sin(3 * phase + 1.13)
+    );
+
+    let noiseSnrDb = stage?.noiseSnrDb;
+    if (stage?.changingNoise) {
+      const triangularStrength = stageProgress <= 0.5
+        ? stageProgress * 2
+        : (1 - stageProgress) * 2;
+      noiseSnrDb = 30 - 22 * triangularStrength;
+    }
+    if (noiseSnrDb !== undefined) {
+      const noise = deterministicNoiseSample(noiseState);
+      noiseState = noise.state;
+      const noiseRms = voiceRms / 10 ** (noiseSnrDb / 20);
+      value += noise.sample * Math.sqrt(3) * noiseRms;
+    }
+
+    if (stage?.impulseAmplitude !== undefined) {
+      const impulseLength = Math.round(0.0025 * SAMPLE_RATE);
+      const impulsePosition = stageSample % Math.round(0.137 * SAMPLE_RATE);
+      if (impulsePosition < impulseLength) {
+        const polarity = deterministicNoiseSample(noiseState);
+        noiseState = polarity.state;
+        value += stage.impulseAmplitude
+          * Math.sin(Math.PI * impulsePosition / impulseLength)
+          * (polarity.sample >= 0 ? 1 : -1);
+      }
+    }
+
+    if (!c3Active) {
+      const samplesRemaining = NOISY_RANGE_FIXTURE_SAMPLES - sampleIndex - 1;
+      value *= Math.min(1, samplesRemaining / finalFadeSamples);
+    }
+    value = Math.max(-1, Math.min(1, value));
+    wav.writeInt16LE(Math.round(value * 0x7fff), 44 + sampleIndex * bytesPerSample);
+  }
+  return wav;
 }

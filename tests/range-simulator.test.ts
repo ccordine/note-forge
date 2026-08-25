@@ -5,7 +5,6 @@ import {
   EFFORT_RATING_LABELS,
   RANGE_SIMULATOR_INITIAL_RADIUS,
   RANGE_SIMULATOR_MAX_MIDI,
-  RANGE_SIMULATOR_MAX_RATED_PROBES,
   RANGE_SIMULATOR_MIN_MIDI,
   baselineCandidatesForAnchor,
   createRangeSimulatorSession,
@@ -228,7 +227,7 @@ describe("range simulator defaults and baseline selection", () => {
     expect(summarizeRangeSimulatorSession(session).usableBounds).toEqual({ lowMidi: null, highMidi: null });
   });
 
-  it("accepts a successful home recheck, replays it exactly, and timestamps the confirmed baseline", () => {
+  it("accepts a successful home recheck without projecting a partial range map", () => {
     let session = probingSession(48);
     session = rateCurrent(session, 4);
     session = rateCurrent(session, 2);
@@ -237,11 +236,8 @@ describe("range simulator defaults and baseline selection", () => {
     expect(currentRangeSimulatorProbe(session)).toMatchObject({ midi: 49, direction: "ascending" });
     expect(summarizeRangeSimulatorSession(session).usableMidis).toEqual([48]);
     expect(normalizeRangeSimulatorSession(session, { startedAt: STARTED_AT })).toEqual(session);
-    expect(projectRangeSimulatorProfile(createDefaultRangeProfile(46), session).baseline).toEqual({
-      midi: 48,
-      source: "manual",
-      updatedAt: new Date(STARTED_AT_MS + 7_000).toISOString(),
-    });
+    expect(projectRangeSimulatorProfile(createDefaultRangeProfile(46), session))
+      .toEqual(createDefaultRangeProfile(46));
   });
 
   it("closes immediately when the home confirmation is rated 5", () => {
@@ -361,7 +357,7 @@ describe("adaptive probe scheduling", () => {
     expect(session.phase).toBe("probing");
   });
 
-  it("stops at the rated-probe cap even while both directions could keep expanding", () => {
+  it("continues beyond the former probe cap until both detector boundaries are actually discovered", () => {
     let session = probingSession();
     let guard = 0;
     while (session.phase !== "complete" && guard < 100) {
@@ -372,27 +368,27 @@ describe("adaptive probe scheduling", () => {
     expect(guard).toBeLessThan(100);
     expect(session).toMatchObject({
       phase: "complete",
-      completionStatus: "probe-cap",
-      ratedProbeCount: RANGE_SIMULATOR_MAX_RATED_PROBES,
+      completionStatus: "complete",
       queue: [],
     });
-    expect(session.ascending).toMatchObject({ status: "incomplete", pendingRetestMidi: null });
-    expect(session.descending).toMatchObject({ status: "incomplete", pendingRetestMidi: null });
+    expect(session.ratedProbeCount).toBeGreaterThan(24);
+    expect(session.ascending).toMatchObject({ status: "capped", pendingRetestMidi: null });
+    expect(session.descending).toMatchObject({ status: "capped", pendingRetestMidi: null });
   });
 
-  it("does not leave a phantom recheck when rating 4 reaches the probe cap", () => {
+  it("retains a real boundary recheck after more than 24 probes", () => {
     let session = probingSession();
-    while (session.ratedProbeCount < RANGE_SIMULATOR_MAX_RATED_PROBES - 1) session = rateCurrent(session, 1);
+    while (session.ratedProbeCount < 25) session = rateCurrent(session, 1);
     const finalDirection = currentRangeSimulatorProbe(session)?.direction;
     expect(finalDirection === "ascending" || finalDirection === "descending").toBe(true);
 
     session = rateCurrent(session, 4);
 
-    expect(session).toMatchObject({ phase: "complete", completionStatus: "probe-cap", queue: [] });
+    expect(session).toMatchObject({ phase: "probing", completionStatus: "in-progress" });
     expect(session[finalDirection as "ascending" | "descending"]).toMatchObject({
-      status: "incomplete",
-      pendingRetestMidi: null,
+      status: "awaiting-retest",
     });
+    expect(session.queue.some((task) => task.kind === "retest" && task.direction === finalDirection)).toBe(true);
   });
 
   it("can be stopped explicitly without changing the source session", () => {
@@ -519,14 +515,30 @@ describe("range inference and coordination markers", () => {
 
 describe("profile projection", () => {
   it("is idempotent and replaces the shared usable range from the simulator summary", () => {
-    const session = summarySession([
-      { midi: 48, rating: 1 },
-      { midi: 47, rating: 2 },
-      { midi: 46, rating: 3 },
-      { midi: 45, rating: 4 },
-      { midi: 49, rating: 1, coordination: { ascending: true } },
-      { midi: 50, rating: 4 },
-    ]);
+    const session: RangeSimulatorSessionState = {
+      ...summarySession([
+        { midi: 48, rating: 1 },
+        { midi: 47, rating: 2 },
+        { midi: 46, rating: 3 },
+        { midi: 45, rating: 4 },
+        { midi: 49, rating: 1, coordination: { ascending: true } },
+        { midi: 50, rating: 4 },
+      ]),
+      phase: "complete",
+      completionStatus: "complete",
+      ascending: {
+        direction: "ascending",
+        status: "closed-unstable",
+        plannedEdgeMidi: 50,
+        pendingRetestMidi: null,
+      },
+      descending: {
+        direction: "descending",
+        status: "closed-unstable",
+        plannedEdgeMidi: 45,
+        pendingRetestMidi: null,
+      },
+    };
     const profile: PersonalRangeProfile = {
       ...createDefaultRangeProfile(),
       usableMidis: [40, 41],

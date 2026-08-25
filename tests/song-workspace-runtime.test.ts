@@ -201,7 +201,6 @@ describe("SongWorkspaceRuntime", () => {
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
-      takes: [],
     });
     recorder.emitData("temporary voice data");
     await vi.waitFor(() => expect(
@@ -231,7 +230,6 @@ describe("SongWorkspaceRuntime", () => {
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
-      takes: [],
     });
     for (let index = 0; index < 400; index += 1) recorder.emitData(`chunk-${index}`);
     await vi.waitFor(() => expect(
@@ -261,7 +259,6 @@ describe("SongWorkspaceRuntime", () => {
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
-      takes: [],
     });
 
     recorder.emitData("cannot persist");
@@ -299,7 +296,6 @@ describe("SongWorkspaceRuntime", () => {
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
-      takes: [],
     });
 
     expect(recorder.stopCalls).toBe(1);
@@ -322,7 +318,6 @@ describe("SongWorkspaceRuntime", () => {
       ...playback(),
       inputRunning: true,
       createRecorder: () => recorder as unknown as MediaRecorder,
-      takes: harness.state().takes,
     });
     recorder.emitData("voice data");
     harness.runtime.stopRecording();

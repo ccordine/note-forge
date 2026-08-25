@@ -8,6 +8,8 @@ import (
 	diagnosticschema "noteforge/packages/diagnostic-schema/src"
 )
 
+var diagnosticSignalBounds = diagnosticschema.SignalBounds()
+
 func validateDiagnosticBatch(batch DiagnosticBatch) error {
 	if batch.Version != diagnosticschema.Version() {
 		return errors.New("unsupported schema version")
@@ -43,9 +45,6 @@ func validateDiagnosticEvent(event DiagnosticEvent) error {
 	if event.Pitch != nil {
 		payloads++
 	}
-	if event.Workflow != nil {
-		payloads++
-	}
 	if payloads != 1 {
 		return errors.New("event must contain exactly one payload")
 	}
@@ -60,11 +59,6 @@ func validateDiagnosticEvent(event DiagnosticEvent) error {
 			return errors.New("pitch event has the wrong payload")
 		}
 		return validatePitchDiagnostic(*event.Pitch)
-	case "workflow":
-		if event.Workflow == nil {
-			return errors.New("workflow event has the wrong payload")
-		}
-		return validateWorkflowDiagnostic(*event.Workflow)
 	default:
 		return errors.New("unknown event kind")
 	}
@@ -76,20 +70,26 @@ func validateMicrophoneDiagnostic(value MicrophoneDiagnostic) error {
 	default:
 		return errors.New("unknown microphone state")
 	}
-	if err := optionalFloat("sample rate", value.SampleRate, 8_000, 768_000); err != nil {
-		return err
+	if value.SampleRate != nil && !diagnosticSignalBounds.CaptureSampleRateHz.Contains(*value.SampleRate) {
+		return errors.New("sample rate is out of the live capture range")
 	}
 	if value.BufferSize != nil && (*value.BufferSize < 128 || *value.BufferSize > 262_144) {
 		return errors.New("buffer size is out of range")
 	}
-	if err := optionalFloat("minimum frequency", value.MinFrequencyHz, 10, 20_000); err != nil {
-		return err
+	canonicalFrequency := diagnosticSignalBounds.CanonicalFrequencyHz
+	if value.MinFrequencyHz != nil && *value.MinFrequencyHz != canonicalFrequency.Minimum {
+		return errors.New("minimum frequency is not the canonical live boundary")
 	}
-	if err := optionalFloat("maximum frequency", value.MaxFrequencyHz, 10, 20_000); err != nil {
-		return err
+	if value.MaxFrequencyHz != nil && *value.MaxFrequencyHz != canonicalFrequency.Maximum {
+		return errors.New("maximum frequency is not the canonical live boundary")
 	}
-	if value.MinFrequencyHz != nil && value.MaxFrequencyHz != nil && *value.MinFrequencyHz >= *value.MaxFrequencyHz {
-		return errors.New("frequency bounds are reversed")
+	if value.State == "starting" || value.State == "ready" {
+		if value.BufferSize == nil || value.MinFrequencyHz == nil || value.MaxFrequencyHz == nil {
+			return errors.New("active microphone state is missing its canonical detector configuration")
+		}
+	}
+	if value.State == "ready" && value.SampleRate == nil {
+		return errors.New("ready microphone state is missing its capture sample rate")
 	}
 	if err := optionalFloat("YIN threshold", value.YINThreshold, 0, 1); err != nil {
 		return err
@@ -115,11 +115,6 @@ func validatePitchDiagnostic(value PitchDiagnostic) error {
 			return err
 		}
 	}
-	if value.Tracking != nil {
-		if err := validateTrackingDiagnostic(*value.Tracking, value.Frame); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -141,8 +136,8 @@ func validateFrameDiagnostic(value FrameDiagnostic) error {
 	if value.SampleRate == nil {
 		return errors.New("frame sample rate is missing")
 	}
-	if err := finiteRange("frame sample rate", *value.SampleRate, 8_000, 768_000); err != nil {
-		return err
+	if !diagnosticSignalBounds.CaptureSampleRateHz.Contains(*value.SampleRate) {
+		return errors.New("frame sample rate is out of the live capture range")
 	}
 	if value.StartSample == nil || value.EndSample == nil || value.ProcessedSampleCount == nil {
 		return errors.New("frame sample coordinates are missing")
@@ -201,8 +196,8 @@ func validateFrameDiagnostic(value FrameDiagnostic) error {
 	if value.Brightness == nil && *value.BrightnessConfidence != 0 {
 		return errors.New("missing frame brightness has nonzero confidence")
 	}
-	if err := optionalFloat("frequency", value.FrequencyHz, 10, 20_000); err != nil {
-		return err
+	if value.FrequencyHz != nil && !diagnosticSignalBounds.TransportFrequencyHz.Contains(*value.FrequencyHz) {
+		return errors.New("frequency is outside the live detector transport range")
 	}
 	if err := optionalFloat("continuous MIDI", value.MIDIFloat, 0, 127); err != nil {
 		return err
@@ -230,13 +225,12 @@ func validateFrameDiagnostic(value FrameDiagnostic) error {
 			return errors.New("voiced frame has a non-voiced reason")
 		}
 		midiFromFrequency := 69 + 12*math.Log2(*value.FrequencyHz/440)
-		if math.Abs(midiFromFrequency-*value.MIDIFloat) > diagnosticMIDITolerance {
+		if math.Abs(midiFromFrequency-*value.MIDIFloat) > diagnosticSignalBounds.MIDITolerance {
 			return errors.New("voiced frame frequency and MIDI coordinates disagree")
 		}
-		nearestMIDI := int(math.Floor(*value.MIDIFloat + 0.5))
-		expectedCents := (*value.MIDIFloat - float64(nearestMIDI)) * 100
-		if *value.NearestMIDI != nearestMIDI ||
-			math.Abs(*value.CentsFromNearest-expectedCents) > diagnosticCentsTolerance {
+		midiFromNearestCoordinates := float64(*value.NearestMIDI) + *value.CentsFromNearest/100
+		if math.Abs(*value.CentsFromNearest) > 50+diagnosticSignalBounds.CentsTolerance ||
+			math.Abs(*value.MIDIFloat-midiFromNearestCoordinates) > diagnosticSignalBounds.CentsTolerance/100 {
 			return errors.New("voiced frame nearest-note coordinates disagree")
 		}
 	} else {
@@ -284,71 +278,6 @@ func validateInputDiagnostic(value InputDiagnostic) error {
 	expectedClipRatio := float64(value.ClippedSampleCount) / float64(value.SampleCount)
 	if math.Abs(value.ClipRatio-expectedClipRatio) > diagnosticRatioTolerance {
 		return errors.New("input clip ratio disagrees with sample counts")
-	}
-	return nil
-}
-
-func validateTrackingDiagnostic(value TrackingDiagnostic, frame FrameDiagnostic) error {
-	if !validToken(value.Phase, 1, 48) {
-		return errors.New("invalid tracking phase")
-	}
-	if err := optionalFloat("tracking target MIDI", value.TargetMIDI, 0, 127); err != nil {
-		return err
-	}
-	if err := optionalFloat("tracking tolerance", value.ToleranceCents, 0, 1_200); err != nil {
-		return err
-	}
-	if err := optionalFloat("tracking pitch error", value.ErrorCents, -9_600, 9_600); err != nil {
-		return err
-	}
-	if err := optionalFloat("stable duration", value.StableMS, 0, 600_000); err != nil {
-		return err
-	}
-	if err := optionalFloat("required hold duration", value.RequiredHoldMS, 0, 600_000); err != nil {
-		return err
-	}
-	if value.ResetReason != nil && !validToken(*value.ResetReason, 1, 48) {
-		return errors.New("invalid tracking reset reason")
-	}
-	if value.ErrorCents != nil {
-		if value.TargetMIDI == nil || !frame.Voiced || frame.MIDIFloat == nil {
-			return errors.New("tracking error lacks voiced target coordinates")
-		}
-		expectedError := (*frame.MIDIFloat - *value.TargetMIDI) * 100
-		if math.Abs(*value.ErrorCents-expectedError) > diagnosticCentsTolerance {
-			return errors.New("tracking error disagrees with frame and target")
-		}
-	}
-	if value.InBand != nil {
-		if value.ErrorCents == nil || value.ToleranceCents == nil {
-			return errors.New("tracking in-band state lacks error or tolerance")
-		}
-		expectedInBand := math.Abs(*value.ErrorCents) <= *value.ToleranceCents
-		if *value.InBand != expectedInBand {
-			return errors.New("tracking in-band state disagrees with error and tolerance")
-		}
-	}
-	return nil
-}
-
-func validateWorkflowDiagnostic(value WorkflowDiagnostic) error {
-	if !validToken(value.Phase, 1, 48) || !validToken(value.State, 1, 48) {
-		return errors.New("invalid workflow state")
-	}
-	if err := optionalFloat("workflow target MIDI", value.TargetMIDI, 0, 127); err != nil {
-		return err
-	}
-	if value.AttemptID != nil && *value.AttemptID > 1_000_000_000 {
-		return errors.New("workflow attempt ID is out of range")
-	}
-	if err := optionalFloat("workflow hold duration", value.HoldMS, 0, 600_000); err != nil {
-		return err
-	}
-	if err := optionalFloat("workflow required hold duration", value.RequiredHoldMS, 0, 600_000); err != nil {
-		return err
-	}
-	if value.ResetReason != nil && !validToken(*value.ResetReason, 1, 48) {
-		return errors.New("invalid workflow reset reason")
 	}
 	return nil
 }

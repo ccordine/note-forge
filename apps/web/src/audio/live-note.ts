@@ -1,4 +1,8 @@
 import type { PitchObservationKind } from "./note-input";
+import {
+  observationAuthority,
+  observationContinuity,
+} from "@/realtime/observation-continuity";
 
 export type { PitchObservationKind } from "./note-input";
 
@@ -10,8 +14,11 @@ export interface TrackablePitchObservation {
   readonly sampleRate: number;
   readonly startSample: number;
   readonly endSample: number;
+  readonly processedSampleCount: number;
   readonly captureEpoch: number;
   readonly continuityEpoch: number;
+  readonly graphGeneration: number;
+  readonly workletProcessCount: number;
   readonly discontinuity: boolean;
   readonly observationKind: PitchObservationKind;
   readonly frequencyHz: number | null;
@@ -26,8 +33,11 @@ export interface LiveNote {
   readonly sampleRate: number;
   readonly startSample: number;
   readonly endSample: number;
+  readonly processedSampleCount: number;
   readonly captureEpoch: number;
   readonly continuityEpoch: number;
+  readonly graphGeneration: number;
+  readonly workletProcessCount: number;
   readonly frequencyHz: number;
   readonly midiFloat: number;
   readonly nearestMidi: number;
@@ -47,7 +57,6 @@ export const DEFAULT_LIVE_NOTE_TRACKER_OPTIONS = Object.freeze({
   stableAfterSeconds: 0.1,
 }) satisfies Readonly<LiveNoteTrackerOptions>;
 
-const MAXIMUM_STABLE_AFTER_SECONDS = 60;
 const MAXIMUM_SAMPLE_RATE = 1_000_000;
 const MAXIMUM_ABSOLUTE_CENTS = 50.001;
 const COORDINATE_TOLERANCE_CENTS = 0.001;
@@ -131,9 +140,26 @@ function isValidVoicedObservation(
     && hasValidWindowCoordinates(value)
     && isValidEpoch(value.captureEpoch)
     && isValidEpoch(value.continuityEpoch)
+    && isValidEpoch(value.graphGeneration)
+    && isSafeNonNegativeInteger(value.processedSampleCount)
+    && value.processedSampleCount === value.endSample
+    && isSafeNonNegativeInteger(value.workletProcessCount)
     && isValidConfidence(value.confidence)
     && hasValidVoicedCoordinates(value)
     && value.frequencyHz <= value.sampleRate / 2;
+}
+
+function isValidTrackableObservation(
+  value: unknown,
+): value is Readonly<TrackablePitchObservation> {
+  if (!isRecord(value)) return false;
+  if (
+    value.observationKind !== "voiced"
+    && value.observationKind !== "unvoiced"
+    && value.observationKind !== "uncertain"
+  ) return false;
+  if (!isValidConfidence(value.confidence)) return false;
+  return observationAuthority(value as unknown as TrackablePitchObservation) !== null;
 }
 
 function isValidPreviousLiveNote(value: unknown): value is Readonly<LiveNote> {
@@ -143,6 +169,10 @@ function isValidPreviousLiveNote(value: unknown): value is Readonly<LiveNote> {
     || !hasValidWindowCoordinates(value)
     || !isValidEpoch(value.captureEpoch)
     || !isValidEpoch(value.continuityEpoch)
+    || !isValidEpoch(value.graphGeneration)
+    || !isSafeNonNegativeInteger(value.processedSampleCount)
+    || value.processedSampleCount !== value.endSample
+    || !isSafeNonNegativeInteger(value.workletProcessCount)
     || !isValidConfidence(value.confidence)
     || !hasValidVoicedCoordinates(value)
     || !isSafeNonNegativeInteger(value.enteredAtSample)
@@ -170,30 +200,10 @@ function resolveOptions(
   if (
     !isFiniteNumber(options.stableAfterSeconds)
     || options.stableAfterSeconds < 0
-    || options.stableAfterSeconds > MAXIMUM_STABLE_AFTER_SECONDS
   ) {
-    throw new RangeError(
-      `stableAfterSeconds must be between 0 and ${MAXIMUM_STABLE_AFTER_SECONDS}`,
-    );
+    throw new RangeError("stableAfterSeconds must be finite and non-negative");
   }
   return options;
-}
-
-function continuesPreviousNote(
-  previous: Readonly<LiveNote>,
-  observation: Readonly<TrackablePitchObservation> & {
-    readonly observationKind: "voiced";
-    readonly nearestMidi: number;
-  },
-): boolean {
-  return !observation.discontinuity
-    && observation.captureEpoch === previous.captureEpoch
-    && observation.continuityEpoch === previous.continuityEpoch
-    && observation.sampleRate === previous.sampleRate
-    && observation.nearestMidi === previous.nearestMidi
-    && observation.startSample > previous.startSample
-    && observation.endSample > previous.endSample
-    && observation.startSample <= previous.endSample;
 }
 
 /**
@@ -210,12 +220,21 @@ export function reduceLiveNote(
   options: Readonly<LiveNoteTrackerOptions> = DEFAULT_LIVE_NOTE_TRACKER_OPTIONS,
 ): Readonly<LiveNote> | null {
   const resolvedOptions = resolveOptions(options);
-  if (!isValidVoicedObservation(observation)) return null;
+  if (!isValidTrackableObservation(observation)) return null;
+  const voicedObservation = isValidVoicedObservation(observation);
+  if (observation.observationKind === "voiced" && !voicedObservation) return null;
+  const validPrevious = isValidPreviousLiveNote(previous) ? previous : null;
+  const continuity = observationContinuity(validPrevious, observation);
+  if (validPrevious !== null && !continuity.accepted && continuity.reason !== "invalid") {
+    return validPrevious;
+  }
+  if (!voicedObservation) return null;
 
-  const mayContinue = isValidPreviousLiveNote(previous)
-    && continuesPreviousNote(previous, observation);
+  const mayContinue = validPrevious !== null
+    && observation.nearestMidi === validPrevious.nearestMidi
+    && continuity.contiguous;
   const enteredAtSample = mayContinue
-    ? previous.enteredAtSample
+    ? validPrevious.enteredAtSample
     : observation.endSample;
   const heldSamples = observation.endSample - enteredAtSample;
   const heldSeconds = heldSamples / observation.sampleRate;
@@ -224,8 +243,11 @@ export function reduceLiveNote(
     sampleRate: observation.sampleRate,
     startSample: observation.startSample,
     endSample: observation.endSample,
+    processedSampleCount: observation.processedSampleCount,
     captureEpoch: observation.captureEpoch,
     continuityEpoch: observation.continuityEpoch,
+    graphGeneration: observation.graphGeneration,
+    workletProcessCount: observation.workletProcessCount,
     frequencyHz: observation.frequencyHz,
     midiFloat: observation.midiFloat,
     nearestMidi: observation.nearestMidi,

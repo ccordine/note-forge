@@ -1,18 +1,31 @@
 {
-  "version": 3,
+  "version": 4,
   "flows": {
-    "audio-input": true,
-    "range-simulator": true,
-    "range-loop": true,
-    "voice-arcade": true,
-    "pitch-mirror": true,
-    "pitch-tunnel": true,
-    "hum-lab": true,
-    "pitch-control": true
+    "audio-input": true
   },
   "observationKinds": {
     "voiced": true,
     "unvoiced": true,
     "uncertain": true
+  },
+  "liveSignal": {
+    "frequencyHz": {
+      "canonicalMinimum": 45,
+      "canonicalMaximum": 1200,
+      "detectorBoundaryToleranceCents": 1,
+      "decimalPlaces": 4
+    },
+    "captureSampleRateHz": {
+      "exclusiveMinimum": 2400,
+      "maximum": 768000
+    },
+    "analysisSampleRateHz": {
+      "exclusiveMinimum": 2400,
+      "maximum": 48000
+    },
+    "coordinateTolerance": {
+      "midi": 0.002,
+      "cents": 0.02
+    }
   }
 }

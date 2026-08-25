@@ -1,4 +1,5 @@
 import type { ResonanceGameState } from "./resonance-types";
+import { clamp } from "@/lib/numeric";
 
 export interface ResonanceRunStats {
   pathDistance: number;
@@ -34,10 +35,6 @@ export interface ResonanceResult {
   reliableFrames: number;
   bestCoherentHoldSeconds: number;
   resonators: number;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function distance(

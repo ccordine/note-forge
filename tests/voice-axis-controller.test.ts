@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   midiToFrequency,
-  type YinPitchFrame,
 } from "@noteforge/pitch-engine";
 import { NoteInputEngine } from "../apps/web/src/audio/note-input";
 import {
-  VOICE_AXIS_MINIMUM_CONFIDENCE,
   advanceVoiceAxisController,
   createVoiceAxisController,
   freezeVoiceAxisController,
@@ -28,12 +26,33 @@ function detected(
   midiFloat: number,
   confidence = 0.95,
 ): VoiceAxisFrame {
+  const sampleRate = 48_000;
+  const startSample = Math.round(timeSeconds * sampleRate);
+  const endSample = startSample + 4_096;
+  const nearestMidi = Math.round(midiFloat);
   return {
     timeSeconds,
+    sampleRate,
+    startSample,
+    endSample,
+    processedSampleCount: endSample,
+    captureEpoch: 1,
+    continuityEpoch: 0,
+    graphGeneration: 0,
+    workletProcessCount: Math.max(1, Math.ceil(endSample / 128)),
+    discontinuity: timeSeconds === 0,
+    observationKind: "voiced",
+    frequencyHz: midiToFrequency(midiFloat),
     midiFloat,
+    nearestMidi,
+    centsFromNearest: (midiFloat - nearestMidi) * 100,
     confidence,
+    periodicity: confidence,
+    rms: 0.1,
     voiced: true,
     detector: "yin",
+    periodSamples: sampleRate / midiToFrequency(midiFloat),
+    yinValue: 1 - confidence,
     reason: "detected",
   };
 }
@@ -42,12 +61,32 @@ function unvoiced(
   timeSeconds: number,
   reason: VoiceAxisFrame["reason"] = "below-rms-threshold",
 ): VoiceAxisFrame {
+  const sampleRate = 48_000;
+  const startSample = Math.round(timeSeconds * sampleRate);
+  const endSample = startSample + 4_096;
   return {
     timeSeconds,
+    sampleRate,
+    startSample,
+    endSample,
+    processedSampleCount: endSample,
+    captureEpoch: 1,
+    continuityEpoch: 0,
+    graphGeneration: 0,
+    workletProcessCount: Math.max(1, Math.ceil(endSample / 128)),
+    discontinuity: timeSeconds === 0,
+    observationKind: reason === "below-confidence-threshold" ? "uncertain" : "unvoiced",
+    frequencyHz: null,
     midiFloat: null,
+    nearestMidi: null,
+    centsFromNearest: null,
     confidence: 0,
+    periodicity: 0,
+    rms: 0,
     voiced: false,
     detector: "yin",
+    periodSamples: null,
+    yinValue: null,
     reason,
   };
 }
@@ -72,13 +111,14 @@ describe("shared continuous voice axis", () => {
     expect(update.state).toMatchObject({ observedFrameCount: 3, acceptedFrameCount: 3 });
   });
 
-  it("uses one fixed production evidence floor instead of a difficulty setting", () => {
-    expect(VOICE_AXIS_MINIMUM_CONFIDENCE).toBe(0.55);
-    expect(isVoiceAxisFrameReliable(detected(0, 54, VOICE_AXIS_MINIMUM_CONFIDENCE))).toBe(true);
-    expect(isVoiceAxisFrameReliable(detected(0, 54, VOICE_AXIS_MINIMUM_CONFIDENCE - 0.001))).toBe(false);
+  it("consumes every detector-admitted pitch without a second game confidence floor", () => {
+    expect(isVoiceAxisFrameReliable(detected(0, 54, 0))).toBe(true);
+    expect(isVoiceAxisFrameReliable(detected(0, 54, 0.01))).toBe(true);
+    expect(isVoiceAxisFrameReliable(detected(0, 54, 1.01))).toBe(true);
     expect(isVoiceAxisFrameReliable({
       ...detected(0, 54),
       voiced: false,
+      observationKind: "unvoiced",
       reason: "no-periodic-candidate",
     })).toBe(false);
   });
@@ -188,7 +228,7 @@ function harmonicWindow(midi: number, windowIndex: number): Float32Array {
   });
 }
 
-function detectProductionFrame(samples: Float32Array, timeSeconds: number): YinPitchFrame {
+function detectProductionFrame(samples: Float32Array, timeSeconds: number): VoiceAxisFrame {
   const sampleRate = 48_000;
   const startSample = Math.max(0, Math.round(timeSeconds * sampleRate - samples.length / 2));
   const endSample = startSample + samples.length;

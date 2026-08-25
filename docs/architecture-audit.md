@@ -36,15 +36,15 @@ files. The most serious measured examples were:
 ## Final result
 
 The overhaul deleted the accidental runtimes instead of redistributing them.
-The final enforceable scan covers 303 source files and 131 JSX components,
-reaches all 178 application modules from `main.tsx`, and reports zero release
+The final enforceable scan covers 388 source files and 143 JSX components,
+reaches all 216 application modules from `main.tsx`, and reports zero release
 violations, zero unreachable application modules, and zero feature raw-stream
 reads. The tracked diff removes more than 22,000 net lines while retaining the
 domain, DSP, and verification foundations.
 
-The largest JSX component is now 340 lines. Range Loop's entry file is 36
-lines; Pong's feature hook is 109 lines; Song Rail's is 85 lines; and Song Lab's
-workspace hook is 108 lines. These reductions came from moving shared realtime,
+The largest JSX component body is now 343 lines. Range Loop's entry file is 38
+lines; Pong's feature hook is 98 lines; Song Rail's is 84 lines; and Song Lab's
+workspace hook is 109 lines. These reductions came from moving shared realtime,
 attempt, persistence, and cancellation authority to canonical infrastructure
 and deleting feature-owned copies.
 
@@ -61,8 +61,12 @@ behavior, not user perception:
 - The isolation branch then treated matching live microphone observations as
   guide leakage and locked scoring.
 
-That guide/support/isolation model has been deleted. Reference playback is now
-one explicit 0.5-second action and has no scoring or detector state.
+That guide/support/isolation model has been deleted. Every isolated note now
+uses the one app-owned sustained-note lane and one visible **Play / Stop**
+toggle. The lane has no duration, deadline, decay cutoff, or quieter replacement
+voice, and it has no scoring or detector authority. Only the same visible
+**Stop** action or unmounting the owning product surface releases it; target and
+timbre changes retune the running lane in place.
 
 ## Navigation and reachability
 
@@ -99,6 +103,8 @@ The required dependency direction is:
 
 ```text
 app microphone provider
+  -> raw per-window YIN/harmonic-family candidate
+  -> shared target-independent temporal pitch tracker
   -> immutable PitchObservation stream
   -> pure note/dwell/game controller
   -> one feature view model
@@ -114,10 +120,19 @@ pitch absence/confidence
   -X-> replace the workflow, clear valid dwell, or request recovery
 reference playback
   -X-> hide telemetry, reset scoring, or start a persistent guide
+elapsed time / threshold / score / playback completion
+  -X-> finish a user-started live session or stop isolated-note playback
 ```
 
 Silence, uncertainty, and low confidence are observations. They are not input
 lifecycle states. PCM progression is the transport heartbeat.
+
+The shared tracker preserves the raw candidate on every window. Cold attacks
+and fine motion up to 45 cents are immediate. One remote singleton is published
+on its exact frame as `uncertain`/`temporally-ambiguous`, without retaining a
+stale previous note; a coherent candidate on the next 20 ms hop becomes
+authoritative. No target, tolerance, hold, activity, or score participates in
+that decision.
 
 ## Remediation ledger
 
@@ -165,6 +180,13 @@ Completed in this overhaul:
 - Added one typed Arcade game registry. Cabinet rendering, routing, curriculum,
   progress, lazy component loading, and styles derive from it; the shell has no
   mode-specific import or dispatch forest.
+- Centralized every isolated note and tonic on one indefinite sustained-note
+  lane with one **Play / Stop** toggle. Duration, automatic cutoff, quieter
+  continuation, and workflow-owned stop authority are unrepresentable.
+- Made every user-started live workflow explicitly user-owned: elapsed time,
+  silence, thresholds, scores, course completion, playback completion, and
+  persistence cannot terminate it. A visible user **Finish** or **Stop** action
+  is the only feature-session terminal authority.
 - Replaced Song Lab's mounted flags and generation counters with one scoped
   workspace runtime. Recording cannot be hidden by navigation, and unmount
   synchronously stops the recorder.
@@ -186,27 +208,41 @@ Completed in this overhaul:
 Release evidence for the final tree:
 
 1. `npm run audit:architecture` reports zero violations and zero unreachable
-   production modules. **Passed: 303 sources, 178 reachable application files.**
+   production modules. **Passed: 388 sources, 143 JSX components, and 216
+   reachable application files.**
 2. Full tests, typecheck, production build, Go tests, race tests, and vet pass.
-   **Passed: 753/753 frontend tests plus all named gates.**
+   **Passed: 1,051/1,051 frontend tests across 107 files plus all named gates.**
 3. The real Chromium microphone proof crosses the production MediaStream,
    AudioWorklet, overlapping detector, React subscription, and DOM without
-   injected frames. **Passed: 1,946/1,946 exact worklet/detector identities.**
-4. Range Loop browser proof demonstrates uninterrupted PCM and dwell through
-   silence/reference playback, exact reset only on reliable wrong pitch, one
-   tuner identity, and no guide/isolation audio. **Passed across a 38-second
-   fixture with 2,533/2,533 exact windows.**
-5. Route proof exposes exactly five permanent product links, reloads exact
+   injected frames. **Passed: 2,177/2,177 exact worklet/detector identities.**
+4. Sustained-input browser proof demonstrates uninterrupted PCM and dwell,
+   silence as ordinary evidence, one sustained-note lane, and visible-action-only
+   lifetime authority. **Passed: 2,602/2,602 exact observations; sustained F-sharp
+   1, C3, C4, and D6 holds continued for about 8.4 seconds and froze only on
+   visible Finish.**
+5. The real Range Loop UI consumed a continuously generated C3 through thirteen
+   changing interference stages, including broadband noise from +30 to +3 dB
+   SNR, impulses, harmonic interference, amplitude drops, and changing noise.
+   **Passed: C3 remained authoritative with no hold regression for 16.32 seconds,
+   then a persistent real D3 change became authoritative and earned 3.10 seconds
+   in the same mounted workflow.**
+6. Route proof exposes exactly five permanent product links, reloads exact
    Practice and Arcade activities, verifies Back/Forward, and rejects every
    retired capability hash. **Passed across 14 offline canonical routes.**
-6. Pitch Tunnel's production browser proof independently reconstructs each
+7. Pitch Tunnel's production browser proof independently reconstructs each
    sample-timed checkpoint and requires exact transition-frame publication.
-   **Passed: 784/784 post-anchor observations, nine exact 1.00-second dwells,
-   351 bounded publications, silence pause, wrong-pitch reset, and live completion.**
-7. Desktop and mobile viewport proof confirms the current action and evidence
+   **Passed: 976/976 post-anchor observations, nine exact 1.00-second dwells,
+   447 bounded publications, silence pause, wrong-pitch reset, nonterminal
+   achievement, and visible-Finish-only scoring freeze.**
+8. Desktop and mobile viewport proof confirms the current action and evidence
    are visible without scrolling past unrelated workflow stages. **Passed for
    Range Loop, Arcade, Vocal Canvas, and Pitch Tunnel production captures.**
-8. A fresh production container is deployed only after the above artifacts are
-   generated from the final tree. **Passed: hardened image
-   `sha256:5a7fe22b4eb5…` is healthy on the production Docker context, and both
-   the in-container and routed HTTPS health endpoints return `ok`.**
+9. A fresh production container is deployed only after the above artifacts are
+   generated from the final tree. **Passed: running healthy OCI image index
+   `sha256:63993ae781d3254b42d7701f3c2b4e91b93ec010d5a317947a23c60043286065`
+   with amd64 manifest
+   `sha256:6da7d017c7e4106530c8c3cbcebc6771e2d7452ef2280b58ba1387fbc94d5603`.
+   Local, container, and routed hashes match for `index.html`, `sw.js`, main JS,
+   pitch-meter authority, and the AudioWorklet; internal and routed HTTPS health
+   return 200. The container runs as 65532:65532 with read-only root, all
+   capabilities dropped, no-new-privileges, 64 MiB memory, and 64 PIDs.**

@@ -10,6 +10,9 @@ export interface PitchFrame {
   voiced: boolean;
 }
 
+/** Inclusive detector edges retain at most one cent of interpolation drift. */
+export const YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS = 1;
+
 export type PitchDetectionReason =
   | "detected"
   | "below-rms-threshold"
@@ -17,7 +20,16 @@ export type PitchDetectionReason =
   | "invalid-samples"
   | "no-periodic-candidate"
   | "below-confidence-threshold"
+  | "temporally-ambiguous"
   | "frequency-out-of-range";
+
+/** The uncorrected local minimum chosen by YIN before harmonic-family selection. */
+export interface YinRawCandidate {
+  readonly frequencyHz: number;
+  readonly periodSamples: number;
+  readonly yinValue: number;
+  readonly confidence: number;
+}
 
 /** PitchFrame plus deterministic YIN diagnostics useful in NoteForge's debug view. */
 export interface YinPitchFrame extends PitchFrame {
@@ -25,12 +37,22 @@ export interface YinPitchFrame extends PitchFrame {
   periodSamples: number | null;
   yinValue: number | null;
   reason: PitchDetectionReason;
+  /**
+   * Present on real detector output whenever YIN found a local/global minimum.
+   * Optional only so callers' synthetic diagnostic fixtures remain source-compatible.
+   */
+  readonly rawCandidate?: Readonly<YinRawCandidate> | null;
+  /**
+   * Unit interval derived from the acoustic harmonic-family runner-up margin.
+   * Zero means no competing supported family; one means the leading families tied.
+   */
+  readonly harmonicAmbiguity?: number;
 }
 
 export interface YinDetectorOptions {
   /** Sampling rate of every Float32Array passed to the detector. */
   sampleRate: number;
-  /** Lowest fundamental to consider. Defaults to 65 Hz. */
+  /** Lowest fundamental to consider. Defaults to NoteForge's canonical 45 Hz. */
   minFrequency?: number;
   /** Highest fundamental to consider. Defaults to 1,200 Hz. */
   maxFrequency?: number;
@@ -40,12 +62,17 @@ export interface YinDetectorOptions {
    * selected from the supplied input buffer.
    */
   analysisWindowSize?: number;
-  /** YIN cumulative-mean normalized difference cutoff. Defaults to 0.15. */
+  /** YIN local-minimum search guide. Defaults to 0.18; minConfidence owns admission. */
   yinThreshold?: number;
-  /** Minimum accepted 1 - YIN value. Defaults to 0.8. */
+  /** Minimum accepted 1 - YIN value. Defaults to 0.55. */
   minConfidence?: number;
-  /** Minimum frame RMS required before periodicity analysis. Defaults to 0.005. */
+  /** Optional caller-specified RMS floor. Defaults to zero (only literal silence is skipped). */
   rmsThreshold?: number;
+  /**
+   * Transport-owned recent evidence span. Zero keeps strict edge comparison;
+   * live overlapping capture supplies its normalized publication hop.
+   */
+  currentEdgeSpanSamples?: number;
   /** Concert-A reference used for MIDI/cents conversion. Defaults to 440 Hz. */
   a4Frequency?: number;
 }

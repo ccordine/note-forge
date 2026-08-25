@@ -1,4 +1,11 @@
 import type { PitchObservation } from "../../audio/note-input";
+import { clamp } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
+import {
+  observationAuthority,
+  observationContinuity,
+  type ObservationSampleAuthority,
+} from "@/realtime/observation-continuity";
 import {
   createRangeDwell,
   updateRangeDwell,
@@ -19,7 +26,6 @@ export interface PitchMazeControllerOptions {
   readonly directionNotes: PitchMazeDirectionNotes;
   readonly requiredHoldSeconds: number;
   readonly toleranceCents: number;
-  readonly minimumConfidence?: number;
   /** A pitch farther than this from every mapped note cannot become an intent. */
   readonly acquisitionCorridorCents?: number;
   /** A new direction must be this much closer before it can replace the current lock. */
@@ -34,7 +40,6 @@ export interface ResolvedPitchMazeControllerOptions {
   readonly directionNotes: PitchMazeDirectionNotes;
   readonly requiredHoldSeconds: number;
   readonly toleranceCents: number;
-  readonly minimumConfidence: number;
   readonly acquisitionCorridorCents: number;
   readonly directionSwitchHysteresisCents: number;
   readonly settleToleranceCents: number;
@@ -97,14 +102,7 @@ export interface PitchMazeControllerState {
   readonly lastCommand: PitchMazeCommandQuality | null;
 }
 
-export interface PitchMazeFrameAuthority {
-  readonly sampleRate: number;
-  readonly endSample: number;
-  readonly captureEpoch: number;
-  readonly continuityEpoch: number;
-  readonly graphGeneration: number;
-  readonly workletProcessCount: number;
-}
+export type PitchMazeFrameAuthority = ObservationSampleAuthority;
 
 export type PitchMazeControllerEvent = {
   readonly type: "command-complete";
@@ -116,15 +114,10 @@ export interface PitchMazeControllerUpdate {
   readonly event: PitchMazeControllerEvent | null;
 }
 
-export const DEFAULT_PITCH_MAZE_MINIMUM_CONFIDENCE = 0.58;
 export const DEFAULT_PITCH_MAZE_ACQUISITION_CORRIDOR_CENTS = 48;
 export const DEFAULT_PITCH_MAZE_DIRECTION_HYSTERESIS_CENTS = 8;
 
 const EPSILON = 1e-9;
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
 
 function requireFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) throw new RangeError(`${label} must be finite.`);
@@ -149,7 +142,6 @@ function resolvedOptions(
 
   requirePositive(options.requiredHoldSeconds, "Required hold duration");
   requirePositive(options.toleranceCents, "Pitch tolerance");
-  const minimumConfidence = options.minimumConfidence ?? DEFAULT_PITCH_MAZE_MINIMUM_CONFIDENCE;
   const acquisitionCorridorCents = options.acquisitionCorridorCents
     ?? DEFAULT_PITCH_MAZE_ACQUISITION_CORRIDOR_CENTS;
   const directionSwitchHysteresisCents = options.directionSwitchHysteresisCents
@@ -159,10 +151,6 @@ function resolvedOptions(
   const overshootDeadbandCents = options.overshootDeadbandCents
     ?? Math.min(6, options.toleranceCents / 3);
 
-  requireFinite(minimumConfidence, "Minimum confidence");
-  if (minimumConfidence < 0 || minimumConfidence > 1) {
-    throw new RangeError("Minimum confidence must be from zero through one.");
-  }
   requirePositive(acquisitionCorridorCents, "Acquisition corridor");
   requireNonNegative(directionSwitchHysteresisCents, "Direction-switch hysteresis");
   requirePositive(settleToleranceCents, "Settle tolerance");
@@ -185,7 +173,6 @@ function resolvedOptions(
     directionNotes: Object.freeze(directionNotes),
     requiredHoldSeconds: options.requiredHoldSeconds,
     toleranceCents: options.toleranceCents,
-    minimumConfidence,
     acquisitionCorridorCents,
     directionSwitchHysteresisCents,
     settleToleranceCents,
@@ -212,15 +199,8 @@ export function createPitchMazeController(
 
 export function isReliablePitchMazeFrame(
   frame: Readonly<PitchMazeVoiceFrame>,
-  minimumConfidence: number = DEFAULT_PITCH_MAZE_MINIMUM_CONFIDENCE,
 ): boolean {
-  return frame.detector === "yin"
-    && frame.reason === "detected"
-    && frame.voiced
-    && frame.midiFloat !== null
-    && Number.isFinite(frame.midiFloat)
-    && Number.isFinite(frame.confidence)
-    && frame.confidence >= minimumConfidence;
+  return isAuthoritativeVoicedPitch(frame);
 }
 
 /**
@@ -372,7 +352,6 @@ function beginTracking(
     targetMidi: selection.targetMidi,
     requiredHoldSeconds: state.options.requiredHoldSeconds,
     toleranceCents: state.options.toleranceCents,
-    minimumConfidence: state.options.minimumConfidence,
   });
   const dwell = updateRangeDwell(initialDwell, frame);
   return {
@@ -410,53 +389,9 @@ function clearAttempt(
 function authorityFromFrame(
   frame: Readonly<PitchMazeVoiceFrame>,
 ): PitchMazeFrameAuthority {
-  return Object.freeze({
-    sampleRate: frame.sampleRate,
-    endSample: frame.endSample,
-    captureEpoch: frame.captureEpoch,
-    continuityEpoch: frame.continuityEpoch,
-    graphGeneration: frame.graphGeneration,
-    workletProcessCount: frame.workletProcessCount,
-  });
-}
-
-function hasValidNewAuthority(
-  previous: Readonly<PitchMazeFrameAuthority> | null,
-  frame: Readonly<PitchMazeVoiceFrame>,
-): boolean {
-  if (!Number.isFinite(frame.timeSeconds)
-    || !Number.isFinite(frame.sampleRate)
-    || frame.sampleRate <= 0
-    || !Number.isSafeInteger(frame.startSample)
-    || frame.startSample < 0
-    || !Number.isSafeInteger(frame.endSample)
-    || frame.endSample <= frame.startSample
-    || frame.processedSampleCount !== frame.endSample
-    || !Number.isSafeInteger(frame.captureEpoch)
-    || frame.captureEpoch < 0
-    || !Number.isSafeInteger(frame.continuityEpoch)
-    || frame.continuityEpoch < 0
-    || !Number.isSafeInteger(frame.graphGeneration)
-    || frame.graphGeneration < 0
-    || !Number.isSafeInteger(frame.workletProcessCount)
-    || frame.workletProcessCount < 0) {
-    return false;
-  }
-  if (previous === null) return true;
-  const sameAuthority = previous.sampleRate === frame.sampleRate
-    && previous.captureEpoch === frame.captureEpoch
-    && previous.continuityEpoch === frame.continuityEpoch
-    && previous.graphGeneration === frame.graphGeneration;
-  if (sameAuthority) {
-    return frame.endSample > previous.endSample
-      && frame.workletProcessCount > previous.workletProcessCount;
-  }
-  return frame.captureEpoch > previous.captureEpoch
-    || (frame.captureEpoch === previous.captureEpoch
-      && frame.continuityEpoch > previous.continuityEpoch)
-    || (frame.captureEpoch === previous.captureEpoch
-      && frame.continuityEpoch === previous.continuityEpoch
-      && frame.graphGeneration > previous.graphGeneration);
+  const authority = observationAuthority(frame);
+  if (authority === null) throw new TypeError("Pitch Maze received invalid observation authority.");
+  return authority;
 }
 
 /**
@@ -468,15 +403,16 @@ export function updatePitchMazeController(
   state: Readonly<PitchMazeControllerState>,
   frame: Readonly<PitchMazeVoiceFrame>,
 ): PitchMazeControllerUpdate {
-  if (!hasValidNewAuthority(state.lastAuthority, frame)) {
+  const continuity = observationContinuity(state.lastAuthority, frame);
+  if (!continuity.accepted || continuity.authority === null) {
     return { state: state as PitchMazeControllerState, event: null };
   }
 
-  if (frame.discontinuity) {
+  if (continuity.boundary && state.lastAuthority !== null) {
     return { state: clearAttempt(state, frame, null), event: null };
   }
 
-  const reliable = isReliablePitchMazeFrame(frame, state.options.minimumConfidence);
+  const reliable = isReliablePitchMazeFrame(frame);
   if (!reliable) {
     if (state.phase === "tracking") {
       if (state.dwell === null || state.capture === null) {

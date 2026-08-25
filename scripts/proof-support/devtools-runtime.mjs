@@ -193,3 +193,34 @@ export async function waitForBrowser(
   const body = await evaluate(session, "document.body?.innerText?.slice(0, 4000) || ''");
   throw new Error(`Timed out waiting for ${description}.\nRendered page:\n${body}`);
 }
+
+/** Exercise the same visible consent control a user uses before collecting remote diagnostics. */
+export async function enableRemotePitchDiagnostics(session) {
+  const opened = await evaluate(session, `(() => {
+    const button = document.querySelector('[data-settings-open]');
+    button?.click();
+    return Boolean(button);
+  })()`);
+  if (!opened) throw new Error("The visible Settings control was unavailable for diagnostic opt-in.");
+  await waitForBrowser(
+    session,
+    "Boolean(document.querySelector('[data-remote-pitch-diagnostics-toggle]'))",
+    "the remote derived-diagnostic consent control",
+  );
+  const enabled = await evaluate(session, `(() => {
+    const control = document.querySelector('[data-remote-pitch-diagnostics-toggle]');
+    if (!(control instanceof HTMLInputElement)) return false;
+    if (!control.checked) control.click();
+    return control.checked;
+  })()`);
+  if (!enabled) throw new Error("Remote derived diagnostics were not explicitly enabled.");
+  await evaluate(session, `(() => {
+    document.querySelector('button[aria-label="Close settings"]')?.click();
+    return true;
+  })()`);
+  await waitForBrowser(
+    session,
+    "!document.querySelector('[data-remote-pitch-diagnostics-toggle]')",
+    "the diagnostic consent dialog to close",
+  );
+}

@@ -3,6 +3,7 @@ import {
   type SeedValue,
   type VoiceArcadeDifficulty,
 } from "./model";
+import { clamp } from "@/lib/numeric";
 import type { ArcadeVoiceRange } from "./types";
 
 export const CARDINAL_DIRECTIONS = Object.freeze(["north", "east", "south", "west"] as const);
@@ -313,7 +314,7 @@ export function createPitchMazeDirectionNotes(
 
   if (config.mappingMode === "adjacent") {
     const finalStart = config.highMidi - (CARDINAL_DIRECTIONS.length - 1);
-    const baselineStart = Math.min(finalStart, Math.max(config.lowMidi, config.baselineMidi - 1));
+    const baselineStart = clamp(config.baselineMidi - 1, config.lowMidi, finalStart);
     const numberOfWindows = finalStart - config.lowMidi + 1;
     const start = config.lowMidi
       + ((baselineStart - config.lowMidi + config.level - 1) % numberOfWindows);

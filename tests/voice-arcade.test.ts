@@ -171,9 +171,8 @@ describe("Simon and DDR challenge timelines", () => {
 
 describe("challenge session construction", () => {
   it("creates a ready session with one source of scoring state", () => {
-    expect(createChallengeSession([step()], { minimumConfidence: 0.7 })).toMatchObject({
+    expect(createChallengeSession([step()])).toMatchObject({
       status: "ready",
-      minimumConfidence: 0.7,
       combo: 0,
       accuracyPercent: 0,
     });
@@ -181,7 +180,6 @@ describe("challenge session construction", () => {
 
   it("rejects invalid sessions", () => {
     expect(() => createChallengeSession([])).toThrow(RangeError);
-    expect(() => createChallengeSession([step()], { minimumConfidence: 1.01 })).toThrow(RangeError);
     expect(() => createChallengeSession([step(), step()])).toThrow(RangeError);
     expect(() => createChallengeSession([
       step(),

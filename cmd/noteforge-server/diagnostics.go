@@ -19,8 +19,6 @@ const (
 	defaultDiagnosticGlobalBurst = 128
 	maxDiagnosticRateSessions    = 4_096
 	diagnosticRateSessionMaxAge  = 24 * time.Hour
-	diagnosticMIDITolerance      = 0.002
-	diagnosticCentsTolerance     = 0.02
 	diagnosticDBTolerance        = 0.02
 	diagnosticRatioTolerance     = 0.000_001
 	maxDiagnosticSafeInteger     = uint64(9_007_199_254_740_991)
@@ -40,7 +38,6 @@ type DiagnosticEvent struct {
 	Kind       string                `json:"kind"`
 	Microphone *MicrophoneDiagnostic `json:"microphone,omitempty"`
 	Pitch      *PitchDiagnostic      `json:"pitch,omitempty"`
-	Workflow   *WorkflowDiagnostic   `json:"workflow,omitempty"`
 }
 
 type MicrophoneDiagnostic struct {
@@ -58,10 +55,9 @@ type MicrophoneDiagnostic struct {
 }
 
 type PitchDiagnostic struct {
-	Frame        FrameDiagnostic     `json:"frame"`
-	ProcessingMS float64             `json:"processingMs"`
-	Input        *InputDiagnostic    `json:"input,omitempty"`
-	Tracking     *TrackingDiagnostic `json:"tracking,omitempty"`
+	Frame        FrameDiagnostic  `json:"frame"`
+	ProcessingMS float64          `json:"processingMs"`
+	Input        *InputDiagnostic `json:"input,omitempty"`
 }
 
 type FrameDiagnostic struct {
@@ -98,27 +94,6 @@ type InputDiagnostic struct {
 	ClipRatio          float64 `json:"clipRatio"`
 	ClippedSampleCount uint64  `json:"clippedSampleCount"`
 	SampleCount        uint64  `json:"sampleCount"`
-}
-
-type TrackingDiagnostic struct {
-	Phase          string   `json:"phase"`
-	TargetMIDI     *float64 `json:"targetMidi,omitempty"`
-	ToleranceCents *float64 `json:"toleranceCents,omitempty"`
-	ErrorCents     *float64 `json:"errorCents,omitempty"`
-	InBand         *bool    `json:"inBand,omitempty"`
-	StableMS       *float64 `json:"stableMs,omitempty"`
-	RequiredHoldMS *float64 `json:"requiredHoldMs,omitempty"`
-	ResetReason    *string  `json:"resetReason,omitempty"`
-}
-
-type WorkflowDiagnostic struct {
-	Phase          string   `json:"phase"`
-	State          string   `json:"state"`
-	TargetMIDI     *float64 `json:"targetMidi,omitempty"`
-	AttemptID      *uint64  `json:"attemptId,omitempty"`
-	HoldMS         *float64 `json:"holdMs,omitempty"`
-	RequiredHoldMS *float64 `json:"requiredHoldMs,omitempty"`
-	ResetReason    *string  `json:"resetReason,omitempty"`
 }
 
 type diagnosticLogLine struct {

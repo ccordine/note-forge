@@ -117,6 +117,17 @@ describe("Practice activity state models", () => {
     expect(toggleTranscribedNote([null, 64], 1, 64)).toEqual([null, null]);
   });
 
+  it("retains the complete maximum-width drawn gesture", () => {
+    let points: readonly { readonly x: number; readonly y: number }[] = [];
+    for (let x = 0; x <= 600; x += 3) {
+      points = appendDrawPoint(points, { x, y: x % 220 });
+    }
+
+    expect(points).toHaveLength(201);
+    expect(points[0]?.x).toBe(0);
+    expect(points.at(-1)?.x).toBe(600);
+  });
+
   it("maps every Harmony URL mode and builds bounded nearest voice lines", () => {
     expect(harmonyView("scale-degree-production")).toBe("scaleDegree");
     expect(harmonyView("chord-tone")).toBe("chordTone");

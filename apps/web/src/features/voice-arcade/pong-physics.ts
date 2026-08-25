@@ -3,6 +3,7 @@ import {
   normalizedSeed,
   type SeedValue,
 } from "./model";
+import { clamp } from "@/lib/numeric";
 
 const EPSILON = 1e-9;
 
@@ -81,10 +82,6 @@ function requireNonNegative(value: number, label: string): void {
 function requirePositive(value: number, label: string): void {
   requireFinite(value, label);
   if (value <= 0) throw new RangeError(`${label} must be greater than zero.`);
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function validatePongConfig(config: Readonly<PongConfig>): void {

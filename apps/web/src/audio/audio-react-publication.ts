@@ -7,7 +7,7 @@ export interface AudioPresentationScheduler {
 }
 
 export interface AudioReactPublisher {
-  readonly publishPitch: () => void;
+  readonly publishPitch: (immediate: boolean) => void;
   readonly publishAuxiliary: () => void;
 }
 
@@ -52,7 +52,7 @@ export class AudioReactPublication {
   publishPitchTransition(): void {
     this.pitchPending = false;
     this.lastPitchPublicationMs = this.scheduler.now();
-    this.publisher.publishPitch();
+    this.publisher.publishPitch(true);
     this.reconcileSchedule();
   }
 
@@ -78,7 +78,7 @@ export class AudioReactPublication {
       ) {
         this.pitchPending = false;
         this.lastPitchPublicationMs = timestampMs;
-        this.publisher.publishPitch();
+        this.publisher.publishPitch(false);
         published = true;
       }
       if (this.auxiliaryPending) {

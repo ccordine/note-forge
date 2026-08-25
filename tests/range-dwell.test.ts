@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PitchObservation } from "../apps/web/src/audio/note-input";
 import {
-  RANGE_DWELL_DEFAULTS,
   createRangeDwell,
   updateRangeDwell,
   type RangeDwellState,
@@ -152,7 +151,7 @@ describe("sample-authoritative range dwell", () => {
     expect(state.heldSeconds).toBeCloseTo(0.04, 12);
   });
 
-  it("resets only for a confidently voiced pitch outside tolerance", () => {
+  it("uses every detector-admitted voiced pitch outside tolerance regardless of confidence magnitude", () => {
     let state = feed(controller(), [
       observation(WINDOW_SIZE),
       observation(WINDOW_SIZE + HOP_SIZE),
@@ -162,16 +161,16 @@ describe("sample-authoritative range dwell", () => {
 
     state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 3, {
       midiFloat: 61,
-      confidence: RANGE_DWELL_DEFAULTS.minimumConfidence - 0.01,
+      confidence: 0.01,
     }));
     expect(state).toMatchObject({
-      heldSamples: HOP_SIZE * 2,
-      currentInTolerance: null,
+      heldSamples: 0,
+      currentInTolerance: false,
       previousFrameQualified: false,
     });
 
     state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 4));
-    expect(state.heldSamples).toBe(HOP_SIZE * 2);
+    expect(state.heldSamples).toBe(0);
     state = updateRangeDwell(state, observation(WINDOW_SIZE + HOP_SIZE * 5, {
       midiFloat: 60.25,
       confidence: 0.95,
@@ -214,7 +213,7 @@ describe("sample-authoritative range dwell", () => {
   it.each([
     ["capture epoch", { captureEpoch: 2 }],
     ["continuity epoch", { continuityEpoch: 1 }],
-    ["graph generation", { graphGeneration: 1 }],
+    ["graph generation", { continuityEpoch: 1, graphGeneration: 1 }],
     ["explicit discontinuity", { discontinuity: true }],
   ] as const)("establishes %s authority with zero fabricated dwell", (_label, boundary) => {
     let state = feed(controller(), [
@@ -333,9 +332,8 @@ describe("sample-authoritative range dwell", () => {
     expect(state.peakHeldSeconds).toBeCloseTo(3_600, 7);
   });
 
-  it("uses canonical confidence and hop-derived interval defaults", () => {
+  it("uses the canonical hop-derived interval default without a second confidence gate", () => {
     const state = controller();
-    expect(state.minimumConfidence).toBe(RANGE_DWELL_DEFAULTS.minimumConfidence);
     expect(state.maximumCreditedIntervalSeconds).toBe(0.03);
     expect(() => createRangeDwell({
       targetMidi: 60,

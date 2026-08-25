@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { PitchObservation } from "@/audio/note-input";
-import type { ActiveVoice } from "@/audio/synth";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import {
   createIdleAttemptRunner,
@@ -28,10 +27,6 @@ export interface AttemptRunner<Configuration> {
   readonly begin: (configuration: Readonly<Configuration>) => void;
   readonly finish: () => void;
   readonly reset: () => void;
-  readonly playReference: (
-    label: string,
-    start: (signal: AbortSignal) => Promise<ActiveVoice>,
-  ) => void;
 }
 
 export function useAttemptRunner<Configuration>(
@@ -89,6 +84,5 @@ export function useAttemptRunner<Configuration>(
     begin,
     finish,
     reset,
-    playReference: effects.playReference,
   };
 }

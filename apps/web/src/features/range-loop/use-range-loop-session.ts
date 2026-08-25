@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { playTone } from "@/audio/synth";
+import {
+  useSustainedNote,
+  type SustainedNoteControl,
+} from "@/audio/use-sustained-note";
 import {
   useAudioInput,
   type AudioInputController,
 } from "@/audio/use-audio-input";
-import {
-  BRIEF_REFERENCE_SECONDS,
-  useSessionEffectScope,
-} from "@/features/training-session/use-session-effect-scope";
-import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
+import { continuousMidiToHz } from "@/lib/music-display";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import { useMusicalState } from "@/state/MusicalContext";
 import { useUserPreferences } from "@/state/UserPreferencesContext";
@@ -74,7 +73,7 @@ export interface RangeLoopSession {
   readonly profileBaselineMidi: number;
   readonly profileLowMidi: number | null;
   readonly profileHighMidi: number | null;
-  readonly hearReference: () => void;
+  readonly referencePlayback: Readonly<SustainedNoteControl>;
   readonly start: () => void;
   readonly finish: () => void;
   readonly resetHold: () => void;
@@ -130,18 +129,13 @@ export function useRangeLoopSession(): RangeLoopSession {
   );
   const dwell = dwellSession.state;
   const activeToleranceCents = dwell.toleranceCents;
-  const effects = useSessionEffectScope();
+  const referencePlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(targetMidi),
+    timbre,
+    amplitude: 0.18,
+  });
 
   const input = useAudioInput({
-    diagnostics: {
-      flow: "range-loop",
-      phase: liveSession.state.phase,
-      targetMidi,
-      toleranceCents: activeToleranceCents,
-      stableMs: dwell.heldSeconds * 1_000,
-      requiredHoldMs: holdSeconds * 1_000,
-      resetReason: null,
-    },
     // Persistence chooses the authoritative target/configuration. Observations
     // received before that one-time hydration remain available in the shared
     // AudioKernel, but must not accrue against a disposable default dwell.
@@ -153,9 +147,8 @@ export function useRangeLoopSession(): RangeLoopSession {
   });
 
   const replaceDwell = useCallback((next: RangeDwellState) => {
-    effects.abort();
     dwellSession.dispatch({ type: "replace", state: next });
-  }, [dwellSession.dispatch, effects.abort]);
+  }, [dwellSession.dispatch]);
 
   const prepareTarget = useCallback((nextTarget: number) => {
     setTargetMidi(nextTarget);
@@ -259,24 +252,16 @@ export function useRangeLoopSession(): RangeLoopSession {
   const achievementReached = dwell.achievementReached;
   const holding = input.state === "running" && dwell.currentInTolerance === true;
 
-  const hearReference = () => {
-    effects.playReference(`Reference ${noteLabel(targetMidi)}`, () => playTone({
-      frequencyHz: continuousMidiToHz(targetMidi),
-      duration: BRIEF_REFERENCE_SECONDS,
-      amplitude: 0.18,
-      attack: 0.02,
-      release: 0.08,
-      timbre,
-    }));
-  };
-
   const start = () => {
     replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds));
     liveSession.dispatch({ type: "start" });
   };
 
   const finish = () => {
-    effects.abort();
+    // Commit every observation reduced before this explicit command before
+    // presenting the completed phase. A queued coalesced publication must not
+    // make finished dwell appear to keep changing afterward.
+    dwellSession.flushPresentation();
     liveSession.dispatch({ type: "finish" });
   };
 
@@ -361,7 +346,7 @@ export function useRangeLoopSession(): RangeLoopSession {
     profileBaselineMidi: profile.baseline.midi,
     profileLowMidi: profileBounds.lowMidi,
     profileHighMidi: profileBounds.highMidi,
-    hearReference,
+    referencePlayback,
     start,
     finish,
     resetHold: () => replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds)),

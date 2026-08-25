@@ -6,9 +6,12 @@ import {
   formatFileSize,
 } from "@/audio/local-audio-file";
 import { noteLabel, signed } from "@/lib/music-display";
+import { clampPercent } from "@/lib/numeric";
+import { isAuthoritativeVoicedPitch } from "@/realtime/authoritative-voiced-pitch";
 import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
 import { NoteInput } from "@/ui/voice";
+import { pitchMeterPositionPercent } from "@/ui/voice/pitch-meter-scale";
 import { resolveArcadeCurriculum } from "./curriculum";
 import type { SongTargetLane } from "./song-lane-types";
 import { songLaneAtTime, type SongRideSession } from "./song-ride-session";
@@ -17,17 +20,13 @@ import { formatSongTime, useSongRide, type SongRideController } from "./use-song
 
 const AUDIO_ACCEPT = "audio/*,.mp3,.m4a,.wav,.ogg,.flac";
 
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
 interface LiveSongView {
   readonly activeLane: SongTargetLane | null;
   readonly nextLane: SongTargetLane | null;
   readonly liveMidi: number | null;
   readonly liveErrorCents: number | null;
   readonly voiceLocked: boolean;
-  readonly liveTop: number;
+  readonly liveTop: number | null;
   readonly visibleLanes: readonly Readonly<{
     lane: SongTargetLane;
     left: number;
@@ -53,16 +52,20 @@ function createLiveSongView(
       : analysis.lanes.find((lane) => lane.startSeconds > currentTime) ?? null
     : null;
   const frame = session.liveObservation;
-  const liveMidi = frame?.voiced && frame.midiFloat !== null ? frame.midiFloat : null;
+  const liveMidi = frame && isAuthoritativeVoicedPitch(frame) ? frame.midiFloat : null;
   const liveErrorCents = liveMidi === null || !activeLane
     ? null
     : (liveMidi - activeLane.targetMidi) * 100;
   const voiceLocked = liveErrorCents !== null
     && Math.abs(liveErrorCents) <= activeLane!.toleranceCents;
-  const rangeSpan = Math.max(1, props.voiceRange.highMidi - props.voiceRange.lowMidi);
-  const pitchTop = (midi: number) => 8 + (
-    1 - clamp((midi - props.voiceRange.lowMidi) / rangeSpan, 0, 1)
-  ) * 84;
+  const focusCents = Math.max(
+    100,
+    Math.abs(props.voiceRange.highMidi - props.voiceRange.baselineMidi) * 100,
+    Math.abs(props.voiceRange.baselineMidi - props.voiceRange.lowMidi) * 100,
+  );
+  const pitchTop = (midi: number) => 100 - (
+    pitchMeterPositionPercent(midi, props.voiceRange.baselineMidi, focusCents) ?? 50
+  );
   const lookAheadSeconds = props.difficulty === "hard"
     ? 6
     : props.difficulty === "medium" ? 7.5 : 9;
@@ -82,10 +85,10 @@ function createLiveSongView(
     liveMidi,
     liveErrorCents,
     voiceLocked,
-    liveTop: liveMidi === null ? 50 : pitchTop(liveMidi),
+    liveTop: liveMidi === null ? null : pitchTop(liveMidi),
     visibleLanes,
     remainingSeconds: Math.max(0, duration - currentTime),
-    progressPercent: duration === 0 ? 0 : clamp(currentTime / duration * 100, 0, 100),
+    progressPercent: duration === 0 ? 0 : clampPercent(currentTime / duration * 100),
   };
 }
 
@@ -277,7 +280,19 @@ function PlayStage({ controller, view, feedback, voiceRange }: {
         <div className={view.voiceLocked ? "locked" : ""}><span>YOUR VOICE</span><strong>{voice.label}</strong><small>{voice.detail}</small></div>
         <div><span>NEXT</span><strong>{nextLabel}</strong><small>{formatSongTime(view.remainingSeconds)} remaining</small></div>
       </div>
-      <div className="song-rail" role="img" aria-label={view.activeLane ? `Current target ${noteLabel(view.activeLane.targetMidi)}.` : "Breathing gap."}>
+      <div
+        className="song-rail"
+        role="img"
+        aria-label={view.activeLane ? `Current target ${noteLabel(view.activeLane.targetMidi)}.` : "Breathing gap."}
+        data-observation-kind={session.liveObservation?.observationKind ?? ""}
+        data-start-sample={session.liveObservation?.startSample ?? ""}
+        data-end-sample={session.liveObservation?.endSample ?? ""}
+        data-processed-sample-count={session.liveObservation?.processedSampleCount ?? ""}
+        data-worklet-process-count={session.liveObservation?.workletProcessCount ?? ""}
+        data-capture-epoch={session.liveObservation?.captureEpoch ?? ""}
+        data-continuity-epoch={session.liveObservation?.continuityEpoch ?? ""}
+        data-graph-generation={session.liveObservation?.graphGeneration ?? ""}
+      >
         <div className="song-rail-grid">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</div>
         <i className="song-rail-playhead"><span>NOW</span></i>
         {view.visibleLanes.map(({ lane, left, width, top }) => (
@@ -287,16 +302,20 @@ function PlayStage({ controller, view, feedback, voiceRange }: {
             style={{ "--lane-left": `${left}%`, "--lane-width": `${width}%`, "--lane-top": `${top}%` } as CSSProperties}
           ><b>{feedback.showUpcomingCue || lane.id === view.activeLane?.id || lane.endSeconds < session.currentTime ? noteLabel(lane.targetMidi) : "•"}</b></span>
         ))}
-        <span
-          className={`song-voice-cursor ${view.liveMidi === null ? "silent" : ""} ${view.voiceLocked ? "locked" : ""}`}
-          style={{ "--voice-top": `${view.liveTop}%` } as CSSProperties}
-          role="meter"
-          aria-label="Live voice pitch position"
-          aria-valuemin={voiceRange.lowMidi}
-          aria-valuemax={voiceRange.highMidi}
-          aria-valuenow={view.liveMidi ?? undefined}
-          aria-valuetext={view.liveMidi === null ? "No reliable pitch" : noteLabel(view.liveMidi)}
-        ><i />{feedback.showLiveNote && <b>{view.liveMidi === null ? "VOICE" : noteLabel(view.liveMidi)}</b>}</span>
+        {view.liveMidi !== null && view.liveTop !== null && (
+          <span
+            className={`song-voice-cursor ${view.voiceLocked ? "locked" : ""}`}
+            style={{ "--voice-top": `${view.liveTop}%` } as CSSProperties}
+            role="meter"
+            aria-label="Live voice pitch position"
+            aria-valuemin={voiceRange.lowMidi}
+            aria-valuemax={voiceRange.highMidi}
+            aria-valuenow={view.liveMidi}
+            aria-valuetext={noteLabel(view.liveMidi)}
+            data-midi-float={view.liveMidi}
+            data-end-sample={session.liveObservation?.endSample ?? ""}
+          ><i />{feedback.showLiveNote && <b>{noteLabel(view.liveMidi)}</b>}</span>
+        )}
       </div>
       <div className="song-transport">
         <button type="button" onClick={playbackAction}><Icon name={playbackIcon} size={18} /> {playbackLabel}</button>

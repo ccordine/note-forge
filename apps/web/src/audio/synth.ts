@@ -1,5 +1,6 @@
 import { ensureAudioReady } from "./audio-context";
 import { midiToFrequency } from "@noteforge/music-core";
+import { clamp } from "@/lib/numeric";
 
 export const TIMBRES = Object.freeze(["sine", "triangle", "piano", "guitar", "bass", "flute", "voice", "rich synth"] as const);
 export type Timbre = (typeof TIMBRES)[number];
@@ -147,7 +148,7 @@ export async function playTone(spec: ToneSpec): Promise<ActiveVoice> {
   const release = spec.release ?? 0.08;
   const env = envelopeFor(timbre, duration);
   const attack = Math.min(spec.attack ?? env.attack, duration);
-  const decay = Math.min(env.decay, Math.max(0, duration - attack));
+  const decay = clamp(env.decay, 0, duration - attack);
   if (startAt > context.currentTime + SYNTH_LIMITS.maximumScheduleAheadSeconds) {
     throw new RangeError(`Tone start time cannot be more than ${SYNTH_LIMITS.maximumScheduleAheadSeconds} seconds ahead.`);
   }

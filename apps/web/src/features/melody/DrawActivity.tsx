@@ -3,6 +3,7 @@ import { useState } from "react";
 import { splitMidiPitch } from "@noteforge/music-core";
 import { playPitchContour, playSafely } from "@/audio/synth";
 import { noteLabel } from "@/lib/music-display";
+import { clamp } from "@/lib/numeric";
 import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
 import type { MelodyActivityProps } from "./activity-types";
@@ -38,8 +39,8 @@ export function DrawActivity({ onMeasureMidi }: MelodyActivityProps) {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const point = {
-      x: Math.max(0, Math.min(600, ((event.clientX - rect.left) / rect.width) * 600)),
-      y: Math.max(0, Math.min(220, ((event.clientY - rect.top) / rect.height) * 220)),
+      x: clamp(((event.clientX - rect.left) / rect.width) * 600, 0, 600),
+      y: clamp(((event.clientY - rect.top) / rect.height) * 220, 0, 220),
     };
     setPoints((current) => appendDrawPoint(current, point));
   };

@@ -5,22 +5,25 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalDrawFrames,
+  contiguousRuns,
+  coordinatesFromPath,
+  drawProgressDiagnostic,
+  EXPECTED_COMMANDS,
+  fixtureRelation,
+  frameKey,
+  generatedVoiceDrawWav,
+  HOP_SAMPLES,
+  pitchFramesFrom,
+  pointDistance,
+  SAMPLE_RATE,
+  WINDOW_SAMPLES,
+} from "./proof-support/voice-draw-proof-support.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
 const CHROMIUM = process.env.NOTEFORGE_CHROMIUM || "/usr/bin/chromium";
-const SAMPLE_RATE = 48_000;
-const BITS_PER_SAMPLE = 16;
-const WINDOW_SAMPLES = 4_096;
-const HOP_SAMPLES = 960;
-const NORMAL_RMS_DBFS = -24;
-
-const EXPECTED_COMMANDS = Object.freeze([
-  Object.freeze({ midi: 48, direction: "up", dx: 0, dy: -1 }),
-  Object.freeze({ midi: 50, direction: "right", dx: 1, dy: 0 }),
-  Object.freeze({ midi: 52, direction: "down", dx: 0, dy: 1 }),
-  Object.freeze({ midi: 54, direction: "left", dx: -1, dy: 0 }),
-]);
 
 function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
@@ -28,75 +31,6 @@ function delay(milliseconds) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function midiToFrequency(midi) {
-  return 440 * 2 ** ((midi - 69) / 12);
-}
-
-function generatedVoiceDrawWav() {
-  const segments = [
-    { kind: "silence", durationSeconds: 1.2 },
-    ...EXPECTED_COMMANDS.flatMap(({ midi }, index) => [
-      { kind: "tone", midi, durationSeconds: 1.15 },
-      { kind: "silence", durationSeconds: index === EXPECTED_COMMANDS.length - 1 ? 2.2 : 0.5 },
-    ]),
-  ];
-  const segmentSamples = segments.map(({ durationSeconds }) =>
-    Math.round(durationSeconds * SAMPLE_RATE));
-  const sampleCount = segmentSamples.reduce((total, count) => total + count, 0);
-  const bytesPerSample = BITS_PER_SAMPLE / 8;
-  const dataByteLength = sampleCount * bytesPerSample;
-  const wav = Buffer.alloc(44 + dataByteLength);
-
-  wav.write("RIFF", 0, "ascii");
-  wav.writeUInt32LE(36 + dataByteLength, 4);
-  wav.write("WAVE", 8, "ascii");
-  wav.write("fmt ", 12, "ascii");
-  wav.writeUInt32LE(16, 16);
-  wav.writeUInt16LE(1, 20);
-  wav.writeUInt16LE(1, 22);
-  wav.writeUInt32LE(SAMPLE_RATE, 24);
-  wav.writeUInt32LE(SAMPLE_RATE * bytesPerSample, 28);
-  wav.writeUInt16LE(bytesPerSample, 32);
-  wav.writeUInt16LE(BITS_PER_SAMPLE, 34);
-  wav.write("data", 36, "ascii");
-  wav.writeUInt32LE(dataByteLength, 40);
-
-  const targetRms = 10 ** (NORMAL_RMS_DBFS / 20);
-  const weights = [1, 0.35, 0.173333];
-  const phases = [0.1, 0.7, 1.3];
-  const unitRms = Math.sqrt(weights.reduce((sum, weight) => sum + weight ** 2, 0) / 2);
-  const amplitudeScale = targetRms / unitRms;
-  const edgeSamples = Math.round(SAMPLE_RATE * 0.01);
-  let outputSample = 0;
-
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-    const segment = segments[segmentIndex];
-    const count = segmentSamples[segmentIndex];
-    const frequencyHz = segment.kind === "tone" ? midiToFrequency(segment.midi) : null;
-    for (let localSample = 0; localSample < count; localSample += 1) {
-      let value = 0;
-      if (frequencyHz !== null) {
-        const timeSeconds = localSample / SAMPLE_RATE;
-        const edgeGain = Math.max(0, Math.min(
-          1,
-          localSample / edgeSamples,
-          (count - 1 - localSample) / edgeSamples,
-        ));
-        value = weights.reduce((sum, weight, harmonicIndex) => sum + weight * Math.sin(
-          2 * Math.PI * frequencyHz * (harmonicIndex + 1) * timeSeconds + phases[harmonicIndex],
-        ), 0) * amplitudeScale * edgeGain;
-      }
-      wav.writeInt16LE(
-        Math.round(Math.max(-1, Math.min(1, value)) * 0x7fff),
-        44 + outputSample * bytesPerSample,
-      );
-      outputSample += 1;
-    }
-  }
-
-  return wav;
 }
 
 async function availablePort() {
@@ -310,62 +244,6 @@ async function proofSnapshot(session) {
   }))()`, true);
 }
 
-function canonicalDrawFrames(snapshots) {
-  const canonical = [];
-  for (const snapshot of snapshots) {
-    if (!Number.isSafeInteger(snapshot.endSample) || snapshot.endSample < 0) continue;
-    const previous = canonical.at(-1);
-    const sameFrame = previous
-      && previous.captureEpoch === snapshot.captureEpoch
-      && previous.continuityEpoch === snapshot.continuityEpoch
-      && previous.graphGeneration === snapshot.graphGeneration
-      && previous.endSample === snapshot.endSample;
-    if (sameFrame) canonical[canonical.length - 1] = snapshot;
-    else canonical.push(snapshot);
-  }
-  return canonical;
-}
-
-function contiguousRuns(values, predicate) {
-  const runs = [];
-  let current = [];
-  for (const value of values) {
-    if (predicate(value)) {
-      current.push(value);
-    } else if (current.length > 0) {
-      runs.push(current);
-      current = [];
-    }
-  }
-  if (current.length > 0) runs.push(current);
-  return runs;
-}
-
-function frameKey(frame) {
-  return `${frame.captureEpoch}:${frame.endSample}`;
-}
-
-function coordinatesFromPath(path) {
-  const coordinates = path.match(/-?(?:\d+\.?\d*|\.\d+)/gu)?.map(Number) ?? [];
-  assert(coordinates.length === 4,
-    `A voice stroke was not coalesced into one M/L segment: ${path}`);
-  return {
-    from: { x: coordinates[0], y: coordinates[1] },
-    to: { x: coordinates[2], y: coordinates[3] },
-  };
-}
-
-function pointDistance(first, second) {
-  return Math.hypot(second.x - first.x, second.y - first.y);
-}
-
-function pitchFramesFrom(batches) {
-  return batches.flatMap((batch) => batch.events ?? [])
-    .filter((event) => event.kind === "pitch-frame")
-    .map((event) => event.pitch?.frame)
-    .filter(Boolean);
-}
-
 async function main() {
   let temporaryDirectory;
   let preview;
@@ -521,6 +399,22 @@ async function main() {
                 proof.workletNodes += 1;
                 node.port.addEventListener('message', (event) => {
                   if (event.data?.type !== 'samples') return;
+                  const samples = event.data.samples;
+                  let sumSquares = 0;
+                  let peak = 0;
+                  let nonzeroSampleCount = 0;
+                  let firstNonzeroIndex = null;
+                  let lastNonzeroIndex = null;
+                  for (let index = 0; index < (samples?.length ?? 0); index += 1) {
+                    const sample = samples[index];
+                    sumSquares += sample * sample;
+                    peak = Math.max(peak, Math.abs(sample));
+                    if (sample !== 0) {
+                      nonzeroSampleCount += 1;
+                      if (firstNonzeroIndex === null) firstNonzeroIndex = index;
+                      lastNonzeroIndex = index;
+                    }
+                  }
                   proof.workletSampleMessages += 1;
                   proof.workletSampleEvents.push({
                     startSample: event.data.startSample,
@@ -531,7 +425,12 @@ async function main() {
                     processCount: event.data.processCount,
                     processedSampleCount: event.data.processedSampleCount,
                     discontinuity: event.data.discontinuity,
-                    sampleCount: event.data.samples?.length ?? null,
+                    sampleCount: samples?.length ?? null,
+                    sampleRms: samples?.length ? Math.sqrt(sumSquares / samples.length) : null,
+                    samplePeak: peak,
+                    nonzeroSampleCount,
+                    firstNonzeroIndex,
+                    lastNonzeroIndex,
                   });
                 });
                 return node;
@@ -684,6 +583,25 @@ async function main() {
     })()`);
     assert(cabinetClicked, "The real Vocal Canvas cabinet control was not clickable.");
     await waitForBrowser(session, "Boolean(document.querySelector('[data-voice-draw]'))", "Voice Draw");
+    const settingsOpened = await evaluate(session, `(() => {
+      const settings = document.querySelector('[data-settings-open]');
+      settings?.click();
+      return Boolean(settings);
+    })()`);
+    assert(settingsOpened, "Voice Draw could not open the visible diagnostic consent setting.");
+    await waitForBrowser(
+      session,
+      "Boolean(document.querySelector('[data-remote-pitch-diagnostics-toggle]'))",
+      "Voice Draw's remote derived-diagnostic consent control",
+    );
+    const diagnosticsEnabled = await evaluate(session, `(() => {
+      const consent = document.querySelector('[data-remote-pitch-diagnostics-toggle]');
+      if (!(consent instanceof HTMLInputElement)) return false;
+      if (!consent.checked) consent.click();
+      document.querySelector('button[aria-label="Close settings"]')?.click();
+      return consent.checked;
+    })()`);
+    assert(diagnosticsEnabled, "Voice Draw did not explicitly enable remote derived diagnostics.");
     const enableClicked = await evaluate(session, `(() => {
       const button = document.querySelector('[data-global-mic-enable]');
       button?.click();
@@ -709,9 +627,10 @@ async function main() {
       "Voice Draw's explicitly started drawing phase",
     );
 
-    await waitForBrowser(
-      session,
-      `(() => {
+    try {
+      await waitForBrowser(
+        session,
+        `(() => {
         const frames = window.__noteforgeVoiceDrawProof?.snapshot?.().drawSnapshots ?? [];
         const commands = [];
         let previous = '';
@@ -729,9 +648,19 @@ async function main() {
         return ordered && finalSilence.length >= 12
           && finalSilence.at(-1).endSample - finalSilence[0].endSample >= ${HOP_SAMPLES * 8};
       })()`,
-      "C3 up, D3 right, E3 down, and F-sharp3 left followed by silence",
-      12_000,
-    );
+        "C3 up, D3 right, E3 down, and F-sharp3 left followed by silence",
+        20_000,
+      );
+    } catch (error) {
+      const stalledSnapshot = await evaluate(
+        session,
+        "window.__noteforgeVoiceDrawProof?.snapshot?.() ?? null",
+      );
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n`
+        + `Exact Voice Draw progress: ${JSON.stringify(
+          drawProgressDiagnostic(stalledSnapshot, diagnosticBatches),
+        )}`);
+    }
     const beforeFinish = await evaluate(session, `(() => {
       const root = document.querySelector('[data-voice-draw]');
       return {
@@ -888,9 +817,49 @@ async function main() {
         assert(detector?.observationKind === "voiced"
           && detector.voiced === true
           && detector.nearestMidi === expected.midi,
-        `Rendered ${expected.midi}:${expected.direction} lacked its exact production detector frame at ${frameKey(frame)}.`);
+        `Rendered ${expected.midi}:${expected.direction} lacked its exact production detector frame at ${frameKey(frame)}: `
+          + `${JSON.stringify(detector ? {
+            observationKind: detector.observationKind,
+            voiced: detector.voiced,
+            nearestMidi: detector.nearestMidi,
+            midiFloat: detector.midiFloat,
+            centsFromNearest: detector.centsFromNearest,
+            frequencyHz: detector.frequencyHz,
+            confidence: detector.confidence,
+            periodicity: detector.periodicity,
+            reason: detector.reason,
+            startSample: detector.startSample,
+            endSample: detector.endSample,
+            fixture: fixtureRelation(detector),
+          } : null)}.`);
       }
       return { midi: expected.midi, direction: expected.direction, deltaX, deltaY, materialDistance };
+    });
+
+    const segmentEvents = frames.flatMap((frame, index) => {
+      const previousCount = frames[index - 1]?.segmentCount ?? 0;
+      if (frame.segmentCount <= previousCount) return [];
+      const detector = diagnosticByKey.get(frameKey(frame));
+      return [{
+        previousCount,
+        segmentCount: frame.segmentCount,
+        activeMidi: frame.activeMidi,
+        activeDirection: frame.activeDirection,
+        detector: detector ? {
+          observationKind: detector.observationKind,
+          voiced: detector.voiced,
+          nearestMidi: detector.nearestMidi,
+          midiFloat: detector.midiFloat,
+          centsFromNearest: detector.centsFromNearest,
+          frequencyHz: detector.frequencyHz,
+          confidence: detector.confidence,
+          periodicity: detector.periodicity,
+          reason: detector.reason,
+          startSample: detector.startSample,
+          endSample: detector.endSample,
+          fixture: fixtureRelation(detector),
+        } : null,
+      }];
     });
 
     const silentRuns = contiguousRuns(frames, (frame) =>
@@ -901,7 +870,15 @@ async function main() {
         candidate.length >= 8
           && candidate.every((frame) => frame.segmentCount === expectedSegmentCount));
       assert(run,
-        `No sustained silence run followed engine segment count ${expectedSegmentCount}.`);
+        `No sustained silence run followed engine segment count ${expectedSegmentCount}. `
+          + `Observed runs: ${JSON.stringify(silentRuns.map((candidate) => ({
+            frames: candidate.length,
+            startSample: candidate[0]?.endSample,
+            endSample: candidate.at(-1)?.endSample,
+            segmentCounts: [...new Set(candidate.map((frame) => frame.segmentCount))],
+            phases: [...new Set(candidate.map((frame) => frame.drawPhase))],
+          })))}. Segment events: ${JSON.stringify(segmentEvents)}. `
+          + `Final frame: ${JSON.stringify(frames.at(-1))}.`);
       const anchor = run[0];
       assert(run.at(-1).endSample > anchor.endSample
         && run.every((frame) => frame.cursorX === anchor.cursorX

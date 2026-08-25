@@ -275,7 +275,7 @@
   cursor: default;
 }
 
-.pitch-maze-direction[aria-label*="play short reference"] { cursor: pointer; }
+.pitch-maze-direction[aria-label*="select playback note"] { cursor: pointer; }
 .pitch-maze-direction.north { grid-area: 1 / 2; }
 .pitch-maze-direction.west { grid-area: 2 / 1; }
 .pitch-maze-direction.east { grid-area: 2 / 3; }

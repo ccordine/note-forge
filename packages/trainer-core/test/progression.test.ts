@@ -138,12 +138,16 @@ describe("skill progression", () => {
       ...initial,
       commonConfusions: { "up → down": Number.MAX_SAFE_INTEGER },
     }, "up → down")).toThrow(/safe-integer range/);
-    expect(() => recordSkillConfusion({
+    const manyConfusions = Object.fromEntries(
+      Array.from({ length: 129 }, (_, index) => [`confusion-${index}`, 1]),
+    );
+    const extendedConfusions = recordSkillConfusion({
       ...initial,
-      commonConfusions: Object.fromEntries(
-        Array.from({ length: 129 }, (_, index) => [`confusion-${index}`, 1]),
-      ),
-    }, "another")).toThrow(/128/);
+      commonConfusions: manyConfusions,
+    }, "another");
+    expect(extendedConfusions.commonConfusions).toHaveProperty("another", 1);
+    expect(Object.keys(extendedConfusions.commonConfusions)).toHaveLength(130);
+    expect(Object.keys(manyConfusions)).toHaveLength(129);
     expect(() => recordSkillConfusion({
       ...initial,
       commonConfusions: JSON.parse('{"__proto__":1}') as Record<string, number>,

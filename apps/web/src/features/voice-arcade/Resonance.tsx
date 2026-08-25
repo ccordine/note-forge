@@ -1,9 +1,9 @@
-import { playTone } from "@/audio/synth";
 import { useAudioInput } from "@/audio/use-audio-input";
-import { useSessionEffectScope } from "@/features/training-session/use-session-effect-scope";
+import { useSustainedNote } from "@/audio/use-sustained-note";
 import { continuousMidiToHz, noteLabel } from "@/lib/music-display";
 import { ActionButton, Eyebrow, Panel } from "@/ui/Controls";
 import { Icon } from "@/ui/Icon";
+import { NotePlaybackToggle } from "@/ui/NotePlaybackToggle";
 import { NoteInput } from "@/ui/voice";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import { resolveArcadeCurriculum } from "./curriculum";
@@ -24,7 +24,6 @@ import type { ArcadeGameProps, ArcadeOutcome } from "./types";
 import { useArcadeOutcomeHandoff } from "./use-arcade-outcome";
 
 const OCCUPANCY_DISPLAY_SECONDS = 3;
-const REFERENCE_SECONDS = 0.32;
 
 function outcomeFrom(
   result: Readonly<ResonanceResult>,
@@ -53,16 +52,6 @@ function outcomeFrom(
       resonators: result.resonators,
     },
   };
-}
-
-function referenceVoice(midi: number) {
-  return playTone({
-    frequencyHz: continuousMidiToHz(midi),
-    duration: REFERENCE_SECONDS,
-    amplitude: 0.16,
-    timbre: "sine",
-    release: 0.05,
-  });
 }
 
 function guidanceFor(state: Readonly<ResonanceSessionState>): Readonly<{
@@ -126,7 +115,7 @@ function ResonanceGuide() {
           <li>Match the focused resonator to add tuned force.</li>
           <li>Stable pitch makes the field more coherent; no setup calibration is required.</li>
           <li>Silence and uncertain windows add no force, but PCM and detection keep running.</li>
-          <li>Reference playback is a brief, explicit sound. It never pauses or resets the detector.</li>
+          <li>The target note plays until you turn its visible toggle off. It never pauses or resets the detector.</li>
         </ul>
       </div>
     </details>
@@ -202,19 +191,17 @@ export function Resonance(props: ArcadeGameProps) {
     }),
   );
   const session = realtime.state;
-  const reference = useSessionEffectScope();
   const target = focusedResonator(session.game);
+  const referenceMidi = target?.targetMidi
+    ?? session.game.level.resonators.at(-1)?.targetMidi
+    ?? voiceRange.baselineMidi;
+  const targetPlayback = useSustainedNote({
+    frequencyHz: continuousMidiToHz(referenceMidi),
+    timbre: "sine",
+    amplitude: 0.16,
+  });
   const heldSeconds = resonanceHeldSeconds(session);
   const input = useAudioInput({
-    diagnostics: {
-      flow: "voice-arcade",
-      phase: session.phase,
-      targetMidi: target?.targetMidi ?? null,
-      toleranceCents: target?.bandwidthCents ?? null,
-      stableMs: heldSeconds * 1_000,
-      requiredHoldMs: null,
-      resetReason: null,
-    },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const completedOutcome = session.phase === "complete" && session.result
@@ -263,7 +250,6 @@ export function Resonance(props: ArcadeGameProps) {
           <ActionButton
             className="primary"
             onClick={() => {
-              reference.abort();
               if (session.phase === "tracking") {
                 realtime.dispatch({ type: "finish" });
               } else {
@@ -276,7 +262,6 @@ export function Resonance(props: ArcadeGameProps) {
           <ActionButton
             disabled={session.phase === "tracking"}
             onClick={() => {
-              reference.abort();
               const chamberNumber = session.chamberNumber + 1;
               realtime.dispatch({
                 type: "install",
@@ -287,13 +272,13 @@ export function Resonance(props: ArcadeGameProps) {
           >
             <Icon name="spark" size={17} /> New chamber
           </ActionButton>
-          <ActionButton disabled={!target} onClick={() => target && reference.playReference(
-            `Resonance ${noteLabel(target.targetMidi)} reference`,
-            () => referenceVoice(target.targetMidi),
-          )}>
-            <Icon name="headphones" size={17} /> Hear target
-          </ActionButton>
-          <ActionButton onClick={() => { reference.abort(); onExit(); }}><Icon name="arrow" size={16} /> Cabinet</ActionButton>
+          {(target || targetPlayback.playing) && (
+            <NotePlaybackToggle
+              playback={targetPlayback}
+              label={noteLabel(referenceMidi)}
+            />
+          )}
+          <ActionButton onClick={onExit}><Icon name="arrow" size={16} /> Cabinet</ActionButton>
         </div>
         <ResonanceGuide />
       </Panel>
@@ -335,7 +320,6 @@ export function Resonance(props: ArcadeGameProps) {
             holdMode="occupancy"
             guidanceTitle={guidance.title}
             guidanceDetail={guidance.detail}
-            diagnosticsFlow="voice-arcade"
             feedbackLevel="full"
             guidanceLive={false}
           />

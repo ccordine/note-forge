@@ -30,7 +30,6 @@ const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 const MAX_SKILL_ID_LENGTH = 128;
 const MAX_CONFUSION_KEY_LENGTH = 256;
-const MAX_CONFUSION_ENTRIES = 128;
 const UNSAFE_DICTIONARY_KEYS = new Set(
   [...Object.getOwnPropertyNames(Object.prototype), "prototype"],
 );
@@ -103,9 +102,6 @@ function validateSkillState(state: Readonly<SkillState>): void {
     throw new TypeError("state.commonConfusions must be a plain record.");
   }
   const confusionEntries = Object.entries(state.commonConfusions);
-  if (confusionEntries.length > MAX_CONFUSION_ENTRIES) {
-    throw new RangeError(`state.commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
-  }
   for (const [key, count] of confusionEntries) {
     requireConfusionKey(key, "state.commonConfusions key");
     if (!Number.isSafeInteger(count) || count < 0) {
@@ -165,9 +161,6 @@ export const recordSkillConfusion = (
     throw new RangeError("increment must be a positive safe integer.");
   }
   const hasExistingKey = Object.hasOwn(state.commonConfusions, confusionKey);
-  if (!hasExistingKey && Object.keys(state.commonConfusions).length >= MAX_CONFUSION_ENTRIES) {
-    throw new RangeError(`commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
-  }
   const current = hasExistingKey ? state.commonConfusions[confusionKey] : 0;
   if (!Number.isSafeInteger(current) || current < 0) {
     throw new RangeError("Existing confusion counts must be non-negative safe integers.");
@@ -338,9 +331,6 @@ export const updateSkillState = (
   const commonConfusions = { ...state.commonConfusions };
   if (!isCorrect && confusionKey) {
     const hasExistingKey = Object.hasOwn(commonConfusions, confusionKey);
-    if (!hasExistingKey && Object.keys(commonConfusions).length >= MAX_CONFUSION_ENTRIES) {
-      throw new RangeError(`commonConfusions cannot exceed ${MAX_CONFUSION_ENTRIES} entries.`);
-    }
     const currentCount = hasExistingKey ? commonConfusions[confusionKey] : 0;
     if (currentCount === Number.MAX_SAFE_INTEGER) {
       throw new RangeError("The confusion count cannot be incremented beyond the safe-integer range.");

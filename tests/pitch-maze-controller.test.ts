@@ -114,13 +114,21 @@ function completedTrace(errorsCents: readonly number[]): {
 }
 
 describe("Pitch Maze voice controller", () => {
-  it("rejects noise, uncertain interpretations, low confidence, and unrelated pitch", () => {
+  it("rejects noise, uncertain interpretations, and unrelated pitch while admitting detector-voiced low confidence", () => {
+    const lowConfidence = updatePitchMazeController(
+      createPitchMazeController(OPTIONS),
+      detected(0, 60, 0.01),
+    );
+    expect(lowConfidence.state).toMatchObject({
+      phase: "tracking",
+      activeDirection: "north",
+    });
+
     const result = feed(createPitchMazeController(OPTIONS), [
       silence(0),
       uncertain(0.02, 60),
-      detected(0.04, 60, 0.4),
-      detected(0.06, 55),
-      silence(0.08),
+      detected(0.04, 55),
+      silence(0.06),
     ]);
 
     expect(result.events).toEqual([]);
@@ -349,6 +357,5 @@ describe("Pitch Maze voice controller", () => {
       directionNotes: { ...NOTES, east: 60 },
     })).toThrow(/distinct note/i);
     expect(() => createPitchMazeController({ ...OPTIONS, requiredHoldSeconds: 0 })).toThrow(RangeError);
-    expect(() => createPitchMazeController({ ...OPTIONS, minimumConfidence: 1.1 })).toThrow(RangeError);
   });
 });

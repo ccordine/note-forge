@@ -9,6 +9,7 @@ import {
   captureProcessOutput,
   delay,
   DevToolsSession,
+  enableRemotePitchDiagnostics,
   evaluate,
   stopProcessGroup,
   waitForBrowser,
@@ -74,6 +75,28 @@ async function clickVisible(session, selector, textIncludes = null) {
   await session.send("Input.dispatchMouseEvent", {
     type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1,
   });
+}
+
+async function synchronizedAuthoritySnapshot(session) {
+  return evaluate(session, `(async () => new Promise((resolveSnapshot) => {
+    let interval = null;
+    let timeout = null;
+    const finish = (snapshot) => {
+      if (interval !== null) clearInterval(interval);
+      if (timeout !== null) clearTimeout(timeout);
+      resolveSnapshot(snapshot);
+    };
+    const check = () => {
+      const native = window.__noteforgeNoteInputProof?.snapshot?.();
+      const feature = window.__noteforgeVocalFlightProof?.snapshot?.();
+      if (feature?.current?.observedFrames === native?.workletSampleMessages) {
+        finish({ native, feature });
+      }
+    };
+    interval = setInterval(check, 5);
+    timeout = setTimeout(() => finish(null), 5_000);
+    check();
+  }))()`, true);
 }
 
 async function inspectLayout(session) {
@@ -313,6 +336,7 @@ async function main() {
     `Vocal Flight did not load the production bundle: ${JSON.stringify(assets)}`);
     const calibrationLayouts = await proveResponsiveState(session, "calibration");
 
+    await enableRemotePitchDiagnostics(session);
     await clickVisible(session, "[data-global-mic-enable]");
     await waitForBrowser(
       session,
@@ -359,20 +383,8 @@ async function main() {
       "the complete calibration and flight fixture",
       40_000,
     );
-    await waitForBrowser(
-      session,
-      `(() => {
-        const native = window.__noteforgeNoteInputProof?.snapshot?.();
-        const feature = window.__noteforgeVocalFlightProof?.snapshot?.();
-        return feature?.current?.observedFrames === native?.workletSampleMessages;
-      })()`,
-      "Vocal Flight consumption of the latest worklet observation",
-      5_000,
-    );
-    const preRoute = await evaluate(session, `({
-      native: window.__noteforgeNoteInputProof.snapshot(),
-      feature: window.__noteforgeVocalFlightProof.snapshot(),
-    })`);
+    const preRoute = await synchronizedAuthoritySnapshot(session);
+    assert(preRoute, "Vocal Flight never caught up to the latest worklet observation.");
     await delay(1_000);
     const detectorFrames = pitchFramesFrom(diagnosticBatches);
     const derived = assertDerivedSignals(detectorFrames);

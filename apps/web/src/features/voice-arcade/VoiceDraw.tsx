@@ -7,6 +7,8 @@ import {
 } from "react";
 import { useAudioInput } from "@/audio/use-audio-input";
 import { noteLabel, signed } from "@/lib/music-display";
+import { observationContinuity } from "@/realtime/observation-continuity";
+import type { RealtimePresentationPolicy } from "@/realtime/realtime-session-store";
 import { useRealtimeSession } from "@/realtime/use-realtime-session";
 import { ActionButton, Eyebrow } from "@/ui/Controls";
 import { resolveArcadeCurriculum } from "./curriculum";
@@ -26,10 +28,25 @@ import type {
   VoiceDrawBrushStyle,
   VoiceDrawDirection,
   VoiceDrawSegment,
+  VoiceDrawSessionAction,
   VoiceDrawState,
   VoiceDrawTraceScore,
   VoiceDrawTraceTargetId,
 } from "./voice-draw-types";
+
+export const VOICE_DRAW_PRESENTATION_POLICY = Object.freeze({
+  shouldPublishImmediately: (
+    previous: Readonly<VoiceDrawState>,
+    next: Readonly<VoiceDrawState>,
+    action: Readonly<VoiceDrawSessionAction>,
+  ) => previous.phase !== next.phase
+    || previous.activeMidi !== next.activeMidi
+    || previous.activeDirection !== next.activeDirection
+    || previous.stationaryReason !== next.stationaryReason
+    || previous.segments.length !== next.segments.length
+    || action.type === "observation"
+      && observationContinuity(previous.lastAuthority, action.observation).boundary,
+}) satisfies RealtimePresentationPolicy<VoiceDrawState, VoiceDrawSessionAction>;
 
 type VoiceDrawMode = "free" | "trace" | "puzzle";
 
@@ -159,15 +176,13 @@ export function VoiceDraw({
       voiceRange,
       speedNormalizedPerSecond: speedForDifficulty(difficulty),
     }),
+    30,
+    VOICE_DRAW_PRESENTATION_POLICY,
   );
   const drawState = realtime.state;
   const completedTraceSegmentsRef = useRef<readonly VoiceDrawSegment[] | null>(null);
 
   const input = useAudioInput({
-    diagnostics: {
-      flow: "voice-arcade",
-      phase: `draw-${mode}-${drawState.phase}`,
-    },
     onFrame: (observation) => realtime.observe({ type: "observation", observation }),
   });
   const curriculum = resolveArcadeCurriculum("draw", curriculumStage);
@@ -305,7 +320,6 @@ export function VoiceDraw({
       data-cursor-x={drawState.cursor.x}
       data-cursor-y={drawState.cursor.y}
       data-segment-count={drawState.segments.length}
-      data-retired-segment-count={drawState.retiredSegmentCount}
       data-observed-frame-count={drawState.observedFrameCount}
     >
       <header className="voice-draw-header">

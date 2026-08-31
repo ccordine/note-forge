@@ -107,7 +107,6 @@ function voicedFrame(): FrameDiagnosticSource {
         yinValue: 0.01321,
         confidence: 0.98679,
       },
-      harmonicAmbiguity: 0.03125,
     },
     pitchTrackingDecision: "accepted-continuation",
   };

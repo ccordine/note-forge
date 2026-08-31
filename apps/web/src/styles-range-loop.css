@@ -145,7 +145,7 @@
 
 .range-loop-fields {
   display: grid;
-  grid-template-columns: repeat(5, minmax(112px, 1fr));
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
   gap: 10px;
   padding: 0 12px 12px;
   border-top: 1px solid var(--line);
@@ -290,6 +290,20 @@
   background: rgba(216, 255, 62, .55);
 }
 
+.range-session-family-strip > span.parked {
+  border-color: rgba(255, 148, 118, .3);
+  background: rgba(255, 148, 118, .045);
+}
+
+.range-session-family-strip > span.parked > b {
+  color: var(--coral);
+  text-decoration: line-through;
+}
+
+.range-session-family-strip > span.parked > i {
+  background: rgba(255, 148, 118, .5);
+}
+
 .range-session-family-strip > span.current {
   border-color: rgba(99, 215, 255, .55);
   background: rgba(99, 215, 255, .08);
@@ -302,6 +316,19 @@
 
 .range-session-family-strip > span.current > i {
   background: var(--blue);
+}
+
+.range-session-family-strip > span.current.parked {
+  border-color: rgba(255, 148, 118, .48);
+  background: rgba(255, 148, 118, .07);
+}
+
+.range-session-family-strip > span.current.parked > b {
+  color: var(--coral);
+}
+
+.range-session-family-strip > span.current.parked > i {
+  background: var(--coral);
 }
 
 .range-result-next,
@@ -320,6 +347,15 @@
 .range-result-next b,
 .range-result-next small {
   display: block;
+}
+
+.range-loop-no-target {
+  border-color: rgba(255, 148, 118, .32);
+  background: rgba(255, 148, 118, .055);
+}
+
+.range-loop-no-target b {
+  color: var(--coral);
 }
 
 .range-result-next b {

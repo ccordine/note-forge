@@ -6,20 +6,18 @@ import {
   type RangeFamilyId,
 } from "./model";
 import {
-  RANGE_LOOP_HOLD_OPTIONS,
   type RangeLoopOrder,
 } from "./range-loop-session";
+import { RANGE_LOOP_CREDIT_GOAL_SECONDS } from "./range-loop-credit";
 import type { RangeLoopSession } from "./use-range-loop-session";
 
 type SettingsProps = Pick<
   RangeLoopSession,
   | "changeFamily"
-  | "changeHold"
   | "changeNoteSet"
   | "changeOrder"
   | "changeTolerance"
   | "family"
-  | "holdSeconds"
   | "hydrated"
   | "noteSet"
   | "order"
@@ -39,7 +37,7 @@ export function RangeLoopSettings({ session }: { readonly session: SettingsProps
     <details className="range-loop-settings">
       <summary>
         <span>Change settings</span>
-        <b>{session.family.label} · {session.noteSet} · {session.order} · {session.holdSeconds.toFixed(1)} sec · ±{session.toleranceCents}¢</b>
+        <b>{session.family.label} · {session.noteSet} · {session.order} · {RANGE_LOOP_CREDIT_GOAL_SECONDS} sec collective · ±{session.toleranceCents}¢</b>
         <small>{persistenceLabel(session)}</small>
       </summary>
       <div className="range-loop-fields">
@@ -70,16 +68,6 @@ export function RangeLoopSettings({ session }: { readonly session: SettingsProps
         >
           <option value="ascending">Ascending</option>
           <option value="descending">Descending</option>
-        </Select>
-        <Select
-          label="Hold"
-          value={session.holdSeconds}
-          disabled={!session.hydrated}
-          onChange={(event) => session.changeHold(Number(event.target.value))}
-        >
-          {RANGE_LOOP_HOLD_OPTIONS.map((seconds) => (
-            <option value={seconds} key={seconds}>{seconds.toFixed(1)} sec</option>
-          ))}
         </Select>
         <Select
           label="Lane"

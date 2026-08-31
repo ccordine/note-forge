@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  correctOctaveJumps,
   medianSmoothPitchFrames,
   midiToFrequency,
   type PitchFrame,
   type YinPitchFrame,
-  smoothPitchFrames,
 } from "../src";
 
 function frame(midiFloat: number | null, index: number): PitchFrame {
@@ -75,69 +73,7 @@ describe("median pitch smoothing", () => {
   });
 });
 
-describe("continuity-aware octave correction", () => {
-  it("repairs a brief octave-up detector excursion that returns to its anchor", () => {
-    const source = [69, 69.1, 81.15, 81.2, 69.25].map(frame);
-    const result = correctOctaveJumps(source);
-
-    expect(result[2].midiFloat).toBeCloseTo(69.15, 8);
-    expect(result[3].midiFloat).toBeCloseTo(69.2, 8);
-    expect(result[2].frequencyHz).toBeCloseTo(midiToFrequency(69.15), 8);
-  });
-
-  it("repairs a brief octave-down detector excursion", () => {
-    const source = [64, 64.1, 52.05, 64.15].map(frame);
-    const result = correctOctaveJumps(source);
-
-    expect(result[2].midiFloat).toBeCloseTo(64.05, 8);
-  });
-
-  it("preserves a sustained octave change as potentially intentional", () => {
-    const source = [69, 69, 81, 81, 81, 81].map(frame);
-    const result = correctOctaveJumps(source, { maxOutlierFrames: 2 });
-
-    expect(midiValues(result)).toEqual([69, 69, 81, 81, 81, 81]);
-  });
-
-  it("does not bridge octave corrections across loss of voicing", () => {
-    const source = [69, 81, null, 69].map(frame);
-    const result = correctOctaveJumps(source);
-
-    expect(midiValues(result)).toEqual([69, 81, null, 69]);
-  });
-
-  it("does not reinterpret an unrelated wide leap as an octave error", () => {
-    const source = [60, 69, 60].map(frame);
-    const result = correctOctaveJumps(source);
-
-    expect(midiValues(result)).toEqual([60, 69, 60]);
-  });
-
-  it("validates the reference frequency even when no correction is needed", () => {
-    expect(() => correctOctaveJumps([frame(69, 0)], { a4Frequency: Number.NaN }))
-      .toThrow(/a4Frequency/);
-  });
-});
-
-describe("combined frame smoothing", () => {
-  it("runs octave repair before the median filter", () => {
-    const source = [69, 69.05, 81.1, 69.15, 69.2].map(frame);
-    const result = smoothPitchFrames(source);
-
-    expect(result.every((item) => (item.midiFloat ?? 69) < 70)).toBe(true);
-    expect(result[2].midiFloat).toBeCloseTo(69.1, 8);
-  });
-
-  it("can retain raw octaves when correction is disabled", () => {
-    const source = [69, 81, 69].map(frame);
-    const result = smoothPitchFrames(source, {
-      correctOctaveJumps: false,
-      radius: 0,
-    });
-
-    expect(midiValues(result)).toEqual([69, 81, 69]);
-  });
-
+describe("detector-diagnostic preservation", () => {
   it("preserves detector diagnostics while smoothing pitch coordinates", () => {
     const source: YinPitchFrame[] = [69, 74, 69].map((midi, index) => ({
       ...frame(midi, index),
@@ -147,7 +83,7 @@ describe("combined frame smoothing", () => {
       reason: "detected"
     }));
 
-    const result = smoothPitchFrames(source);
+    const result = medianSmoothPitchFrames(source);
 
     expect(result[1].midiFloat).toBe(69);
     expect(result[1].detector).toBe("yin");

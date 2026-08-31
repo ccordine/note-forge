@@ -12,7 +12,7 @@ export const MONITORING_INSTRUMENTATION_SOURCE = `(() => {
     nodes: [], edges: [], disconnects: [], gainEvents: [],
     contextLatencyReads: [],
     workletModules: [], workletNodes: 0, workletSamples: [],
-    trackSettings: [], trackEnabledWrites: [], trackStops: [],
+    trackSettings: [], trackConstraintApplications: [], trackEnabledWrites: [], trackStops: [],
     contextSuspends: 0, contextCloses: 0,
     instrumentationErrors: [],
   };
@@ -257,6 +257,26 @@ export const MONITORING_INSTRUMENTATION_SOURCE = `(() => {
       proof.tracks += 1;
       knownTracks.add(track);
       proof.trackSettings.push(serializable(track.getSettings()));
+      const nativeApplyConstraints = track.applyConstraints.bind(track);
+      Object.defineProperty(track, 'applyConstraints', {
+        configurable: true,
+        value: async (nextConstraints) => {
+          const record = {
+            at: performance.now(),
+            constraints: serializable(nextConstraints),
+            settings: null,
+            error: null,
+          };
+          proof.trackConstraintApplications.push(record);
+          try {
+            await nativeApplyConstraints(nextConstraints);
+            record.settings = serializable(track.getSettings());
+          } catch (error) {
+            record.error = String(error);
+            throw error;
+          }
+        },
+      });
       let prototype = track;
       let enabledDescriptor;
       while (prototype && !enabledDescriptor) {

@@ -2,7 +2,7 @@
 
 The authoritative note-input proof is `npm run proof:note-input:browser`. It first builds and stamps the production `dist` bundle, serves that exact output with Vite Preview, launches it in Chromium, and supplies deterministic audio through Chromium's fake microphone device. The script rejects Vite development/source entry modules before testing the same browser path used by a physical microphone:
 
-`getUserMedia -> MediaStreamAudioSourceNode -> AudioWorkletNode -> MicrophoneCapture -> NoteInputEngine -> YIN/harmonic-family candidate -> shared target-independent temporal tracker -> authoritative observation -> AudioKernel -> rendered note`
+`getUserMedia -> MediaStreamAudioSourceNode -> AudioWorkletNode -> MicrophoneCapture -> NoteInputEngine -> direct per-window YIN candidate -> shared target-independent temporal tracker -> authoritative observation -> AudioKernel -> rendered note`
 
 Generated-PCM unit tests are useful detector tests, but they are not described as browser or microphone proof because they do not cross that chain.
 
@@ -10,17 +10,16 @@ The per-window detector candidate and the authoritative observation are
 deliberately different evidence. Fine motion and a cold attack can be admitted
 immediately. A single remote candidate is retained in `pitchCandidate`, while
 that exact observation is `uncertain` with reason `temporally-ambiguous`; it
-does not expose the stale previous note. A coherent candidate on the next
-20 ms hop becomes the new voiced authority. The tracker has no target,
+does not expose the stale previous note. A sequence of four coherent 20 ms
+candidates becomes the new voiced authority. The tracker has no target,
 tolerance, score, or workflow input, so this behavior cannot favor the answer
 an exercise expects.
 
-The candidate stage also resolves acoustic harmonic families before temporal
-tracking. A noisy doubled-period YIN minimum is raised by an octave only when
-at least three measured even-grid partials support the raised family and
-off-grid/odd-harmonic energy is low. A true low fundamental with odd-grid
-evidence remains low. This correction is signal-derived and target-independent;
-the later tracker handles only temporal plausibility.
+The candidate stage publishes YIN's estimate directly, using the canonical
+`0.08` local-minimum threshold. No harmonic-family selector, target hint, or
+octave-repair pass may transpose a candidate after estimation. The later
+tracker handles only target-independent temporal admission and never changes a
+candidate's octave.
 
 ## Browser acceptance contract
 
@@ -36,10 +35,11 @@ The proof instruments the browser independently of the application and fails unl
 8. The microphone track is never disabled or stopped before the proof presses the real **Disable voice** control. Explicit Disable then stops the owned track exactly once.
 9. PCM samples, worklet callbacks, detector windows, and rendered sample identity remain monotonic through silence, prompt changes, navigation, and a route with no microphone consumer.
 10. A cold attack publishes on its exact detector frame. For a remote change,
-    the first candidate frame must render as exact-sample uncertainty with no
-    stale note, and a coherent next-hop candidate must render the new note at
-    that next frame's exact `endSample`. Neither an unbounded agreement gate nor
-    substitution of a later independently coalesced frame may pass.
+    three consecutive pending windows remain uncertain with no stale note, and
+    the fourth coherent 20 ms window must render the new note at its exact
+    `endSample`. Any pending candidate projected by React must retain its exact
+    detector identity; steady uncertainty may otherwise be coalesced. Neither an
+    unbounded agreement gate nor substitution of a later frame may pass.
 11. Every frame reports synchronous production detector execution time, and even the maximum must remain below the 960/48 kHz (20 ms) analysis-hop budget.
 12. Digital silence and loud deterministic broadband noise continuously produce unvoiced observations and never render a note. Noise RMS must sit above the removed level gate.
 13. The app requests the content-hashed worklet emitted by the production build, and that exact asset is included in the stamped offline precache.
@@ -61,15 +61,20 @@ below the removed level gate. The proof then navigates the same still-running
 track into Range Loop and requires:
 
 - one retained tuner DOM identity through wrong pitch, silence, reference, and success;
-- earned sample-time dwell continuing while the canonical target note is
+- earned cumulative sample-time credit continuing while the canonical target note is
   explicitly toggled on;
 - one shared sustained playback lane with one full attack and four oscillator
   voices, no duration or automatic cutoff, no quieter continuation, and no
   Stop caused by Start, achievement, or Finish;
-- credited quiet-C3 dwell crossing three seconds and continuing beyond the
-  achievement threshold until visible **Finish**, while PCM and live-note
+- six separated quiet-C3 attempts collectively crossing 30 seconds, with each
+  breath adding no time, bridging no gap, and erasing no prior credit;
+- collective credit continuing beyond the achievement threshold until visible
+  **Finish**, while PCM and live-note
   telemetry continue without a stream, track, AudioContext, or worklet
-  replacement; and
+  replacement;
+- visible **I can’t reach this note** excluding D3 without a pass or false
+  credit, moving to E3, and visible **Recheck excluded notes** restoring D3
+  without replacing the active target, tuner, or capture; and
 - exact worklet/detector sample-coordinate pairing until the one explicit
   **Disable voice** action.
 
@@ -88,8 +93,9 @@ test-only hold.
 The assertions are about authoritative observations, not about pretending every
 raw candidate is correct. An uncertain observation may pause new qualified
 time, but it may not grant a contradictory note authority or regress already
-earned C3 hold. The real C3 gate must enable **Next target** before the fixture
-changes. Then a persistent D3 must become authoritative and earn its own hold on
+earned C3 credit. The real C3 gate must collect at least 30 seconds and enable
+**Next target** before the fixture changes. Then a persistent D3 must become
+authoritative and collect its own 30 seconds on
 the same mounted `NoteInput`, proving the tracker is responsive to a genuine
 change rather than merely sticky. The browser stages stop at +3 dB SNR. A +0 dB
 case exists only in the supplemental unit matrix and must not be reported as a
@@ -112,16 +118,18 @@ playback or feature-owned capture operation occurs.
 ## Supplemental detector contract
 
 `tests/note-input-engine.test.ts`, `tests/note-input-antialias.test.ts`,
-`tests/noisy-vocal-pitch-tracker.test.ts`, and the pitch-engine harmonic-family
-tests call the production engine and DSP with deterministic capture-sized
-windows. `NoteInputEngine` is stateful by design: it owns private reusable
+`tests/noisy-vocal-pitch-tracker.test.ts`,
+`tests/low-register-pitch-regression.test.ts`, and
+`packages/pitch-engine/test/b2-octave-regression.test.ts` call the production
+engine and DSP with deterministic capture-sized windows. `NoteInputEngine` is
+stateful by design: it owns private reusable
 normalization/detector workspace and the shared temporal tracker state for its
 capture authority. Their assertions require:
 
 - every semitone from F♯1 through D6 plus the literal 45/1,200 Hz boundaries
   across the supported capture-rate matrix;
 - immediate cold attacks and fine continuation, an exact uncertain candidate
-  frame for a remote change, and coherent next-hop acceptance;
+  frame for a remote change, and coherent four-window acceptance;
 - quiet harmonic detection far below the removed sensitivity gate, including the lowest supported octave;
 - weak-fundamental, dominant-second low spectra across multiple phases and sample rates;
 - pure-high and mains-plus-noise confounders that must not be folded into a false low octave;
@@ -158,40 +166,43 @@ npm run build
 
 The browser command requires an installed Chromium and starts only local Vite Preview/Chrome processes after the production build. It generates its WAV in a temporary directory and removes that directory and both processes when complete.
 
-## Verified result — 2026-08-25
+## Verified result — 2026-08-31
 
 The final run against the built production bundle reported:
 
 - 57/57 enclosed semitones, MIDI 30–86;
 - both literal 45/1,200 Hz boundaries and 18/18 quiet low notes, MIDI 30–47,
   near -60 dBFS;
-- loud seeded broadband noise unvoiced for 196/196 observations;
-- exact 2,177/2,177 AudioWorklet-to-authoritative-observation sample-identity
+- loud seeded broadband noise unvoiced for 192/192 observations;
+- exact 2,173/2,173 AudioWorklet-to-authoritative-observation sample-identity
   pairs at a 960-sample hop;
 - the runtime-requested content-hashed pitch worklet matched the sole pitch
   worklet in the stamped service-worker precache;
-- cold-attack C3 accepted at exact `endSample` 85,696;
-- E3 candidate at 120,256 rendered exact-sample uncertainty with no stale note,
-  then became authoritative at 121,216; G3 did the same at 153,856 and 154,816;
+- C3, E3, and G3 each retained three exact uncertain windows with no stale note
+  before confirmation on the fourth coherent window at `endSample` 88,576,
+  123,136, and 156,736;
 - all 57 supported notes occupied distinct, strictly monotonic computed meter
   positions, and representative ribbon points retained exact sample authority;
 - a forced AudioContext suspension recovered automatically with continuity epoch 0→1 and `discontinuity=true`, retaining one stream, track, and worklet;
-- detector execution median 2.5 ms, p95 3.9 ms, maximum 13.0 ms, all below the 20 ms hop;
+- detector execution median 2.1 ms, p95 2.5 ms, maximum 10.1 ms, all below the 20 ms hop;
 - one `getUserMedia` call, zero track disables, zero pre-Disable stops, and exactly one stop after global **Disable voice**.
 
-The sustained-note proof independently paired 2,602/2,602 worklet windows and
+The sustained-note proof independently paired 3,908/3,908 worklet windows and
 authoritative observations. F♯1, quiet C3 at median -62.9 dBFS, C4, and D6
-retained 8.420, 8.460, 8.460, and 8.480 seconds of uninterrupted evidence.
-Maximum detector work was 16.2 ms. Range Loop kept one tuner, crossed three
-seconds of quiet-C3 dwell, continued from 3.04 to 3.54 seconds, and froze only
-on visible **Finish** while PCM/live C3 continued. The target note used one
+retained 8.380, 8.400, 8.400, and 8.420 seconds of uninterrupted evidence.
+Maximum detector work was 10.5 ms. Range Loop kept one tuner while six
+separated quiet-C3 attempts collectively reached 30.08 seconds and continued
+to 30.28 seconds; the intervening breaths erased no credit. It froze only on
+visible **Finish** while PCM/live C3 continued. A visible D3 outside-range
+decision then moved to E3 with zero false credit, and visible Recheck restored
+D3 without replacing the tuner or capture. The target note used one
 four-oscillator sustained lane with no automatic stop or quieter continuation;
 Start, achievement, and Finish produced no playback stop.
 
-The noisy Range Loop proof held C3 for 16.32 seconds through all 13 authored
-interference stages. It observed zero contradictory authoritative notes and
-zero hold regressions, enabled C3's **Next target**, then accepted persistent D3
-and earned 3.10 seconds on the same `NoteInput` DOM node. +30, +20, +10, +6,
+The noisy Range Loop proof accumulated 32.50 C3 seconds through all 13 authored
+interference stages. It observed zero contradictory C3 authorities and zero
+credit regressions, enabled C3's **Next target**, then accepted persistent D3
+and accumulated 30.04 seconds on the same `NoteInput` DOM node. +30, +20, +10, +6,
 and +3 dB SNR are browser results; +0 dB is supplemental unit evidence only.
 
 The user-owned trace proof retained Pitch Match for 4.80 seconds, Hum Lab for
@@ -214,7 +225,7 @@ and 390×844. All 22 cases had no horizontal overflow or unreachable control,
 reached the page end, and completed the same **Play → Stop → Play** toggle
 interaction.
 
-The reusable detector, harmonic-family, and anti-alias workspaces allocate no
+The reusable detector and anti-alias workspaces allocate no
 steady-state typed-array scratch after one-time growth. The headless kernel
 consumed 30,000 silence windows—ten minutes of sample time—with no subscriber or
 exercise and zero capture stops. Unit lifetime proofs retain live feature state

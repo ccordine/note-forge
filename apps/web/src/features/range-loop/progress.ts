@@ -115,7 +115,19 @@ export function buildProfileFamilyQueue(
   order: TargetOrder,
   baselineMidi: number,
 ): number[] {
-  const queue = buildFamilyQueue(progress, noteSet, familyId, order);
+  const record = progress[noteSet][familyId];
+  const unavailable = new Set([...record.passedMidis, ...record.parkedMidis]);
+  return profileOrderedTargets(noteSet, familyId, order, baselineMidi)
+    .filter((midi) => !unavailable.has(midi));
+}
+
+/** Order one complete family outward from the singer's comfortable baseline. */
+export function profileOrderedTargets(
+  noteSet: FamilyNoteSet,
+  familyId: RangeFamilyId,
+  order: TargetOrder,
+  baselineMidi: number,
+): number[] {
   // Validate the anchor through the same boundary-aware path used by the
   // family route, even when this particular family does not contain it.
   rangeFamilyForMidi(baselineMidi);
@@ -126,7 +138,7 @@ export function buildProfileFamilyQueue(
   // to be ascending. The selected order remains the tie-breaker for equally
   // distant pitches (lower first for ascending, higher first for descending,
   // and the shuffled order for shuffled).
-  return queue
+  return createFamilyTargetSequence({ familyId, noteSet, order })
     .map((midi, index) => ({ midi, index, distance: Math.abs(midi - baselineMidi) }))
     .sort((left, right) => left.distance - right.distance || left.index - right.index)
     .map(({ midi }) => midi);
@@ -235,6 +247,36 @@ export function recheckMidisAcrossNoteSets(
         },
       },
     };
+  }
+  return nextProgress;
+}
+
+/** Count physical pitches once even when Natural and Chromatic both retain them. */
+export function parkedMidiCount(progress: Readonly<LoopProgress>): number {
+  const parked = new Set<string>();
+  for (const family of RANGE_FAMILIES) {
+    for (const noteSet of ["natural", "chromatic"] as const) {
+      for (const midi of progress[noteSet][family.id].parkedMidis) {
+        parked.add(`${family.id}:${midi}`);
+      }
+    }
+  }
+  return parked.size;
+}
+
+/** A visible user command may return every excluded pitch to future queues. */
+export function recheckAllParkedMidis(
+  progress: Readonly<LoopProgress>,
+): LoopProgress {
+  let nextProgress = progress as LoopProgress;
+  for (const family of RANGE_FAMILIES) {
+    const midis = new Set([
+      ...nextProgress.natural[family.id].parkedMidis,
+      ...nextProgress.chromatic[family.id].parkedMidis,
+    ]);
+    if (midis.size > 0) {
+      nextProgress = recheckMidisAcrossNoteSets(nextProgress, family.id, midis);
+    }
   }
   return nextProgress;
 }

@@ -2,6 +2,7 @@ import { ensureAudioReady } from "./audio-context";
 import { DirectMicrophoneMonitor } from "./direct-microphone-monitor";
 import { NOTE_INPUT_DEFAULTS, NOTE_INPUT_SAMPLE_RATE_BOUNDS } from "./note-input";
 import {
+  applyRawMicrophoneConstraints,
   microphoneLatencyInfo,
   rawMicrophoneConstraints,
   requireMonitorLevel,
@@ -273,6 +274,15 @@ export class MicrophoneCapture {
       const track = stream.getAudioTracks()[0];
       if (!track || track.readyState !== "live") {
         throw new Error("Microphone access did not provide a live audio track.");
+      }
+      // WebKit has historically selected its voice-processing path despite a
+      // getUserMedia preference. Applying the same raw-music constraints to the
+      // selected track is its supported escape hatch and also makes the final
+      // getSettings()/getConstraints() diagnostics describe that attempt.
+      await applyRawMicrophoneConstraints(track, navigator.mediaDevices);
+      if (cancelled()) throw cancellationError();
+      if (track.readyState !== "live" || !stream.active) {
+        throw new Error("The microphone audio track ended during setup.");
       }
       await context.audioWorklet.addModule(PITCH_CAPTURE_WORKLET_URL);
       if (cancelled()) throw cancellationError();

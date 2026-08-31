@@ -19,7 +19,7 @@ export interface VoiceCoachProps extends VoiceCoachViewInput {
   feedbackLevel?: "full" | "reduced" | "gameplay";
   guidanceLive?: boolean;
   /** Occupancy reports continuous target time without presenting it as a gate. */
-  holdMode?: "goal" | "occupancy";
+  holdMode?: "goal" | "occupancy" | "collective";
 }
 
 function detectorStatusLabel(inputState: VoiceCoachProps["inputState"]): string {
@@ -59,6 +59,22 @@ export function VoiceCoach(props: VoiceCoachProps) {
   const holdProgress = hold.requiredSeconds <= 0
     ? 0
     : clampUnit(hold.heldSeconds / hold.requiredSeconds);
+  const hasProgressGoal = holdMode !== "occupancy";
+  let holdHeading = "EXERCISE HOLD";
+  let holdUnit = ` / ${hold.requiredSeconds.toFixed(1)} sec`;
+  let holdDetail = `${Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining`;
+  let holdAriaLabel = "Exercise in-tune hold";
+  if (holdMode === "occupancy") {
+    holdHeading = "TARGET OCCUPANCY";
+    holdUnit = " sec in lane";
+    holdDetail = "CONTINUOUS SAMPLE TIME";
+    holdAriaLabel = "Target occupancy";
+  }
+  if (holdMode === "collective") {
+    holdHeading = "COLLECTIVE IN-LANE CREDIT";
+    holdDetail = `${Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining · breaks keep credit`;
+    holdAriaLabel = "Collective in-range time";
+  }
   const style = {
     "--nf-voice-position": `${pitchPosition ?? 50}%`,
     "--nf-voice-target-position": `${targetPosition}%`,
@@ -198,19 +214,19 @@ export function VoiceCoach(props: VoiceCoachProps) {
         </div>
       )}
 
-      <div className={`nf-voice-hold ${hold.status} mode-${holdMode}`}>
+      <div className={`nf-voice-hold ${hold.status} mode-${holdMode}`} data-hold-mode={holdMode}>
         <div className="nf-voice-hold__heading">
-          <span>{holdMode === "occupancy" ? "TARGET OCCUPANCY" : "EXERCISE HOLD"}</span>
-          <strong>{hold.heldSeconds.toFixed(1)}<small>{holdMode === "occupancy" ? " sec in lane" : ` / ${hold.requiredSeconds.toFixed(1)} sec`}</small></strong>
-          <b>{holdMode === "occupancy" ? "CONTINUOUS SAMPLE TIME" : `${Math.max(0, hold.requiredSeconds - hold.heldSeconds).toFixed(1)}s remaining`}</b>
+          <span>{holdHeading}</span>
+          <strong>{hold.heldSeconds.toFixed(1)}<small>{holdUnit}</small></strong>
+          <b>{holdDetail}</b>
         </div>
         <div
           className="nf-voice-hold__track"
-          role={holdMode === "goal" ? "progressbar" : undefined}
-          aria-label={holdMode === "goal" ? "Exercise in-tune hold" : undefined}
-          aria-valuemin={holdMode === "goal" ? 0 : undefined}
-          aria-valuemax={holdMode === "goal" ? hold.requiredSeconds : undefined}
-          aria-valuenow={holdMode === "goal" ? Math.min(hold.heldSeconds, hold.requiredSeconds) : undefined}
+          role={hasProgressGoal ? "progressbar" : undefined}
+          aria-label={hasProgressGoal ? holdAriaLabel : undefined}
+          aria-valuemin={hasProgressGoal ? 0 : undefined}
+          aria-valuemax={hasProgressGoal ? hold.requiredSeconds : undefined}
+          aria-valuenow={hasProgressGoal ? Math.min(hold.heldSeconds, hold.requiredSeconds) : undefined}
         ><span /></div>
       </div>
 

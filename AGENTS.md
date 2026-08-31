@@ -15,7 +15,7 @@ one app-owned MediaStream
   -> monotonic PCM ring buffer
   -> deep overlapping analysis windows
   -> short analysis hops
-  -> raw YIN/harmonic-family candidate
+  -> one direct per-window YIN candidate
   -> one shared target-independent temporal pitch tracker
   -> one authoritative PitchObservation per window
   -> one shared live stream
@@ -328,6 +328,21 @@ exercise scheduler, timer graph, or workflow interpreter.
 - Unvoiced or uncertain evidence may pause qualified-time accumulation; it may
   not erase already observed in-range sample time. Only a credible voiced
   observation outside the target region can reset target occupancy.
+- Range Loop is cumulative practice credit, not continuous target occupancy.
+  Every exact qualifying sample interval contributes its duration at one point
+  per millisecond toward a fixed 30,000-point/30-second milestone for the
+  current target. Silence, uncertainty, a credible wrong pitch, a missing
+  window, and a continuity boundary credit zero across their interval; they
+  never subtract earned credit or bridge missing evidence. Reaching the
+  milestone latches the achievement while qualifying credit continues, and
+  only the visible **Next target** command records the note as passed.
+- Range Loop's visible **I can't reach this note** command persistently parks
+  the target without granting a pass, accuracy, or credit, then advances to a
+  nearby trainable target. **Recheck excluded notes** makes those notes
+  eligible again without resetting the live session. Target families expand
+  outward from the saved baseline, so a C3 baseline enters Deep at B2 rather
+  than jumping to C2. Detector support never overrides the singer's explicit
+  reachability judgment.
 - Every user-facing isolated note, target, tonic, or reference uses the one
   app-owned sustained-note lane and the one canonical visible **Play / Stop**
   toggle. Its public request contains frequency, timbre, and amplitude only;
@@ -385,7 +400,9 @@ type-level product invariant, not copy, a preference, or a configurable timeout.
 - Runtime evidence retention must be bounded without changing session state.
   Dropping old presentation/history samples is not permission to stop, reset,
   replace, grade-and-dismiss, or otherwise cut off the live session.
-- A hold requirement is an achievement threshold, never an occupancy cap.
+- In continuous-hold activities, a hold requirement is an achievement
+  threshold, never an occupancy cap. Range Loop instead uses the cumulative
+  practice-credit contract above.
   Exact current and peak sample-time hold continue beyond the threshold until
   credible out-of-range evidence or an explicit user action changes the task.
   Reaching a checkpoint may enable Next; it may not stop measurement.
@@ -714,10 +731,12 @@ It must fail unless all of the following hold:
    window has exactly one diagnostic observation with the same capture epoch
    and half-open sample interval.
 5. Worklet and detector coordinates advance by the configured overlapping hop.
-6. A remote raw candidate is exposed on its exact first window while the DOM
-   becomes uncertain with no stale note. One coherent next-hop candidate makes
-   the new authoritative note render at that exact `endSample`; no feature or
-   target-specific agreement gate may delay it further.
+6. A remote raw candidate is retained on its exact diagnostic window while the
+   DOM becomes uncertain with no stale note. Three consecutive pending windows
+   remain uncertain, and the fourth coherent 20 ms window makes the new
+   authoritative note render at that exact `endSample`; any pending candidate
+   projected by React retains its exact detector identity, and no feature or
+   target-specific agreement gate may delay confirmation further.
 7. PCM, worklet, detector, and DOM counters advance during silence, prompts,
    navigation, games, and periods with no microphone consumer mounted.
 8. One `getUserMedia` call owns one track across navigation; there are no false
@@ -738,17 +757,21 @@ It drives 8.5-second voice-like sustains at F-sharp1, quiet C3 below the former
 level gate, C4, and D6 through the real production microphone path. Every
 target must retain at least eight seconds of correct contiguous detector
 evidence while PCM/worklet/window counters remain monotonic. The same still-live
-track then enters Range Loop, proves that no dwell is credited before the
-visible Start command, retains one tuner DOM identity through wrong pitch,
-silence, playback, and achievement, and continues accumulating exact sample-
-timed C3 dwell beyond the former three-second requirement. Its visible note
-toggle must start one sustained lane, remain pressed with zero oscillator stops
-beyond every former cutoff and across Start, achievement, and Finish, and use
-that same still-mounted control for the first oscillator stop. No lower-volume
-replacement or second oscillator bank is permitted. Only visible Finish may
-freeze feature dwell, and shared PCM/live-note telemetry must continue
-afterward. No stream, track, context, or worklet replacement and no pre-Disable
-microphone stop is permitted.
+track then enters Range Loop, proves that no credit is earned before the visible
+Start command, retains one tuner DOM identity through wrong pitch, silence,
+playback, and achievement, and uses six separated quiet-C3 attempts to collect
+at least 30 sample-timed seconds. Breath gaps and wrong evidence must credit
+zero without bridging or erasing prior credit, and qualifying evidence must
+continue earning points beyond 30 seconds until visible Finish. Its visible
+note toggle must start one sustained lane, remain pressed with zero oscillator
+stops beyond every former cutoff and across Start, achievement, and Finish, and
+use that same still-mounted control for the first oscillator stop. No lower-
+volume replacement or second oscillator bank is permitted. The proof must then
+use visible **Next target**, **I can't reach this note**, and **Recheck excluded
+notes** to show that exclusion grants no pass or credit and replaces neither
+the tuner nor capture. Only visible Finish may freeze feature credit, and shared
+PCM/live-note telemetry must continue afterward. No stream, track, context, or
+worklet replacement and no pre-Disable microphone stop is permitted.
 
 `npm run proof:range-loop-noisy:browser` is the user-facing sustained-note
 authority. It constructs one deterministic fake microphone containing a
@@ -760,12 +783,13 @@ actual Range Loop DOM. Browser stages include clean C3, a known failing seed,
 brief amplitude drops, changing noise amplitude, and clean recovery. The 0 dB
 sweep belongs to the supplemental detector matrix, not this browser proof.
 
-The proof must show that sufficient dominant C3 evidence earns the real range
-dwell without any regression, enables and visibly advances to D3, and that a
-persistent D3 then earns its own dwell in the same mounted component. A raw
+The proof must show that sufficient dominant C3 evidence earns at least 30
+seconds of real cumulative range credit without any regression, enables and
+visibly advances to D3, and that a persistent D3 then earns its own 30 seconds
+in the same mounted component. A raw
 contradictory candidate may become an uncertain authoritative observation, but
 no C3 stage may publish a contradictory authoritative note. Uncertain evidence
-may pause new dwell credit; it may not erase prior credit. The D3 half is
+may pause new credit; it may not erase prior credit. The D3 half is
 mandatory: a fix that merely makes C3 sticky fails. No detector mock, injected
 observation, test-only scorer, or duplicated range component is permitted.
 
@@ -870,7 +894,7 @@ both phone widths. A root `scrollWidth` assertion alone is never sufficient.
    hook, timer, branch depth, and import edge with an enforceable repository
    audit. **Complete; the first scan found 31 release violations.**
 2. Delete Range Loop's guide/isolation/phase architecture and replace it with
-   one tuner plus pure sample-coordinate dwell. **Complete.**
+   one tuner plus pure sample-coordinate cumulative credit. **Complete.**
 3. Remove default diagnostic and meter duplication; replace stacked Song Lab
    content with one explicit stage at a time. **Complete.**
 4. Replace page-only/custom hash state with maintained React Router authority,
@@ -889,39 +913,41 @@ both phone widths. A root `scrollWidth` assertion alone is never sufficient.
    green. **Complete; image index `sha256:63993ae781d3…` is the running healthy
    container and the exact routed bundle matches local and container bytes.**
 
-## Final-tree release evidence — 2026-08-25
+## Final-tree release evidence — 2026-08-31
 
 The authoritative built-bundle Chromium proofs passed with:
 
 - 57/57 semitones MIDI 30–86 plus literal 45 and 1,200 Hz boundaries; the
-  boundaries measured 45.000 Hz (+0.01 cents) and 1,200.373 Hz (+0.54 cents);
-- 18/18 quiet low notes near -60 dBFS and 196/196 loud seeded-noise frames
+  boundaries measured 45.000 Hz (+0.00 cents) and 1,200.373 Hz (+0.54 cents);
+- 18/18 quiet low notes near -60 dBFS and 192/192 loud seeded-noise frames
   unvoiced;
-- exact 2,177/2,177 native AudioWorklet-to-detector `(captureEpoch, endSample)`
+- exact 2,173/2,173 native AudioWorklet-to-detector `(captureEpoch, endSample)`
   pairs at a 960-sample hop;
-- C3 was accepted at `endSample=85696`; E3's raw candidate was exposed at
-  `120256` as uncertain/no-stale-note and accepted on the coherent next hop at
-  `121216`; G3 followed the same exact rule at `153856` -> `154816`;
+- C3, E3, and G3 each retained three exact uncertain windows with no stale note
+  before four-window confirmation at `endSample` 88,576, 123,136, and 156,736;
 - all 57 supported notes at distinct strictly monotonic meter positions from
-  0.48% through 99.55%, with no non-boundary edge aliases; the full-depth ribbon
+  0.48% through 99.56%, with no non-boundary edge aliases; the full-depth ribbon
   independently placed F-sharp1, C3, E3, and G3 at y=299.0, 262.4, 254.2, and
   248.1 from the same exact sample authority;
-- detector time 2.5 ms median, 3.9 ms p95, and 13.0 ms maximum in the complete
+- detector time 2.1 ms median, 2.5 ms p95, and 10.1 ms maximum in the complete
   note-input proof, every frame below the 20 ms hop;
 - a real AudioContext suspension automatically resumed with continuity epoch
   0→1 and `discontinuity=true`, while stream, track, and worklet ownership stayed
   singular; one `getUserMedia`, zero track disables, zero pre-Disable stops, and
   exactly one explicit global Disable stop;
-- the sustained proof paired 2,602/2,602 windows: F-sharp1 held for 8.420
-  seconds/422 frames, quiet C3 for 8.460/424, C4 for 8.460/424, and D6 for
-  8.480/425; its maximum detector time was 16.2 ms. Range Loop credited zero
-  before visible Start, grew C3 dwell from 3.04 to 3.54 seconds beyond its
-  achievement, and froze only on visible Finish while PCM/live C3 continued;
-- the real Range Loop accepted 16.32 seconds of continuous C3 across 13 clean,
+- the sustained proof paired 3,908/3,908 windows: F-sharp1, quiet C3, C4, and D6
+  each retained 8.38–8.42 seconds of correct contiguous evidence; its maximum
+  detector time was 10.5 ms. Range Loop credited zero before visible Start,
+  collected 30.08 C3 seconds across six separated attempts without losing
+  credit at breaths, continued to 30.28, and froze only on visible Finish while
+  PCM/live telemetry continued. Visible outside-range and Recheck commands
+  granted no false credit and retained the same capture and tuner;
+- the real Range Loop collected 32.50 cumulative C3 seconds across 13 clean,
   seeded-noise, SNR, impulse, harmonic, dropout, changing-noise, and recovery
-  stages with zero hold regression and zero contradictory authoritative notes.
-  It then visibly advanced the same mounted workflow to D3 and a persistent D3
-  earned 3.10 seconds, proving the tracker is robust but not sticky;
+  stages with zero credit regression and zero contradictory authoritative
+  notes. It then visibly advanced the same mounted workflow to D3 and a
+  persistent D3 collected 30.04 seconds, proving the tracker and scorer are
+  responsive rather than sticky;
 - steady 48 kHz `NoteInputEngine` work now allocates zero YIN typed arrays after
   one-time workspace growth. The deleted path allocated 17,104 bytes per frame,
   about 49 MiB/minute. Controlled A3/C3/marginal p95 was 3.55/3.41/7.31 ms with
@@ -1022,12 +1048,9 @@ measurements. Re-profile before changing that decision.
 - The global mobile playback proof covered 24 route/viewport combinations with
   zero unreachable controls and exercised Tone Map's literal Play -> Stop ->
   Play control at both phone widths.
-- The shared noisy Range Loop proof retained 16.24 seconds of C3 through 13
-  clean/noise/transient/harmonic/dropout stages with zero hold regressions,
-  then accepted persistent D3 and earned 3.00 seconds on the same shared input.
-  The sustained proof paired 2,609/2,609 worklet/detector windows, retained
-  F-sharp1, quiet C3 near -62.8 dBFS, C4, and D6 for more than eight seconds,
-  and measured a 10.4 ms detector maximum below the 20 ms hop.
+- The historical detector and sustained-input evidence from this release is
+  retained by the newer final-tree proofs above; Range Loop's former
+  continuous-hold result is superseded by its cumulative-credit acceptance.
 - The final frontend suite and instrumented coverage run each passed
   1,131/1,131 tests across 118 files. Coverage is 65.24% statements
   (8,339/12,781), 60.87% branches (6,385/10,488), 57.56% functions
@@ -1097,37 +1120,38 @@ measurements. Re-profile before changing that decision.
   the prior pitch only as an internal continuity reference. Persistent real
   changes still become authoritative, while the logged one/two-window plunge
   shape remains uncertain and cannot reset shared dwell.
-- Diagnostic schema 5 sends the estimator-selected candidate, original raw YIN
-  candidate, harmonic ambiguity, and tracking admission decision with exact
+- Diagnostic schema 5 sends the direct per-window YIN candidate and tracking
+  admission decision with exact
   sample identity. The transport retains up to 4,096 derived events and drains
   a full backlog at the server's sustained cadence instead of dropping most of
   a 50 Hz run. Exploratory raw candidates outside the admitted 45–1,200 Hz live
   range are bounded and recorded rather than throwing or invalidating their
   entire observation. No raw PCM is sent or saved.
 - The built Settings proof persisted ±10 cents across a true reload, admitted
-  generated C3+9 cents, rejected C3+11 cents, and then changed the mounted live
-  session to ±15 cents. The same DOM, oscillator, MediaStream, source, and
-  worklet admitted that unchanged +11-cent signal and grew dwell from 0.08 to
-  0.30 seconds. A second true reload restored ±15. The entire run used one
-  `getUserMedia`, one source, one worklet, and 63 real detector windows.
+  generated C3+9 cents, and paused cumulative credit for C3+11 cents without
+  erasing the 0.26 seconds already earned. Changing the mounted live session to
+  ±15 cents admitted that unchanged signal and grew credit to 0.58 seconds.
+  A second true reload restored ±15. The same DOM, oscillator, MediaStream,
+  source, and worklet remained authoritative throughout.
 - The audio-output proof persisted `audio.monitoring` version 2 with a selected
   output ID/label, restored its visible label after a true reload with zero
   audio resources, and applied `setSinkId` only after explicit Enable on the
   sole shared context/source/worklet. A simulated missing device visibly fell
   back to System default and persisted `preferredOutput: null`.
-- The noisy built Range Loop proof retained 16.26 seconds of C3 through 13
-  clean/noise/transient/harmonic/dropout stages with zero contradictory C3
-  authorities or hold regressions, then admitted a persistent D3 and earned
-  3.00 seconds on the same stream and NoteInput DOM. The complete frontend
-  suite passed 1,177/1,177 tests across 125 files; typecheck, production build,
-  Go tests, Go vet, and the architecture audit passed. The audit scanned 445
-  source files and 157 JSX components, reached all 246 application modules,
-  and reported zero violations. The service worker `6edd00c68adb` precaches 74
-  production resources built from 332 transformed modules.
+- The newer final-tree Range Loop proof above supersedes the former hold-based
+  result: C3 collected 32.50 seconds and D3 collected 30.04 seconds on the same
+  stream and `NoteInput` DOM. The complete frontend suite passed 1,195/1,195
+  tests across 129 files; typecheck and the production build passed. The
+  architecture audit scanned 449 source files and 157 JSX components, reached
+  all 247 application modules, and reported zero violations. The production
+  bundle transformed 332 modules.
 
 ## Working rules
 
 - Prefer architectural deletion over compatibility preservation.
+- Deploy WorkNet only through `npm run deploy:worknet`. That entrypoint is
+  pinned to Docker context `default` and must require the pre-existing external
+  `worknet_net`; never create, substitute, or fall back to another network.
 - Use exact runtime evidence; never substitute source scanning for behavior.
 - Report commands, counts, sample identities, missing evidence, and timing.
 - If the browser proof finds a defect, fix production and rerun the proof. Never

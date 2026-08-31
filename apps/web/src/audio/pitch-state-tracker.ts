@@ -33,10 +33,8 @@ export interface PitchCandidateTelemetry {
   readonly periodSamples: number | null;
   readonly voiced: boolean;
   readonly reason: YinPitchFrame["reason"];
-  /** YIN's original local minimum before acoustic harmonic-family selection. */
+  /** YIN's selected minimum, retained even when confidence rejects the frame. */
   readonly rawCandidate: YinPitchFrame["rawCandidate"];
-  /** Acoustic ambiguity between the selected and runner-up harmonic families. */
-  readonly harmonicAmbiguity: number;
 }
 
 export interface TrackedPitchFrame {
@@ -82,7 +80,6 @@ function candidateTelemetry(
     voiced: frame.voiced,
     reason: frame.reason,
     rawCandidate: frame.rawCandidate ?? null,
-    harmonicAmbiguity: frame.harmonicAmbiguity ?? 0,
   });
 }
 

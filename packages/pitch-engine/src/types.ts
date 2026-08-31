@@ -23,7 +23,7 @@ export type PitchDetectionReason =
   | "temporally-ambiguous"
   | "frequency-out-of-range";
 
-/** The uncorrected local minimum chosen by YIN before harmonic-family selection. */
+/** The local or global minimum selected directly by YIN. */
 export interface YinRawCandidate {
   readonly frequencyHz: number;
   readonly periodSamples: number;
@@ -42,11 +42,6 @@ export interface YinPitchFrame extends PitchFrame {
    * Optional only so callers' synthetic diagnostic fixtures remain source-compatible.
    */
   readonly rawCandidate?: Readonly<YinRawCandidate> | null;
-  /**
-   * Unit interval derived from the acoustic harmonic-family runner-up margin.
-   * Zero means no competing supported family; one means the leading families tied.
-   */
-  readonly harmonicAmbiguity?: number;
 }
 
 export interface YinDetectorOptions {
@@ -62,7 +57,7 @@ export interface YinDetectorOptions {
    * selected from the supplied input buffer.
    */
   analysisWindowSize?: number;
-  /** YIN local-minimum search guide. Defaults to 0.18; minConfidence owns admission. */
+  /** YIN local-minimum search guide. Defaults to 0.08; minConfidence owns admission. */
   yinThreshold?: number;
   /** Minimum accepted 1 - YIN value. Defaults to 0.55. */
   minConfidence?: number;
@@ -91,24 +86,4 @@ export interface MedianSmoothingOptions {
    */
   minSamples?: number;
   a4Frequency?: number;
-}
-
-export interface OctaveCorrectionOptions {
-  /** Maximum deviation from an exact octave relationship. Defaults to 80 cents. */
-  octaveToleranceCents?: number;
-  /** Maximum length of a bridged octave-error run. Defaults to three frames. */
-  maxOutlierFrames?: number;
-  /** Maximum number of octaves an erroneous run may jump. Defaults to two. */
-  maxOctaveShift?: number;
-  /** Largest timestamp gap still considered continuous. Defaults to 0.1 seconds. */
-  maxFrameGapSeconds?: number;
-  /** How close the post-run frame must return to the anchor. Defaults to 350 cents. */
-  maxReturnDistanceCents?: number;
-  a4Frequency?: number;
-}
-
-export interface PitchSmoothingOptions
-  extends MedianSmoothingOptions, OctaveCorrectionOptions {
-  /** Apply conservative, transient-only octave correction. Defaults to true. */
-  correctOctaveJumps?: boolean;
 }

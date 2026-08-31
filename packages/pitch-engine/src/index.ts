@@ -6,9 +6,7 @@ export {
   pitchValuesFromFrequency,
 } from "./pitch";
 export {
-  correctOctaveJumps,
   medianSmoothPitchFrames,
-  smoothPitchFrames,
 } from "./smoothing";
 export {
   detectPitch,
@@ -20,10 +18,8 @@ export {
 export { YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS } from "./types";
 export type {
   MedianSmoothingOptions,
-  OctaveCorrectionOptions,
   PitchDetectionReason,
   PitchFrame,
-  PitchSmoothingOptions,
   YinDetectorOptions,
   YinOptions,
   YinPitchFrame,

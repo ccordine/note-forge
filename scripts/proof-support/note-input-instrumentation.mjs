@@ -21,6 +21,7 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
     pitchPresentationClaims: [],
     ribbonMutations: [],
     trackInitialStates: [],
+    trackConstraintApplications: [],
     trackEnabledWrites: [],
     trackStopCalls: [],
     stopOnNextSample: false,
@@ -413,6 +414,25 @@ export const BROWSER_INSTRUMENTATION_SOURCE = `(() => {
       kind: track.kind,
       readyState: track.readyState,
     });
+    const originalApplyConstraints = track.applyConstraints.bind(track);
+    try {
+      Object.defineProperty(track, 'applyConstraints', {
+        configurable: true,
+        value: async (constraints) => {
+          const record = { at: performance.now(), constraints, settings: null, error: null };
+          proof.trackConstraintApplications.push(record);
+          try {
+            await originalApplyConstraints(constraints);
+            record.settings = track.getSettings();
+          } catch (error) {
+            record.error = String(error);
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      proof.instrumentationErrors.push('applyConstraints instrumentation: ' + String(error));
+    }
     let prototype = track;
     let enabledDescriptor;
     while (prototype && !enabledDescriptor) {

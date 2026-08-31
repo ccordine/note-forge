@@ -35,6 +35,7 @@ import {
   SUSTAINED_FIXTURE_SECONDS,
   SUSTAINED_NOTE_MIDIS,
   SUSTAINED_NOTE_SECONDS,
+  SUSTAINED_SURVEY_SECONDS,
 } from "./proof-support/note-input-fixture.mjs";
 import { BROWSER_INSTRUMENTATION_SOURCE } from "./proof-support/note-input-instrumentation.mjs";
 import {
@@ -202,7 +203,7 @@ async function main() {
 
     const renderedSamples = await collectRenderedNotes(
       session,
-      (SUSTAINED_FIXTURE_SECONDS + 0.5) * 1_000,
+      (SUSTAINED_SURVEY_SECONDS + 0.5) * 1_000,
     );
     const sustainEndProof = await browserProofSnapshot(session);
     assert(sustainEndProof.trackStopCalls.length === 0,
@@ -286,10 +287,10 @@ async function main() {
         const target = document.querySelector('.nf-voice-target strong')?.textContent?.trim();
         const hold = Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds'));
         const result = document.querySelector('.range-result-next b')?.textContent || '';
-        return target === 'C3' && hold >= 3 && result.includes('C3 earned');
+        return target === 'C3' && hold >= 30 && result.includes('C3 earned');
       })()`,
-      "Range Loop crossing three seconds without capping live quiet C3 sample time",
-      8_000,
+      "Range Loop collecting 30 seconds across separated quiet-C3 attempts",
+      40_000,
     );
     const rangeLoopResult = await evaluate(session, `(() => ({
       target: document.querySelector('.nf-voice-target strong')?.textContent?.trim() || null,
@@ -302,13 +303,18 @@ async function main() {
     }))()`);
     assert(rangeLoopResult.target === "C3"
       && rangeLoopResult.detected === "C3"
-      && rangeLoopResult.holdSeconds >= 3
+      && rangeLoopResult.holdSeconds >= 30
       && rangeLoopResult.inputState === "running"
       && rangeLoopResult.noteInputCount === 1
       && rangeLoopResult.sameTuner === true,
     `Range Loop did not render the achieved quiet C3 hold on the live stream: ${JSON.stringify(rangeLoopResult)}.`);
 
-    await delay(500);
+    await waitForBrowser(
+      session,
+      `Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')) > ${rangeLoopResult.holdSeconds + 0.1}`,
+      "Range Loop continuing collective credit beyond 30 seconds",
+      5_000,
+    );
     const uncappedRangeLoop = await evaluate(session, `(() => ({
       holdSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
       sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
@@ -367,6 +373,88 @@ async function main() {
       playback,
       rangeLoopProof,
     );
+
+    const advancedAfterFinish = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Next target');
+      button?.click();
+      return Boolean(button && !button.disabled);
+    })()`);
+    assert(advancedAfterFinish, "The earned C3 could not advance after visible Finish.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('.nf-voice-target strong')?.textContent?.trim() === 'D3'",
+      "the explicit Next target decision selecting D3",
+      5_000,
+    );
+    const resumed = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Start Range Loop');
+      button?.click();
+      return Boolean(button && !button.disabled);
+    })()`);
+    assert(resumed, "Range Loop could not resume for the outside-range proof.");
+    await waitForBrowser(
+      session,
+      "document.querySelector('[data-range-loop-phase]')?.getAttribute('data-range-loop-phase') === 'tracking'",
+      "Range Loop resuming through visible Start",
+      5_000,
+    );
+    const excluded = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === "I can't reach this note");
+      button?.click();
+      return Boolean(button && !button.disabled);
+    })()`);
+    assert(excluded, "The visible outside-range action was unavailable on D3.");
+    await waitForBrowser(
+      session,
+      `(() => {
+        const recheck = [...document.querySelectorAll('button')]
+          .find((candidate) => candidate.textContent?.includes('Recheck 1 excluded note'));
+        return document.querySelector('.nf-voice-target strong')?.textContent?.trim() === 'E3'
+          && Boolean(document.querySelector('[aria-label="D3, outside current range"]'))
+          && Boolean(recheck && !recheck.disabled);
+      })()`,
+      "D3 being excluded without a pass while the live session moves to E3",
+      5_000,
+    );
+    const rechecked = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.includes('Recheck 1 excluded note'));
+      button?.click();
+      return Boolean(button && !button.disabled);
+    })()`);
+    assert(rechecked, "The visible Recheck excluded notes action was unavailable.");
+    await waitForBrowser(
+      session,
+      `document.querySelector('.nf-voice-target strong')?.textContent?.trim() === 'E3'
+        && Boolean(document.querySelector('[aria-label="D3, upcoming"]'))
+        && ![...document.querySelectorAll('button')]
+          .some((candidate) => candidate.textContent?.includes('Recheck 1 excluded note'))`,
+      "D3 returning to future scheduling without resetting the active E3 target",
+      5_000,
+    );
+    const outsideRangeProof = await evaluate(session, `(() => ({
+      phase: document.querySelector('[data-range-loop-phase]')?.getAttribute('data-range-loop-phase') || null,
+      target: document.querySelector('.nf-voice-target strong')?.textContent?.trim() || null,
+      heldSeconds: Number(document.querySelector('[data-note-input]')?.getAttribute('data-held-seconds')),
+      sameTuner: window.__noteforgeRangeLoopTuner === document.querySelector('[data-note-input]'),
+      inputState: document.querySelector('[data-note-input]')?.getAttribute('data-input-state') || null,
+    }))()`);
+    assert(outsideRangeProof.phase === "tracking"
+      && outsideRangeProof.target === "E3"
+      && outsideRangeProof.heldSeconds === 0
+      && outsideRangeProof.sameTuner === true
+      && outsideRangeProof.inputState === "running",
+    `Outside-range scheduling altered capture, awarded false credit, or replaced the tuner: ${JSON.stringify(outsideRangeProof)}.`);
+    const refinish = await evaluate(session, `(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Finish Range Loop');
+      button?.click();
+      return Boolean(button && !button.disabled);
+    })()`);
+    assert(refinish, "The outside-range proof could not end through visible Finish.");
 
     const stopArmed = await evaluate(session, `(() => {
       const control = window.__noteforgeNoteInputProof;
@@ -478,14 +566,15 @@ async function main() {
 
     console.log("SUSTAINED NOTE BROWSER PROOF PASSED");
     console.log(`  authority: one MediaStream/track/AudioContext/worklet; ${settled.workletSampleMessages} PCM windows exactly paired with ${events.length} detector frames`);
-    console.log(`  lifecycle: capture never disabled or stopped during ${SUSTAINED_FIXTURE_SECONDS}s; explicit Disable produced the only track.stop()`);
+    console.log(`  lifecycle: the ${SUSTAINED_FIXTURE_SECONDS}s fixture used one capture authority; explicit Disable produced the only track.stop()`);
     console.log(`  silence: ${silenceFrames} consecutive unvoiced detector frames while PCM continued`);
     for (const proof of detectorProof) {
       const rendered = renderedProof.find(({ label }) => label === proof.label);
       console.log(`  ${proof.label}: detector ${proof.seconds.toFixed(3)}s/${proof.frames} uninterrupted frames, max error ${proof.maximumCents.toFixed(2)}c, median ${proof.medianRmsDbfs.toFixed(1)} dBFS; UI ${rendered.seconds.toFixed(3)}s, hold ${rendered.maximumHeldSeconds.toFixed(3)}s`);
     }
     console.log(`  detector budget: max ${Math.max(...processingMs).toFixed(3)}ms < ${CAPTURE_HOP_BUDGET_MS.toFixed(3)}ms hop`);
-    console.log(`  Range Loop: idle evidence earned 0.00s until visible Start; one stable tuner retained identity through achievement; quiet C3 continued from ${rangeLoopResult.holdSeconds.toFixed(2)}s to ${uncappedRangeLoop.holdSeconds.toFixed(2)}s beyond the old threshold; visible Finish froze only feature dwell while PCM and live C3 telemetry continued`);
+    console.log(`  Range Loop: six separated quiet-C3 attempts collectively reached ${rangeLoopResult.holdSeconds.toFixed(2)}s, then continued to ${uncappedRangeLoop.holdSeconds.toFixed(2)}s; breaths erased nothing and visible Finish froze only feature credit while PCM/live C3 continued`);
+    console.log("  reachability: visible D3 outside-range exclusion moved to E3 with zero false credit; visible Recheck restored D3 without replacing the tuner or capture");
     console.log(`  target playback: one ${playback.starts.length}-oscillator sustained lane remained at its full attack amplitude with zero stops or gain changes beyond the former cutoff and across Start/achievement/Finish; the same still-mounted Play/Stop toggle issued the first ${playbackStops.length} stops`);
     console.log(`  requested sustain: ${SUSTAINED_NOTE_SECONDS.toFixed(1)}s per note; accepted uninterrupted minimum ${MINIMUM_CONTINUOUS_SECONDS.toFixed(1)}s`);
   } catch (error) {

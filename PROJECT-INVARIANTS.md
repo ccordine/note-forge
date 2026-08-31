@@ -629,7 +629,7 @@ getUserMedia
 AudioWorklet overlapping PCM window
    │
    ▼
-raw YIN / harmonic-family candidate
+direct per-window YIN candidate
    │
    ▼
 shared target-independent temporal tracker

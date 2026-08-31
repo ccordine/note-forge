@@ -166,17 +166,5 @@ describe("YIN scratch allocation instrumentation", () => {
     expect(workspace.typedArrayAllocationCount).toBe(2);
     workspace.prepareLagBuffers(101);
     expect(workspace.typedArrayAllocationCount).toBe(4);
-
-    workspace.hannWindow(4_096);
-    workspace.hannWindow(4_096);
-    workspace.hannWindow(1_024);
-    workspace.hannWindow(4_096);
-    expect(workspace.typedArrayAllocationCount).toBe(5);
-
-    workspace.harmonicScores(65);
-    workspace.harmonicScores(19);
-    expect(workspace.typedArrayAllocationCount).toBe(6);
-    workspace.harmonicScores(66);
-    expect(workspace.typedArrayAllocationCount).toBe(7);
   });
 });

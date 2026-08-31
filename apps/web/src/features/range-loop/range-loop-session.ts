@@ -6,7 +6,11 @@ import {
   type RangeFamilyId,
 } from "./model";
 import {
+  buildProfileFamilyQueue,
+  nextProfileFamily,
   normalizeProgress,
+  parkMidiAcrossNoteSets,
+  profileOrderedTargets,
   restoreMidiAsPending,
   type LoopProgress,
 } from "./progress";
@@ -49,11 +53,13 @@ export function reduceRangeLoopLiveState(
   }
 }
 
+export const RANGE_LOOP_SCORING_VERSION = 2;
+
 export interface StoredRangeLoopState {
+  readonly scoringVersion?: unknown;
   readonly activeFamilyId?: unknown;
   readonly noteSet?: unknown;
   readonly order?: unknown;
-  readonly holdSeconds?: unknown;
   readonly targetMidi?: unknown;
   readonly progress?: unknown;
 }
@@ -62,13 +68,23 @@ export interface HydratedRangeLoopState {
   readonly activeFamilyId: RangeFamilyId;
   readonly noteSet: FamilyNoteSet;
   readonly order: RangeLoopOrder;
-  readonly holdSeconds: number;
   readonly targetMidi: number;
+  readonly targetAcceptsCredit: boolean;
   readonly progress: LoopProgress;
   readonly profile: PersonalRangeProfile;
 }
 
-export const RANGE_LOOP_HOLD_OPTIONS = Object.freeze([1.5, 2, 3, 5, 8] as const);
+export interface RangeLoopTargetChoice {
+  readonly targetMidi: number;
+  readonly acceptingCredit: boolean;
+}
+
+export interface RangeLoopTargetAdvance extends RangeLoopTargetChoice {
+  readonly familyId: RangeFamilyId;
+  readonly progress: LoopProgress;
+}
+
+export type RangeLoopTargetOutcome = "passed" | "outside-range";
 
 export function isRangeLoopFamily(value: unknown): value is RangeFamilyId {
   return RANGE_FAMILIES.some((family) => family.id === value);
@@ -82,9 +98,45 @@ export function isRangeLoopOrder(value: unknown): value is RangeLoopOrder {
   return value === "ascending" || value === "descending";
 }
 
-export function isRangeLoopHold(value: unknown): value is number {
-  return typeof value === "number"
-    && RANGE_LOOP_HOLD_OPTIONS.some((candidate) => candidate === value);
+function clearPreCumulativePasses(progress: Readonly<LoopProgress>): LoopProgress {
+  let next = progress as LoopProgress;
+  for (const noteSet of ["natural", "chromatic"] as const) {
+    for (const family of RANGE_FAMILIES) {
+      const record = next[noteSet][family.id];
+      if (record.passedMidis.length === 0) continue;
+      next = {
+        ...next,
+        [noteSet]: {
+          ...next[noteSet],
+          [family.id]: { ...record, passedMidis: [] },
+        },
+      };
+    }
+  }
+  return next;
+}
+
+/** Pick the first still-trainable note, or retain a visible excluded fallback. */
+export function chooseRangeLoopTarget(
+  progress: Readonly<LoopProgress>,
+  familyId: RangeFamilyId,
+  noteSet: FamilyNoteSet,
+  order: RangeLoopOrder,
+  baselineMidi: number,
+): RangeLoopTargetChoice {
+  const queue = buildProfileFamilyQueue(
+    progress as LoopProgress,
+    noteSet,
+    familyId,
+    order,
+    baselineMidi,
+  );
+  return queue.length > 0
+    ? Object.freeze({ targetMidi: queue[0]!, acceptingCredit: true })
+    : Object.freeze({
+      targetMidi: profileOrderedTargets(noteSet, familyId, order, baselineMidi)[0]!,
+      acceptingCredit: false,
+    });
 }
 
 /** Normalize persisted state and an optional explicit handoff before React sees it. */
@@ -98,10 +150,14 @@ export function hydrateRangeLoopState(
   if (handoffMidi !== null) {
     profile = setRangeProfileBaseline(profile, handoffMidi, "manual", handoffUpdatedAt);
   }
+  const normalizedProgress = normalizeProgress(stored?.progress);
+  const migratedProgress = stored?.scoringVersion === RANGE_LOOP_SCORING_VERSION
+    ? normalizedProgress
+    : clearPreCumulativePasses(normalizedProgress);
   const progress = handoffMidi === null
-    ? normalizeProgress(stored?.progress)
+    ? migratedProgress
     : restoreMidiAsPending(
-      normalizeProgress(stored?.progress),
+      migratedProgress,
       rangeFamilyForMidi(handoffMidi),
       handoffMidi,
     );
@@ -116,42 +172,25 @@ export function hydrateRangeLoopState(
     ? "chromatic"
     : requestedNoteSet;
   const order = isRangeLoopOrder(stored?.order) ? stored.order : "ascending";
-  const holdSeconds = isRangeLoopHold(stored?.holdSeconds) ? stored.holdSeconds : 3;
   const requestedTarget = handoffMidi ?? stored?.targetMidi;
-  const targetMidi = typeof requestedTarget === "number"
+  const record = progress[noteSet][activeFamilyId];
+  const requestedTargetAvailable = typeof requestedTarget === "number"
     && Number.isInteger(requestedTarget)
     && targetsForFamily(activeFamilyId, noteSet).includes(requestedTarget)
-    ? requestedTarget
-    : firstRangeLoopTarget(progress, activeFamilyId, noteSet, order);
+    && !record.passedMidis.includes(requestedTarget)
+    && !record.parkedMidis.includes(requestedTarget);
+  const choice = requestedTargetAvailable
+    ? { targetMidi: requestedTarget, acceptingCredit: true }
+    : chooseRangeLoopTarget(progress, activeFamilyId, noteSet, order, profile.baseline.midi);
   return {
     activeFamilyId,
     noteSet,
     order,
-    holdSeconds,
-    targetMidi,
+    targetMidi: choice.targetMidi,
+    targetAcceptsCredit: choice.acceptingCredit,
     progress,
     profile,
   };
-}
-
-export function rangeLoopTargetSequence(
-  familyId: RangeFamilyId,
-  noteSet: FamilyNoteSet,
-  order: RangeLoopOrder,
-): number[] {
-  const targets = targetsForFamily(familyId, noteSet);
-  return order === "descending" ? targets.reverse() : targets;
-}
-
-export function firstRangeLoopTarget(
-  progress: Readonly<LoopProgress>,
-  familyId: RangeFamilyId,
-  noteSet: FamilyNoteSet,
-  order: RangeLoopOrder,
-): number {
-  const sequence = rangeLoopTargetSequence(familyId, noteSet, order);
-  const passed = new Set(progress[noteSet][familyId].passedMidis);
-  return sequence.find((midi) => !passed.has(midi)) ?? sequence[0]!;
 }
 
 export function markRangeLoopTargetPassed(
@@ -190,11 +229,70 @@ export function completeRangeLoopFamily(
       [familyId]: {
         ...record,
         passedMidis: [],
-        // "Outside my current range" is explicit physical-profile evidence,
-        // not per-lap presentation state. Only Recheck may clear it.
         parkedMidis: record.parkedMidis,
         cyclesCompleted: record.cyclesCompleted + 1,
       },
     },
   };
+}
+
+/** Apply one visible target decision and select the next baseline-routed note. */
+export function advanceRangeLoopTarget(
+  progress: Readonly<LoopProgress>,
+  familyId: RangeFamilyId,
+  noteSet: FamilyNoteSet,
+  order: RangeLoopOrder,
+  baselineMidi: number,
+  targetMidi: number,
+  outcome: RangeLoopTargetOutcome,
+): RangeLoopTargetAdvance {
+  const decided = outcome === "passed"
+    ? markRangeLoopTargetPassed(progress, familyId, noteSet, targetMidi)
+    : parkMidiAcrossNoteSets(progress as LoopProgress, familyId, targetMidi);
+  const sameFamily = buildProfileFamilyQueue(
+    decided,
+    noteSet,
+    familyId,
+    order,
+    baselineMidi,
+  );
+  if (sameFamily.length > 0) {
+    return Object.freeze({
+      progress: decided,
+      familyId,
+      targetMidi: sameFamily[0]!,
+      acceptingCredit: true,
+    });
+  }
+
+  const completed = completeRangeLoopFamily(decided, familyId, noteSet);
+  const familyAdvance = nextProfileFamily(
+    familyId,
+    completed,
+    noteSet,
+    order,
+    baselineMidi,
+  );
+  if (familyAdvance === null) {
+    const fallback = chooseRangeLoopTarget(
+      completed,
+      familyId,
+      noteSet,
+      order,
+      baselineMidi,
+    );
+    return Object.freeze({ progress: completed, familyId, ...fallback });
+  }
+  const choice = chooseRangeLoopTarget(
+    completed,
+    familyAdvance.familyId,
+    noteSet,
+    order,
+    baselineMidi,
+  );
+  return Object.freeze({
+    progress: completed,
+    familyId: familyAdvance.familyId,
+    ...choice,
+  });
 }

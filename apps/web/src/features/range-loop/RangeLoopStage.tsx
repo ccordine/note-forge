@@ -24,8 +24,12 @@ function RangeLoopToolbar({ session }: { readonly session: RangeLoopSession }) {
           playback={session.referencePlayback}
         />
       </span>
-      {session.phase === "tracking" && (
-        <ActionButton onClick={session.resetHold}>Reset hold</ActionButton>
+      {session.phase === "tracking"
+        && session.acceptingCredit
+        && !session.achievementReached && (
+        <ActionButton onClick={session.markCurrentOutsideRange}>
+          I can&apos;t reach this note
+        </ActionButton>
       )}
       {session.phase !== "tracking" && (
         <ActionButton
@@ -39,15 +43,20 @@ function RangeLoopToolbar({ session }: { readonly session: RangeLoopSession }) {
       {session.phase === "tracking" && (
         <ActionButton onClick={session.finish}>Finish Range Loop</ActionButton>
       )}
-      {session.phase === "tracking" && session.achievementReached && (
+      {session.achievementReached && (
         <ActionButton className="primary" onClick={session.advanceTarget}>
           Next target
+        </ActionButton>
+      )}
+      {session.excludedNoteCount > 0 && (
+        <ActionButton onClick={session.recheckExcludedNotes}>
+          Recheck {session.excludedNoteCount} excluded {session.excludedNoteCount === 1 ? "note" : "notes"}
         </ActionButton>
       )}
       <span className="range-loop-next">
         <small>NEXT</small>
         <b>{noteLabel(session.followingMidi)}</b>
-        <em>{session.passedMidis.size}/{session.sequence.length} earned</em>
+        <em>{session.earnedCount}/{session.sequence.length - session.parkedMidis.size} trainable earned</em>
       </span>
     </div>
   );
@@ -62,13 +71,18 @@ function RangeLoopSequence({ session }: { readonly session: RangeLoopSession }) 
     >
       {session.sequence.map((midi) => {
         const current = midi === session.targetMidi;
-        const passed = session.passedMidis.has(midi);
-        const stateLabel = current ? "current target" : passed ? "earned" : "upcoming";
+        const parked = session.parkedMidis.has(midi);
+        const passed = session.passedMidis.has(midi)
+          || (current && session.achievementReached);
+        let stateLabel = "upcoming";
+        if (passed) stateLabel = "earned";
+        if (current) stateLabel = "current target";
+        if (parked) stateLabel = "outside current range";
         return (
           <span
             role="listitem"
             key={midi}
-            className={`${current ? "current" : ""} ${passed ? "passed" : ""}`}
+            className={`${current ? "current" : ""} ${passed ? "passed" : ""} ${parked ? "parked" : ""}`}
             aria-label={`${noteLabel(midi)}, ${stateLabel}`}
           >
             <b>{noteLabel(midi)}</b><i />
@@ -93,12 +107,12 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
     );
   }
   const inputRunning = session.input.state === "running";
-  const phase = session.phase === "complete"
-    ? "complete"
-    : session.phase === "tracking" && inputRunning
-      ? "listening"
-      : "idle";
-  const holdStatus = session.holding ? "holding" : "waiting";
+  let phase: "idle" | "listening" | "complete" = "idle";
+  if (session.phase === "tracking" && inputRunning) phase = "listening";
+  if (session.phase === "complete") phase = "complete";
+  let holdStatus: "waiting" | "holding" | "complete" = "waiting";
+  if (session.holding) holdStatus = "holding";
+  if (session.achievementReached) holdStatus = "complete";
   return (
     <Panel
       className={`range-loop-stage ${session.phase === "tracking" ? "active" : ""}`}
@@ -108,6 +122,15 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
       <RangeLoopSettings session={session} />
       <RangeLoopToolbar session={session} />
 
+      {!session.acceptingCredit && (
+        <div className="range-result-next range-loop-no-target" role="status" aria-live="polite">
+          <span>
+            <b>No trainable note is queued in this route.</b>
+            <small>Use Recheck excluded notes whenever you want to try them again. Voice input and this Range Loop session remain live.</small>
+          </span>
+        </div>
+      )}
+
       <NoteInput
         variant="target"
         input={session.input}
@@ -115,11 +138,11 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
         toleranceCents={session.toleranceCents}
         phase={phase}
         hold={{
-          heldSeconds: session.dwell.heldSeconds,
-          requiredSeconds: session.holdSeconds,
+          heldSeconds: session.credit.creditedSeconds,
+          requiredSeconds: session.credit.requiredSeconds,
           status: holdStatus,
         }}
-        holdMode="occupancy"
+        holdMode="collective"
         title={`Range Loop live target ${noteLabel(session.targetMidi)}`}
       />
 
@@ -128,8 +151,8 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
       {session.phase === "tracking" && session.achievementReached && (
         <div className="range-result-next" role="status" aria-live="polite">
           <span>
-            <b>{noteLabel(session.targetMidi)} earned · current {session.dwell.heldSeconds.toFixed(2)} seconds · peak {session.dwell.peakHeldSeconds.toFixed(2)} seconds.</b>
-            <small>Time keeps accumulating while you remain in range. Choose Next target whenever you decide.</small>
+            <b>{noteLabel(session.targetMidi)} earned · {session.practicePoints.toLocaleString()} practice points · {session.credit.creditedSeconds.toFixed(2)} collective seconds.</b>
+            <small>One in-range millisecond earns one point. Credit keeps accumulating; choose Next target whenever you decide.</small>
           </span>
         </div>
       )}
@@ -138,6 +161,7 @@ export function RangeLoopStage({ session }: { readonly session: RangeLoopSession
         <span>
           <b>Baseline {noteLabel(session.profileBaselineMidi)}</b>
           {" · "}mapped usable range {formatBounds(session.profileLowMidi, session.profileHighMidi)}
+          {" · "}{session.excludedNoteCount} outside-range {session.excludedNoteCount === 1 ? "note" : "notes"}
           {" · "}shared keyboard follows this target
         </span>
       </div>

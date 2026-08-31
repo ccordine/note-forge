@@ -7,7 +7,9 @@ import {
   nextProfileFamily,
   normalizeProgress,
   parkMidiAcrossNoteSets,
+  parkedMidiCount,
   profileFamilyOrder,
+  recheckAllParkedMidis,
   recheckMidisAcrossNoteSets,
   restoreMidiAsPending,
   type LoopProgress,
@@ -446,5 +448,21 @@ describe("range-loop cross-note-set parking", () => {
     });
     expect(progress.natural.middle.parkedMidis).toEqual(originalNaturalParked);
     expect(progress.chromatic.middle.parkedMidis).toEqual(originalChromaticParked);
+  });
+
+  it("counts physical excluded pitches once and restores all of them explicitly", () => {
+    let progress = normalizeProgress(null);
+    progress = parkMidiAcrossNoteSets(progress, "deep", 47);
+    progress = parkMidiAcrossNoteSets(progress, "middle", 61);
+    progress = parkMidiAcrossNoteSets(progress, "middle", 62);
+
+    expect(parkedMidiCount(progress)).toBe(3);
+    const restored = recheckAllParkedMidis(progress);
+    expect(parkedMidiCount(restored)).toBe(0);
+    expect(restored.natural.deep.parkedMidis).toEqual([]);
+    expect(restored.chromatic.deep.parkedMidis).toEqual([]);
+    expect(restored.natural.middle.parkedMidis).toEqual([]);
+    expect(restored.chromatic.middle.parkedMidis).toEqual([]);
+    expect(parkedMidiCount(progress)).toBe(3);
   });
 });

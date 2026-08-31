@@ -13,6 +13,13 @@ const RANGE_LOOP_HOOK_SOURCE = readFileSync(
   ),
   "utf8",
 );
+const RANGE_LOOP_CREDIT_SOURCE = readFileSync(
+  new URL(
+    "../apps/web/src/features/range-loop/range-loop-credit.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 const RANGE_LOOP_SOURCE_DIRECTORY = new URL(
   "../apps/web/src/features/range-loop/",
@@ -88,8 +95,10 @@ describe("Range Loop architecture guard", () => {
   it("reduces detector observations outside React and never owns capture", () => {
     expect(RANGE_LOOP_HOOK_SOURCE.match(/useAudioInput\s*\(/g)).toHaveLength(1);
     expect(RANGE_LOOP_HOOK_SOURCE).toContain("useRealtimeSession");
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain("reduceNoteDwell");
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain('dwellSession.observe({ type: "observation", observation })');
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("reduceRangeLoopCredit");
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain('creditSession.observe({ type: "observation", observation })');
+    expect(RANGE_LOOP_CREDIT_SOURCE).toContain("observationContinuity");
+    expect(RANGE_LOOP_HOOK_SOURCE).not.toContain("reduceNoteDwell");
     expect(implementationSource).not.toMatch(/\bsetDwell\b|input\.(?:enable|disable)\s*\(/);
   });
 
@@ -100,14 +109,14 @@ describe("Range Loop architecture guard", () => {
     expect(stage).toContain('data-live-lifetime="user-owned"');
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.getCurrent().phase === "tracking"');
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "start" })');
-    expect(RANGE_LOOP_HOOK_SOURCE).toContain("dwellSession.flushPresentation()");
+    expect(RANGE_LOOP_HOOK_SOURCE).toContain("creditSession.flushPresentation()");
     expect(RANGE_LOOP_HOOK_SOURCE).toContain('liveSession.dispatch({ type: "finish" })');
   });
 
   it("does not score or render a disposable default target before persistence hydration", () => {
     const stage = activeSources.find(({ fileName }) => fileName === "RangeLoopStage.tsx")?.source ?? "";
     expect(RANGE_LOOP_HOOK_SOURCE).toMatch(
-      /onFrame:[\s\S]*if \(hydrated && liveSession\.getCurrent\(\)\.phase === "tracking"\)[\s\S]*dwellSession\.observe/u,
+      /onFrame:[\s\S]*if \(hydrated && liveSession\.getCurrent\(\)\.phase === "tracking"\)[\s\S]*creditSession\.observe/u,
     );
     expect(stage).toContain("if (!session.hydrated)");
     expect(stage.indexOf("if (!session.hydrated)")).toBeLessThan(stage.indexOf("<NoteInput"));
@@ -126,6 +135,18 @@ describe("Range Loop architecture guard", () => {
       RANGE_LOOP_HOOK_SOURCE.indexOf("const changeFamily ="),
     );
     expect(startAndFinish).not.toMatch(/referencePlayback|\.toggle\s*\(|\.release\s*\(/);
+  });
+
+  it("uses fixed cumulative credit and reversible outside-range scheduling", () => {
+    const stage = activeSources.find(({ fileName }) => fileName === "RangeLoopStage.tsx")?.source ?? "";
+    const settings = activeSources.find(({ fileName }) => fileName === "RangeLoopSettings.tsx")?.source ?? "";
+    expect(RANGE_LOOP_CREDIT_SOURCE).toContain("RANGE_LOOP_CREDIT_GOAL_SECONDS = 30");
+    expect(RANGE_LOOP_CREDIT_SOURCE).toContain("none of them erase credit already collected");
+    expect(stage).toContain('holdMode="collective"');
+    expect(stage).toContain("I can&apos;t reach this note");
+    expect(stage).toContain("recheckExcludedNotes");
+    expect(settings).not.toMatch(/Hold|RANGE_LOOP_HOLD_OPTIONS|changeHold/);
+    expect(implementationSource).not.toMatch(/resetHold|Reset hold/);
   });
 
   it("keeps all six full-depth families data-driven in the settings surface", () => {

@@ -90,7 +90,7 @@ describe("non-Arcade live trainer architecture", () => {
       expect(sources[name]).toContain("ACCEPTANCE_TOLERANCE_CENTS_OPTIONS.map");
       expect(sources[name]).not.toMatch(/const (?:TOLERANCES|tolerances)\s*=\s*\[/);
     }
-    expect(rangeLoopSession).toContain("const activeToleranceCents = dwell.toleranceCents;");
+    expect(rangeLoopSession).toContain("const activeToleranceCents = credit.toleranceCents;");
     expect(rangeLoopSession).toContain("toleranceCents: activeToleranceCents");
     expect(rangeSimulator).toContain("const activeToleranceCents = state.dwell.toleranceCents;");
     expect(rangeSimulator).toContain("toleranceCents: activeToleranceCents");
@@ -140,7 +140,7 @@ describe("non-Arcade live trainer architecture", () => {
   it("keeps distinct session mathematics explicit instead of cloning attempt phases", () => {
     expect(family).toContain("reduceNoteFamilySession");
     expect(family).not.toContain("useAttemptRunner");
-    expect(rangeLoopSession).toContain("reduceNoteDwell");
+    expect(rangeLoopSession).toContain("reduceRangeLoopCredit");
     expect(rangeLoopSession).toContain("useRealtimeSession");
     expect(rangeLoopSession).not.toContain("useAttemptRunner");
     expect(rangeSimulator).toContain("reduceRangeSimulatorController");

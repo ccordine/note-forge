@@ -37,11 +37,11 @@ import { RANGE_LOOP_INSTRUMENTATION_SOURCE } from "./proof-support/range-loop-in
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
 const CHROMIUM = process.env.NOTEFORGE_CHROMIUM || "/usr/bin/chromium";
-const REQUIRED_HOLD_SECONDS = 3;
+const REQUIRED_HOLD_SECONDS = 30;
 const C3_LABEL = noteLabel(NOISY_RANGE_C3_MIDI);
 const D3_LABEL = noteLabel(NOISY_RANGE_D3_MIDI);
 const CLEAN_RECOVERY = NOISY_RANGE_C3_STAGES.find(({ id }) => id === "clean-recovery");
-const C3_CHECKPOINT_SAMPLE = CLEAN_RECOVERY.startSample + Math.round(0.55 * SAMPLE_RATE);
+const C3_CHECKPOINT_SAMPLE = CLEAN_RECOVERY.endSample - Math.round(0.75 * SAMPLE_RATE);
 function stageForSample(sample) {
   if (sample >= NOISY_RANGE_D3_START_SAMPLE) return "persistent-d3";
   return NOISY_RANGE_C3_STAGES.find((stage) => (
@@ -277,7 +277,7 @@ async function main() {
       && mounted.phase === "idle"
       && mounted.heldSeconds === 0
       && mounted.following === D3_LABEL
-      && mounted.settings?.includes("3.0 sec"),
+      && mounted.settings?.includes("30 sec collective"),
     `The real default C3 -> D3 Range Loop was not mounted: ${JSON.stringify(mounted)}.`);
     const startClicked = await evaluate(session, `(() => {
       const button = [...document.querySelectorAll('button')]
@@ -299,7 +299,7 @@ async function main() {
       session,
       `window.__noteforgeNoteInputProof.snapshot().workletSampleEvents.at(-1)?.endSample >= ${C3_CHECKPOINT_SAMPLE}`,
       "the complete clean/noise/transient/harmonic/dropout/changing-noise C3 schedule",
-      25_000,
+      45_000,
     );
     await waitForBrowser(
       session,
@@ -380,7 +380,7 @@ async function main() {
           && result.includes('${D3_LABEL} earned');
       })()`,
       "persistent real D3 becoming authoritative and earning D3",
-      9_000,
+      40_000,
     );
     const d3Checkpoint = await evaluate(session, `(() => {
       const input = document.querySelector('[data-note-input]');
@@ -479,8 +479,8 @@ async function main() {
 
     console.log("NOISY RANGE LOOP BROWSER PROOF PASSED");
     console.log(`  path: one getUserMedia -> MediaStreamAudioSourceNode -> AudioWorklet -> NoteInputEngine -> shared NoteInput -> real /practice/range-loop`);
-    console.log(`  C3: ${c3Checkpoint.heldSeconds.toFixed(2)}s survived all ${NOISY_RANGE_C3_STAGES.length} interference stages with no hold regression; ${C3_LABEL}-earned Next ${D3_LABEL} became enabled`);
-    console.log(`  D3: persistent real change became authoritative and earned ${d3Checkpoint.heldSeconds.toFixed(2)}s on the same NoteInput DOM node`);
+    console.log(`  C3: ${c3Checkpoint.heldSeconds.toFixed(2)} collective seconds survived all ${NOISY_RANGE_C3_STAGES.length} interference stages with no credit regression; ${C3_LABEL}-earned Next ${D3_LABEL} became enabled`);
+    console.log(`  D3: persistent real change became authoritative and collected ${d3Checkpoint.heldSeconds.toFixed(2)}s on the same NoteInput DOM node`);
     for (const stage of stageSummary) {
       console.log(`  ${stage.stage}: ${stage.frames} authoritative observations, ${stage.voiced} voiced, ${stage.unvoicedOrUncertain} unvoiced/uncertain, ${stage.contradictory} contradictory authorities, confidence median ${stage.medianConfidence ?? "n/a"}`);
     }

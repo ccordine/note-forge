@@ -27,7 +27,14 @@ type TrackSettingsWithLatency = MediaTrackSettings & {
   readonly latency?: number;
 };
 
-/** Raw music input request; unsupported hints are omitted, never assumed. */
+/**
+ * Raw music input request.
+ *
+ * Boolean basic constraints are deliberately bare values. The media-capture
+ * contract treats them as preferences during device selection, and WebKit's
+ * track-level constraint path requires this spelling to leave its coupled
+ * voice-processing/automatic-gain path.
+ */
 export function rawMicrophoneConstraints(
   mediaDevices: MediaDevices,
 ): MediaTrackConstraints {
@@ -36,11 +43,24 @@ export function rawMicrophoneConstraints(
     | undefined;
   return {
     channelCount: { ideal: 1 },
-    echoCancellation: { ideal: false },
-    noiseSuppression: { ideal: false },
-    autoGainControl: { ideal: false },
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
     ...(supported?.latency ? { latency: { ideal: 0 } } : {}),
   };
+}
+
+/**
+ * Reapply raw-music preferences to the selected track before it enters Web
+ * Audio. This is not a second capture or a runtime reconfiguration: it closes
+ * the WebKit device-selection gap once, while the one acquired track is still
+ * being opened.
+ */
+export async function applyRawMicrophoneConstraints(
+  track: MediaStreamTrack,
+  mediaDevices: MediaDevices,
+): Promise<void> {
+  await track.applyConstraints(rawMicrophoneConstraints(mediaDevices));
 }
 
 function finiteNonNegative(value: unknown): number | null {

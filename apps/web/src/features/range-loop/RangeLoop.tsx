@@ -22,9 +22,9 @@ export function RangeLoop() {
     <div className="page range-loop-page">
       <div className="lab-intro range-loop-intro">
         <div>
-          <Eyebrow>One live detector · one target · sample-time dwell</Eyebrow>
-          <h1>Sing the note. Stay in its lane. Move on when you choose.</h1>
-          <p>The microphone remains an app-level continuous sensor. This page only decides whether each authoritative pitch interval belongs to the current target.</p>
+          <Eyebrow>One live detector · one target · cumulative sample-time credit</Eyebrow>
+          <h1>Collect time in the lane. Breathe whenever you need.</h1>
+          <p>Every in-range millisecond earns one practice point toward 30,000. Breaths, uncertain sound, and other notes pause new credit without taking any away; after the goal, move on whenever you choose.</p>
         </div>
         <div className={`range-loop-state-pill ${runningClass}`}>
           <i />

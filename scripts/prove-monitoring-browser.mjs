@@ -309,10 +309,18 @@ async function proveViewport(session, origin, viewport) {
     `${viewport.label}: monitor gain did not begin at zero: ${describe(monitorNode)}.`);
   const constraints = baseline.getUserMediaCalls[0]?.audio;
   assert(constraints && constraints.sampleRate === undefined
-    && constraints.echoCancellation?.ideal === false
-    && constraints.noiseSuppression?.ideal === false
-    && constraints.autoGainControl?.ideal === false,
+    && constraints.echoCancellation === false
+    && constraints.noiseSuppression === false
+    && constraints.autoGainControl === false,
   `${viewport.label}: raw microphone constraints were wrong: ${describe(constraints)}.`);
+  const trackConstraint = baseline.trackConstraintApplications[0];
+  assert(baseline.trackConstraintApplications.length === 1
+    && trackConstraint.error === null
+    && trackConstraint.constraints?.sampleRate === undefined
+    && trackConstraint.constraints?.echoCancellation === false
+    && trackConstraint.constraints?.noiseSuppression === false
+    && trackConstraint.constraints?.autoGainControl === false,
+  `${viewport.label}: raw preferences were not reapplied once to the selected track: ${describe(baseline.trackConstraintApplications)}.`);
   assert(baseline.productionContexts[0]?.options?.latencyHint === "interactive"
     && baseline.productionContexts[0]?.options?.sampleRate === undefined,
   `${viewport.label}: production context was not native-rate interactive: ${describe(baseline.productionContexts)}.`);

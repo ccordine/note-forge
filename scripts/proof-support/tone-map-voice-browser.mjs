@@ -29,6 +29,7 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
     workletModuleUrls: [],
     workletSampleEvents: [],
     trackInitialStates: [],
+    trackConstraintApplications: [],
     trackEnabledWrites: [],
     trackStopCalls: [],
     generatorCommands: [],
@@ -246,6 +247,36 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
         }
       } else {
         proof.instrumentationErrors.push('MediaStreamTrack.enabled descriptor unavailable');
+      }
+      const originalApplyConstraints = track.applyConstraints.bind(track);
+      try {
+        Object.defineProperty(track, 'applyConstraints', {
+          configurable: true,
+          value: async (constraints) => {
+            const record = { constraints, acceptedAsRawGeneratedAudio: false, error: null };
+            proof.trackConstraintApplications.push(record);
+            const entries = Object.entries(constraints ?? {});
+            if (entries.length > 0 && entries.every(([key, value]) => (
+              (['echoCancellation', 'noiseSuppression', 'autoGainControl'].includes(key)
+                && value === false)
+              || (key === 'channelCount' && value?.ideal === 1)
+              || (key === 'latency' && value?.ideal === 0)
+            ))) {
+              // MediaStreamAudioDestinationNode is already raw generated PCM;
+              // Chromium exposes no capture-DSP toggles on this synthetic track.
+              record.acceptedAsRawGeneratedAudio = true;
+              return;
+            }
+            try {
+              await originalApplyConstraints(constraints);
+            } catch (error) {
+              record.error = String(error);
+              throw error;
+            }
+          },
+        });
+      } catch (error) {
+        proof.instrumentationErrors.push('track.applyConstraints instrumentation: ' + String(error));
       }
       const originalStop = track.stop.bind(track);
       try {

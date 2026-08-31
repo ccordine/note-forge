@@ -1,9 +1,5 @@
 import { pitchValuesFromFrequency } from "./pitch";
 import { recentPeriodConfidence } from "./recent-period-confidence";
-import {
-  selectHarmonicFamily,
-  sinusoidalMagnitude,
-} from "./harmonic-family";
 import { YinScratchWorkspace } from "./yin-workspace";
 import {
   YIN_FREQUENCY_BOUNDARY_TOLERANCE_CENTS,
@@ -16,12 +12,22 @@ import {
 export const YIN_DETECTOR_DEFAULTS = Object.freeze({
   minFrequency: 45,
   maxFrequency: 1_200,
-  yinThreshold: 0.18,
+  yinThreshold: 0.08,
   minConfidence: 0.55,
   rmsThreshold: 0,
   currentEdgeSpanSamples: 0,
   a4Frequency: 440,
 });
+
+/**
+ * When noise keeps every trough just above the absolute threshold, prefer the
+ * earliest trough whose residual aperiodicity is still comparable with the
+ * global best. This stays inside YIN candidate selection: it neither inspects
+ * harmonic spectra nor transposes the selected period afterward.
+ */
+const COMPARABLE_MINIMUM_APERIODICITY_RATIO = 1.25;
+const MINIMUM_DENSE_PERIOD_SAMPLES = 24;
+const SPARSE_PERIOD_YIN_THRESHOLD = 0.1;
 interface ResolvedOptions {
   sampleRate: number;
   minFrequency: number;
@@ -95,7 +101,6 @@ function frameWithoutPitch(
   reason: Exclude<PitchDetectionReason, "detected">,
   yinValue: number | null = null,
   rawCandidate: Readonly<YinRawCandidate> | null = null,
-  harmonicAmbiguity = 0,
 ): YinPitchFrame {
   return {
     timeSeconds: options.timeSeconds,
@@ -111,7 +116,6 @@ function frameWithoutPitch(
     yinValue,
     reason,
     rawCandidate,
-    harmonicAmbiguity,
   };
 }
 
@@ -137,114 +141,6 @@ function rootMeanSquare(samples: Float32Array): {
 
 function clampUnit(value: number): number {
   return Math.min(1, Math.max(0, value));
-}
-
-/**
- * Refine YIN's time-domain estimate against the signal's harmonic spectrum.
- *
- * Additive room noise can move a broad low-frequency YIN minimum by several
- * tenths of a semitone even when YIN still chose the correct note. Evaluating a
- * small cents-wide neighborhood at the fundamental and its harmonics supplies
- * independent evidence without snapping the result to a tempered note.
- */
-function refineFrequencyFromHarmonics(
-  samples: Float32Array,
-  sampleRate: number,
-  initialFrequencyHz: number,
-  confidence: number,
-  workspace: YinScratchWorkspace,
-): { frequencyHz: number; supportsConfidence: boolean } {
-  // The broad low-frequency YIN trough is the one susceptible to room hum.
-  // Higher-confidence candidates already have enough evidence for only a
-  // narrow low-register refinement. We spend a wider pass solely on uncertain
-  // candidates, where additive noise can move YIN by more than a semitone.
-  const uncertain = confidence < 0.9;
-  const sparsePeriod = sampleRate / initialFrequencyHz < 24;
-  if (!uncertain && initialFrequencyHz >= 160 && !sparsePeriod) {
-    return { frequencyHz: initialFrequencyHz, supportsConfidence: false };
-  }
-
-  const searchRadiusCents = uncertain ? 160 : 36;
-  const coarseStepCents = uncertain ? 5 : 4;
-  const MAXIMUM_HARMONIC = 4;
-
-  const harmonicScore = (frequencyHz: number): number => {
-    let score = 0;
-    for (let harmonic = 1; harmonic <= MAXIMUM_HARMONIC; harmonic += 1) {
-      const harmonicFrequency = frequencyHz * harmonic;
-      if (harmonicFrequency >= sampleRate / 2) break;
-      const magnitude = sinusoidalMagnitude(
-        samples,
-        sampleRate,
-        harmonicFrequency,
-        workspace,
-      );
-      // Equal partial energy lets an uncertain harmonic family outvote nearby
-      // hum. High-confidence refinement keeps its low-harmonic weighting for
-      // maximum clean-signal precision near configured boundaries.
-      score += magnitude * magnitude / (uncertain ? 1 : harmonic);
-    }
-    return score;
-  };
-
-  let bestCents = 0;
-  let bestScore = -1;
-  const scoreCount = Math.floor(2 * searchRadiusCents / coarseStepCents) + 1;
-  const scores = workspace.harmonicScores(scoreCount);
-  let scoreIndex = 0;
-  for (
-    let cents = -searchRadiusCents;
-    cents <= searchRadiusCents;
-    cents += coarseStepCents
-  ) {
-    const frequencyHz = initialFrequencyHz * 2 ** (cents / 1_200);
-    // Permit the fitting neighborhood to cross a configured boundary so a
-    // candidate exactly on that boundary still has symmetric evidence. The
-    // final refined result is range-checked below before it can be emitted.
-    const score = harmonicScore(frequencyHz);
-    scores[scoreIndex] = score;
-    scoreIndex += 1;
-    if (score > bestScore) {
-      bestScore = score;
-      bestCents = cents;
-    }
-  }
-
-  const bestIndex = Math.round(
-    (bestCents + searchRadiusCents) / coarseStepCents,
-  );
-  let refinedCents = bestCents;
-  if (bestIndex > 0 && bestIndex < scoreCount - 1) {
-    const previous = scores[bestIndex - 1]!;
-    const current = scores[bestIndex]!;
-    const next = scores[bestIndex + 1]!;
-    const denominator = previous - 2 * current + next;
-    if (Number.isFinite(denominator) && Math.abs(denominator) > 1e-18) {
-      const offset = 0.5 * (previous - next) / denominator;
-      refinedCents += Math.max(-1, Math.min(1, offset)) * coarseStepCents;
-    }
-  }
-  const frequencyHz = initialFrequencyHz * 2 ** (refinedCents / 1_200);
-  let totalHarmonicEnergy = 0;
-  let upperHarmonicEnergy = 0;
-  for (let harmonic = 1; harmonic <= MAXIMUM_HARMONIC; harmonic += 1) {
-    const magnitude = sinusoidalMagnitude(
-      samples,
-      sampleRate,
-      frequencyHz * harmonic,
-      workspace,
-    );
-    const energy = magnitude * magnitude;
-    totalHarmonicEnergy += energy;
-    if (harmonic >= 3) upperHarmonicEnergy += energy;
-  }
-  // Independent third/fourth-partial support distinguishes a harmonic voice
-  // family from a two-line 50/60 Hz electrical hum. It may raise a marginal
-  // YIN periodicity score, but never creates a candidate YIN rejected.
-  const supportsConfidence = uncertain
-    && totalHarmonicEnergy > 1e-18
-    && upperHarmonicEnergy / totalHarmonicEnergy >= 0.015;
-  return { frequencyHz, supportsConfidence };
 }
 
 /** Refines an integer lag by fitting a parabola through its YIN neighbors. */
@@ -370,28 +266,45 @@ export function detectPitchWithWorkspace(
     runningSum += difference[tau];
     yin[tau] = runningSum === 0 ? 1 : (difference[tau] * tau) / runningSum;
   }
-  let selectedTau = -1;
   let bestTau = minimumTau;
   for (let tau = minimumTau; tau <= maximumTau; tau += 1) {
     if (yin[tau] < yin[bestTau]) {
       bestTau = tau;
     }
+  }
 
-    if (yin[tau] < resolved.yinThreshold) {
-      selectedTau = tau;
-      while (
-        selectedTau + 1 <= maximumTau &&
-        yin[selectedTau + 1] < yin[selectedTau]
-      ) {
-        selectedTau += 1;
-      }
-      break;
+  const bestYinValue = yin[bestTau];
+  const bestConfidence = clampUnit(1 - bestYinValue);
+  // With fewer than 24 samples at the top of the search range, an integer-lag
+  // YIN trough is necessarily coarser. Admit the same 0.10 ceiling used by the
+  // canonical threshold matrix, then retain continuous parabolic estimation.
+  const resolutionAwareThreshold = minimumTau < MINIMUM_DENSE_PERIOD_SAMPLES
+    ? Math.max(resolved.yinThreshold, SPARSE_PERIOD_YIN_THRESHOLD)
+    : resolved.yinThreshold;
+  const candidateCeiling = Math.min(
+    1 - resolved.minConfidence,
+    Math.max(
+      resolutionAwareThreshold,
+      bestYinValue * COMPARABLE_MINIMUM_APERIODICITY_RATIO,
+    ),
+  );
+  const basinExitCeiling = Math.min(1, candidateCeiling * 2);
+  let selectedTau = -1;
+  for (let tau = minimumTau; tau <= maximumTau; tau += 1) {
+    if (yin[tau] > candidateCeiling) continue;
+
+    selectedTau = tau;
+    while (
+      tau + 1 <= maximumTau
+      && yin[tau + 1] <= basinExitCeiling
+    ) {
+      tau += 1;
+      if (yin[tau] < yin[selectedTau]) selectedTau = tau;
     }
+    break;
   }
 
   if (selectedTau < 0) {
-    const bestYinValue = yin[bestTau];
-    const bestConfidence = clampUnit(1 - bestYinValue);
     const rawCandidate = rawCandidateAt(
       samples,
       yin,
@@ -400,22 +313,14 @@ export function detectPitchWithWorkspace(
       resolved.sampleRate,
       resolved.currentEdgeSpanSamples,
     );
-    // The YIN threshold guides selection toward the first strong local
-    // minimum. It is not a second, hidden confidence policy: when no minimum
-    // crosses it, credible global-best periodic evidence must still reach the
-    // public minConfidence decision below.
-    if (bestConfidence >= resolved.minConfidence) {
-      selectedTau = bestTau;
-    } else {
-      return frameWithoutPitch(
-        resolved,
-        measured.rms,
-        bestConfidence,
-        "no-periodic-candidate",
-        bestYinValue,
-        rawCandidate,
-      );
-    }
+    return frameWithoutPitch(
+      resolved,
+      measured.rms,
+      bestConfidence,
+      "no-periodic-candidate",
+      bestYinValue,
+      rawCandidate,
+    );
   }
 
   const rawCandidate = rawCandidateAt(
@@ -426,19 +331,6 @@ export function detectPitchWithWorkspace(
     resolved.sampleRate,
     resolved.currentEdgeSpanSamples,
   );
-  const family = selectHarmonicFamily(
-    samples,
-    yin,
-    selectedTau,
-    minimumTau,
-    maximumTau,
-    resolved.sampleRate,
-    resolved.minFrequency,
-    resolved.maxFrequency,
-    resolved.currentEdgeSpanSamples,
-    workspace,
-  );
-  selectedTau = family.selectedTau;
   const yinValue = yin[selectedTau];
   const yinConfidence = clampUnit(1 - yinValue);
   const currentConfidence = Math.min(
@@ -453,7 +345,6 @@ export function detectPitchWithWorkspace(
       "below-confidence-threshold",
       yinValue,
       rawCandidate,
-      family.ambiguity,
     );
   }
 
@@ -463,19 +354,8 @@ export function detectPitchWithWorkspace(
     1,
     maximumTau + 1,
   );
-  const initialFrequencyHz = resolved.sampleRate / periodSamples;
-  const refinement = refineFrequencyFromHarmonics(
-    samples,
-    resolved.sampleRate,
-    initialFrequencyHz,
-    currentConfidence,
-    workspace,
-  );
-  const frequencyHz = refinement.frequencyHz;
-  const confidence = refinement.supportsConfidence
-    ? Math.max(currentConfidence, 0.6)
-    : currentConfidence;
-  const refinedPeriodSamples = resolved.sampleRate / frequencyHz;
+  const frequencyHz = resolved.sampleRate / periodSamples;
+  const confidence = currentConfidence;
   // Parabolic interpolation can land a fraction of a cent beyond an inclusive
   // configured boundary. Keep that measurement continuous while rejecting
   // candidates that are musically outside the requested range.
@@ -495,7 +375,6 @@ export function detectPitchWithWorkspace(
       "frequency-out-of-range",
       yinValue,
       rawCandidate,
-      family.ambiguity,
     );
   }
 
@@ -507,10 +386,9 @@ export function detectPitchWithWorkspace(
     confidence,
     voiced: true,
     detector: "yin",
-    periodSamples: refinedPeriodSamples,
+    periodSamples,
     yinValue,
     reason: "detected",
     rawCandidate,
-    harmonicAmbiguity: family.ambiguity,
   };
 }

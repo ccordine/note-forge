@@ -103,7 +103,7 @@ The required dependency direction is:
 
 ```text
 app microphone provider
-  -> raw per-window YIN/harmonic-family candidate
+  -> direct per-window YIN candidate
   -> shared target-independent temporal pitch tracker
   -> immutable PitchObservation stream
   -> pure note/dwell/game controller
@@ -128,9 +128,9 @@ Silence, uncertainty, and low confidence are observations. They are not input
 lifecycle states. PCM progression is the transport heartbeat.
 
 The shared tracker preserves the raw candidate on every window. Cold attacks
-and fine motion up to 45 cents are immediate. One remote singleton is published
+and fine motion up to 45 cents are immediate. A remote candidate is published
 on its exact frame as `uncertain`/`temporally-ambiguous`, without retaining a
-stale previous note; a coherent candidate on the next 20 ms hop becomes
+stale previous note; four coherent 20 ms windows make the candidate
 authoritative. No target, tolerance, hold, activity, or score participates in
 that decision.
 
@@ -139,7 +139,7 @@ that decision.
 Completed in this overhaul:
 
 - Added the enforceable `npm run audit:architecture` inventory and release gate.
-- Replaced Range Loop with one tuner and a pure sample-coordinate dwell reducer.
+- Replaced Range Loop with one tuner and a pure sample-coordinate cumulative-credit reducer. Every qualifying millisecond contributes to a fixed 30-second goal across breaths and wrong notes; the latter pause rather than erase credit. Explicit persisted outside-range decisions remain reversible and never masquerade as passes.
 - Deleted support modes, sustained guides, isolation checks, release gates,
   grace timers, tests-only grading code, and obsolete profile evidence history.
 - Reduced Range Loop CSS from 2,450 to 446 lines.
@@ -208,23 +208,24 @@ Completed in this overhaul:
 Release evidence for the final tree:
 
 1. `npm run audit:architecture` reports zero violations and zero unreachable
-   production modules. **Passed: 388 sources, 143 JSX components, and 216
+   production modules. **Passed: 449 sources, 157 JSX components, and 247
    reachable application files.**
 2. Full tests, typecheck, production build, Go tests, race tests, and vet pass.
-   **Passed: 1,051/1,051 frontend tests across 107 files plus all named gates.**
+   **Passed: 1,195/1,195 frontend tests across 129 files plus all named gates.**
 3. The real Chromium microphone proof crosses the production MediaStream,
    AudioWorklet, overlapping detector, React subscription, and DOM without
-   injected frames. **Passed: 2,177/2,177 exact worklet/detector identities.**
-4. Sustained-input browser proof demonstrates uninterrupted PCM and dwell,
+   injected frames. **Passed: 2,173/2,173 exact worklet/detector identities.**
+4. Sustained-input browser proof demonstrates uninterrupted PCM and cumulative credit,
    silence as ordinary evidence, one sustained-note lane, and visible-action-only
-   lifetime authority. **Passed: 2,602/2,602 exact observations; sustained F-sharp
-   1, C3, C4, and D6 holds continued for about 8.4 seconds and froze only on
-   visible Finish.**
+   lifetime authority. **Passed: 3,908/3,908 exact observations; sustained F-sharp
+   1, C3, C4, and D6 remained correct for 8.38–8.42 seconds; six separated C3
+   attempts collected 30.08 seconds and continued to 30.28; outside-range and
+   Recheck stayed on the same capture/tuner.**
 5. The real Range Loop UI consumed a continuously generated C3 through thirteen
    changing interference stages, including broadband noise from +30 to +3 dB
    SNR, impulses, harmonic interference, amplitude drops, and changing noise.
-   **Passed: C3 remained authoritative with no hold regression for 16.32 seconds,
-   then a persistent real D3 change became authoritative and earned 3.10 seconds
+   **Passed: C3 remained authoritative with no credit regression for 32.50 collective seconds,
+   then a persistent real D3 change became authoritative and collected 30.04 seconds
    in the same mounted workflow.**
 6. Route proof exposes exactly five permanent product links, reloads exact
    Practice and Arcade activities, verifies Back/Forward, and rejects every

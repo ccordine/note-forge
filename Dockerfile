@@ -40,6 +40,11 @@ FROM alpine:3.22 AS runtime
 
 WORKDIR /app
 
+# Runtime attachment is intentionally external. The image never creates this
+# network; scripts/deploy-worknet.sh requires it in Docker context "default".
+LABEL com.cordine.worknet.required-network="worknet_net" \
+      com.cordine.worknet.required-context="default"
+
 COPY --from=server-build --chown=65532:65532 /out/noteforge-server /usr/local/bin/noteforge-server
 COPY --from=build --chown=65532:65532 /app/dist/ /app/dist/
 

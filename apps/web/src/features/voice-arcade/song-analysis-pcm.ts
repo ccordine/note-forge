@@ -1,5 +1,5 @@
 import { splitMidiPitch } from "@noteforge/music-core";
-import { smoothPitchFrames, YinDetector } from "@noteforge/pitch-engine";
+import { medianSmoothPitchFrames, YinDetector } from "@noteforge/pitch-engine";
 import { clamp } from "@/lib/numeric";
 import { resolveSongLaneOptions } from "./song-lane-options";
 import type {
@@ -160,13 +160,9 @@ export function extractSongPitchFrames(
     quantizedMidi: null,
   }));
 
-  const smoothed = smoothPitchFrames(detected, {
+  const smoothed = medianSmoothPitchFrames(detected, {
     radius: options.smoothingRadius,
     minSamples: 2 * options.smoothingRadius + 1,
-    maxFrameGapSeconds: Math.max(
-      0.1,
-      (options.hopSizeSamples / options.analysisSampleRate) * 1.5,
-    ),
     a4Frequency: options.a4Frequency,
   });
   const timed = smoothed.map((frame, index): SongPitchFrame => {

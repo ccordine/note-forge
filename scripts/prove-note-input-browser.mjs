@@ -53,6 +53,7 @@ import {
   noteLabel,
   OLD_GATE_RMS_AMPLITUDE,
   OLD_GATE_RMS_DBFS,
+  PITCH_TRANSITION_CONFIRMATION_FRAMES,
   QUIET_LOW_LABELS,
   QUIET_LOW_MIDIS,
   QUIET_LOW_NOTES,
@@ -568,10 +569,12 @@ async function main() {
       renderedFrames: settledProof.domFrameMutations,
       expectedMidis: IMMEDIATE_CHANGE_MIDIS,
       labelForMidi: noteLabel,
+      confirmationFrames: PITCH_TRANSITION_CONFIRMATION_FRAMES,
     });
     const immediateChangeFailures = immediatePitchTransitionFailures(
       immediateChangeProof,
       {
+        confirmationFrames: PITCH_TRANSITION_CONFIRMATION_FRAMES,
         hopSamples: CAPTURE_HOP_SAMPLES,
         maximumSegmentSamples:
           IMMEDIATE_CHANGE_SEGMENT_SAMPLES + CAPTURE_WINDOW_SAMPLES,
@@ -756,6 +759,13 @@ async function main() {
       `Browser instrumentation failed: ${JSON.stringify(settledProof.instrumentationErrors)}`);
     assert(settledProof.getUserMediaCalls === 1 && settledProof.tracks === 1,
       `Expected one retained microphone stream/track; saw getUserMedia=${settledProof.getUserMediaCalls}, tracks=${settledProof.tracks}.`);
+    const rawTrackApplication = settledProof.trackConstraintApplications[0];
+    assert(settledProof.trackConstraintApplications.length === 1
+      && rawTrackApplication.error === null
+      && rawTrackApplication.constraints?.echoCancellation === false
+      && rawTrackApplication.constraints?.noiseSuppression === false
+      && rawTrackApplication.constraints?.autoGainControl === false,
+    `The selected microphone track did not receive one raw-music constraint application: ${JSON.stringify(settledProof.trackConstraintApplications)}.`);
     assert(settledProof.workletNodes === 1,
       `Expected one real AudioWorkletNode; saw ${settledProof.workletNodes}.`);
     assert(recoveryBeforeProof.audioContexts === 1
@@ -850,7 +860,7 @@ async function main() {
       && noConsumerEndCounter.processedSampleCount > noConsumerStartCounter.processedSampleCount,
     `Worklet counters did not advance with no React microphone consumer: ${JSON.stringify({ noConsumerStartCounter, noConsumerEndCounter })}.`);
     assert(immediateChangeFailures.length === 0,
-      `Candidate-to-authoritative pitch transitions violated the causal one-hop contract: ${JSON.stringify(immediateChangeFailures)}.`);
+      `Candidate-to-authoritative pitch transitions violated the causal four-window contract: ${JSON.stringify(immediateChangeFailures)}.`);
     assert(stableOccupancyProgression.length >= 6
       && stableOccupancyProgression[0].heldSamples === 0
       && stableOccupancyProgression[0].heldSeconds === 0
@@ -946,7 +956,7 @@ async function main() {
     console.log(`  negative controls: silence unvoiced for ${silenceRun} detector frames; loud seeded broadband noise unvoiced for ${noiseFrames.length}/${noiseFrames.length} frames; rendered note-free runs ${browserSilenceRun} silence samples and ${browserNoiseRun} noise samples`);
     console.log(`  independent accounting: exact ${workletEvents.length}/${allFrames.length} AudioWorklet→detector endSample pairs; hop=${CAPTURE_HOP_SAMPLES} samples`);
     console.log(`  build identity: requested ${workletRequestPaths[0]} and matched the sole stamped service-worker precache worklet`);
-    console.log(`  causal changes: ${formatImmediatePitchTransitions(immediateChangeProof)}; singleton remote candidates rendered uncertain with no stale note`);
+    console.log(`  causal changes: ${formatImmediatePitchTransitions(immediateChangeProof)}; remote candidates rendered uncertain with no stale note until four-window confirmation`);
     console.log(`  full-depth meter: ${meterSweepProof.length}/${EXPECTED_NOTES.length} supported notes mapped to distinct computed positions ${computedMeterPositions[0].toFixed(2)}%→${computedMeterPositions.at(-1).toFixed(2)}%; no non-boundary edge aliases`);
     console.log(`  full-depth ribbon: ${ribbonProof.map(({ label, latestY, endSample }) => `${label}@${endSample}:y=${latestY.toFixed(1)}`).join(", ")} remained distinct and matched the live meter projection`);
     console.log(`  rendered occupancy: ${occupancyEntryProof.label} entered at ${stableOccupancyProgression[0].endSample}:0, then ${stableOccupancyProgression.slice(1, 6).map(({ endSample, heldSamples }) => `${endSample}:${heldSamples}`).join(", ")} as bounded exact projections; departure reset=0; silence cleared`);

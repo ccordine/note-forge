@@ -28,7 +28,9 @@ import {
 } from "./model";
 import {
   emptyLoopProgress,
-  profileFamilyOrder,
+  parkedMidiCount,
+  profileOrderedTargets,
+  recheckAllParkedMidis,
   type LoopProgress,
 } from "./progress";
 import {
@@ -39,17 +41,16 @@ import {
   type PersonalRangeProfile,
 } from "./profile";
 import {
-  createNoteDwell,
-  reduceNoteDwell,
-  type NoteDwellState,
-} from "@/features/training-session/note-dwell";
+  createRangeLoopCredit,
+  reduceRangeLoopCredit,
+  type RangeLoopCreditState,
+} from "./range-loop-credit";
 import {
-  completeRangeLoopFamily,
-  firstRangeLoopTarget,
-  hydrateRangeLoopState,
-  markRangeLoopTargetPassed,
-  rangeLoopTargetSequence,
+  RANGE_LOOP_SCORING_VERSION,
+  advanceRangeLoopTarget,
+  chooseRangeLoopTarget,
   createRangeLoopLiveState,
+  hydrateRangeLoopState,
   reduceRangeLoopLiveState,
   type RangeLoopLivePhase,
   type RangeLoopOrder,
@@ -66,15 +67,19 @@ export interface RangeLoopSession {
   readonly noteSet: FamilyNoteSet;
   readonly order: RangeLoopOrder;
   readonly phase: RangeLoopLivePhase;
-  readonly holdSeconds: number;
   readonly toleranceCents: number;
   readonly targetMidi: number;
   readonly sequence: readonly number[];
   readonly passedMidis: ReadonlySet<number>;
+  readonly parkedMidis: ReadonlySet<number>;
   readonly followingMidi: number;
-  readonly dwell: NoteDwellState;
+  readonly earnedCount: number;
+  readonly credit: RangeLoopCreditState;
+  readonly practicePoints: number;
   readonly achievementReached: boolean;
+  readonly acceptingCredit: boolean;
   readonly holding: boolean;
+  readonly excludedNoteCount: number;
   readonly hydrated: boolean;
   readonly persistenceState: RangeLoopPersistenceState;
   readonly profileBaselineMidi: number;
@@ -83,25 +88,13 @@ export interface RangeLoopSession {
   readonly referencePlayback: Readonly<SustainedNoteControl>;
   readonly start: () => void;
   readonly finish: () => void;
-  readonly resetHold: () => void;
   readonly advanceTarget: () => void;
+  readonly markCurrentOutsideRange: () => void;
+  readonly recheckExcludedNotes: () => void;
   readonly changeFamily: (familyId: RangeFamilyId) => void;
   readonly changeNoteSet: (noteSet: FamilyNoteSet) => void;
   readonly changeOrder: (order: RangeLoopOrder) => void;
-  readonly changeHold: (seconds: number) => void;
   readonly changeTolerance: (cents: number) => void;
-}
-
-function createDwell(
-  targetMidi: number,
-  toleranceCents: number,
-  holdSeconds: number,
-): NoteDwellState {
-  return createNoteDwell({
-    targetMidi,
-    toleranceCents,
-    requiredHoldSeconds: holdSeconds,
-  });
 }
 
 export function useRangeLoopSession(): RangeLoopSession {
@@ -115,7 +108,6 @@ export function useRangeLoopSession(): RangeLoopSession {
   const [activeFamilyId, setActiveFamilyId] = useState<RangeFamilyId>("low");
   const [noteSet, setNoteSet] = useState<FamilyNoteSet>("natural");
   const [order, setOrder] = useState<RangeLoopOrder>("ascending");
-  const [holdSeconds, setHoldSeconds] = useState(3);
   const [targetMidi, setTargetMidi] = useState(DEFAULT_BASELINE_MIDI);
   const [progress, setProgress] = useState<LoopProgress>(emptyLoopProgress);
   const [profile, setProfile] = useState<PersonalRangeProfile>(createDefaultRangeProfile);
@@ -131,12 +123,15 @@ export function useRangeLoopSession(): RangeLoopSession {
     reduceRangeLoopLiveState,
     createRangeLoopLiveState,
   );
-  const dwellSession = useRealtimeSession(
-    reduceNoteDwell,
-    () => createDwell(DEFAULT_BASELINE_MIDI, preferenceToleranceCents, 3),
+  const creditSession = useRealtimeSession(
+    reduceRangeLoopCredit,
+    () => createRangeLoopCredit({
+      targetMidi: DEFAULT_BASELINE_MIDI,
+      toleranceCents: preferenceToleranceCents,
+    }),
   );
-  const dwell = dwellSession.state;
-  const activeToleranceCents = dwell.toleranceCents;
+  const credit = creditSession.state;
+  const activeToleranceCents = credit.toleranceCents;
   const referencePlayback = useSustainedNote({
     frequencyHz: continuousMidiToHz(targetMidi),
     timbre,
@@ -145,32 +140,35 @@ export function useRangeLoopSession(): RangeLoopSession {
 
   const input = useAudioInput({
     // Persistence chooses the authoritative target/configuration. Observations
-    // received before that one-time hydration remain available in the shared
-    // AudioKernel, but must not accrue against a disposable default dwell.
+    // received before hydration remain in the AudioKernel, but score nowhere.
     onFrame: (observation) => {
       if (hydrated && liveSession.getCurrent().phase === "tracking") {
-        dwellSession.observe({ type: "observation", observation });
+        creditSession.observe({ type: "observation", observation });
       }
     },
   });
 
-  const replaceDwell = useCallback((next: NoteDwellState) => {
-    dwellSession.dispatch({ type: "replace", state: next });
-  }, [dwellSession.dispatch]);
+  const replaceCredit = useCallback((next: RangeLoopCreditState) => {
+    creditSession.dispatch({ type: "replace", state: next });
+  }, [creditSession.dispatch]);
 
   useLayoutEffect(() => {
-    dwellSession.dispatch({
+    creditSession.dispatch({
       type: "reconfigure-tolerance",
       toleranceCents: preferenceToleranceCents,
     });
-  }, [dwellSession.dispatch, preferenceToleranceCents]);
+  }, [creditSession.dispatch, preferenceToleranceCents]);
 
-  const prepareTarget = useCallback((nextTarget: number) => {
+  const prepareTarget = useCallback((nextTarget: number, acceptingCredit = true) => {
     setTargetMidi(nextTarget);
-    replaceDwell(createDwell(nextTarget, activeToleranceCents, holdSeconds));
+    replaceCredit(createRangeLoopCredit({
+      targetMidi: nextTarget,
+      toleranceCents: creditSession.getCurrent().toleranceCents,
+      acceptingCredit,
+    }));
     setSelectedMidi(nextTarget);
     setCentsOffset(0);
-  }, [activeToleranceCents, holdSeconds, replaceDwell, setCentsOffset, setSelectedMidi]);
+  }, [creditSession.getCurrent, replaceCredit, setCentsOffset, setSelectedMidi]);
 
   useEffect(() => {
     const handoffMidi = consumeRangeLoopHandoff();
@@ -191,35 +189,29 @@ export function useRangeLoopSession(): RangeLoopSession {
       setActiveFamilyId(next.activeFamilyId);
       setNoteSet(next.noteSet);
       setOrder(next.order);
-      setHoldSeconds(next.holdSeconds);
       setTargetMidi(next.targetMidi);
       setSelectedMidi(next.targetMidi);
       setCentsOffset(0);
-      replaceDwell(createDwell(
-        next.targetMidi,
-        preferenceToleranceRef.current,
-        next.holdSeconds,
-      ));
+      replaceCredit(createRangeLoopCredit({
+        targetMidi: next.targetMidi,
+        toleranceCents: preferenceToleranceRef.current,
+        acceptingCredit: next.targetAcceptsCredit,
+      }));
       setStorageReady(loopRead && profileRead);
       setPersistenceState(loopRead && profileRead ? "saved" : "error");
       setHydrated(true);
       clearRangeLoopHandoff();
     });
     return () => persistence.dispose();
-  }, [
-    persistence,
-    replaceDwell,
-    setCentsOffset,
-    setSelectedMidi,
-  ]);
+  }, [persistence, replaceCredit, setCentsOffset, setSelectedMidi]);
 
   useEffect(() => {
     if (!hydrated || !storageReady) return;
     const snapshot: StoredRangeLoopState = {
+      scoringVersion: RANGE_LOOP_SCORING_VERSION,
       activeFamilyId,
       noteSet,
       order,
-      holdSeconds,
       targetMidi,
       progress,
     };
@@ -229,7 +221,6 @@ export function useRangeLoopSession(): RangeLoopSession {
     ], setPersistenceState);
   }, [
     activeFamilyId,
-    holdSeconds,
     hydrated,
     noteSet,
     order,
@@ -240,106 +231,103 @@ export function useRangeLoopSession(): RangeLoopSession {
     targetMidi,
   ]);
 
-  useEffect(() => {
-    if (!dwell.achievementReached) return;
-    setProgress((current) => markRangeLoopTargetPassed(
-      current,
-      activeFamilyId,
-      noteSet,
-      targetMidi,
-    ));
-  }, [activeFamilyId, dwell.achievementReached, noteSet, targetMidi]);
-
   const sequence = useMemo(
-    () => rangeLoopTargetSequence(activeFamilyId, noteSet, order),
-    [activeFamilyId, noteSet, order],
+    () => profileOrderedTargets(noteSet, activeFamilyId, order, profile.baseline.midi),
+    [activeFamilyId, noteSet, order, profile.baseline.midi],
   );
   const passedMidis = useMemo(
     () => new Set(progress[noteSet][activeFamilyId].passedMidis),
     [activeFamilyId, noteSet, progress],
   );
+  const parkedMidis = useMemo(
+    () => new Set(progress[noteSet][activeFamilyId].parkedMidis),
+    [activeFamilyId, noteSet, progress],
+  );
+  const nextChoice = useMemo(() => (
+    credit.acceptingCredit
+      ? advanceRangeLoopTarget(
+        progress,
+        activeFamilyId,
+        noteSet,
+        order,
+        profile.baseline.midi,
+        targetMidi,
+        "passed",
+      )
+      : null
+  ), [activeFamilyId, credit.acceptingCredit, noteSet, order, profile.baseline.midi, progress, targetMidi]);
   const family = getRangeFamily(activeFamilyId);
-  const targetIndex = Math.max(0, sequence.indexOf(targetMidi));
-  const followingMidi = sequence[(targetIndex + 1) % sequence.length] ?? targetMidi;
   const profileBounds = usableRangeBounds(profile);
-  const achievementReached = dwell.achievementReached;
-  const holding = input.state === "running" && dwell.currentInTolerance === true;
+  const achievementReached = credit.achievementReached;
+  const holding = input.state === "running"
+    && credit.acceptingCredit
+    && credit.currentInTolerance === true;
 
-  const start = () => {
-    replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds));
-    liveSession.dispatch({ type: "start" });
-  };
-
-  const finish = () => {
-    // Commit every observation reduced before this explicit command before
-    // presenting the completed phase. A queued coalesced publication must not
-    // make finished dwell appear to keep changing afterward.
-    dwellSession.flushPresentation();
-    liveSession.dispatch({ type: "finish" });
-  };
-
-  const changeFamily = (nextFamily: RangeFamilyId) => {
-    setActiveFamilyId(nextFamily);
-    const baseline = profile.baseline.midi;
-    const targets = rangeLoopTargetSequence(nextFamily, noteSet, order);
-    prepareTarget(targets.includes(baseline)
-      ? baseline
-      : firstRangeLoopTarget(progress, nextFamily, noteSet, order));
-  };
-
-  const changeNoteSet = (nextSet: FamilyNoteSet) => {
-    setNoteSet(nextSet);
-    const baseline = profile.baseline.midi;
-    const targets = rangeLoopTargetSequence(activeFamilyId, nextSet, order);
-    prepareTarget(targets.includes(baseline)
-      ? baseline
-      : firstRangeLoopTarget(progress, activeFamilyId, nextSet, order));
-  };
-
-  const changeOrder = (nextOrder: RangeLoopOrder) => {
-    setOrder(nextOrder);
-    prepareTarget(firstRangeLoopTarget(progress, activeFamilyId, noteSet, nextOrder));
-  };
-
-  const changeHold = (nextHold: number) => {
-    setHoldSeconds(nextHold);
-    replaceDwell(createDwell(targetMidi, activeToleranceCents, nextHold));
-  };
-
-  const changeTolerance = (nextTolerance: number) => {
-    setToleranceCents(nextTolerance);
-    dwellSession.dispatch({
-      type: "reconfigure-tolerance",
-      toleranceCents: nextTolerance,
-    });
-  };
-
-  const advanceTarget = () => {
-    const completedProgress = markRangeLoopTargetPassed(
+  const applyDecision = (outcome: "passed" | "outside-range") => {
+    const next = advanceRangeLoopTarget(
       progress,
       activeFamilyId,
       noteSet,
+      order,
+      profile.baseline.midi,
       targetMidi,
+      outcome,
     );
-    const completedSet = new Set(completedProgress[noteSet][activeFamilyId].passedMidis);
-    const remaining = [
-      ...sequence.slice(targetIndex + 1),
-      ...sequence.slice(0, targetIndex),
-    ].find((midi) => !completedSet.has(midi));
-    if (remaining !== undefined) {
-      setProgress(completedProgress);
-      prepareTarget(remaining);
-      return;
-    }
+    setProgress(next.progress);
+    setActiveFamilyId(next.familyId);
+    prepareTarget(next.targetMidi, next.acceptingCredit);
+  };
 
-    const cycledProgress = completeRangeLoopFamily(completedProgress, activeFamilyId, noteSet);
-    const route = profileFamilyOrder(profile.baseline.midi);
-    const familyIndex = Math.max(0, route.indexOf(activeFamilyId));
-    const nextFamily = route[(familyIndex + 1) % route.length] ?? activeFamilyId;
-    const nextTarget = firstRangeLoopTarget(cycledProgress, nextFamily, noteSet, order);
-    setProgress(cycledProgress);
+  const changeFamily = (nextFamily: RangeFamilyId) => {
+    const choice = chooseRangeLoopTarget(
+      progress,
+      nextFamily,
+      noteSet,
+      order,
+      profile.baseline.midi,
+    );
     setActiveFamilyId(nextFamily);
-    prepareTarget(nextTarget);
+    prepareTarget(choice.targetMidi, choice.acceptingCredit);
+  };
+
+  const changeNoteSet = (nextSet: FamilyNoteSet) => {
+    const choice = chooseRangeLoopTarget(
+      progress,
+      activeFamilyId,
+      nextSet,
+      order,
+      profile.baseline.midi,
+    );
+    setNoteSet(nextSet);
+    prepareTarget(choice.targetMidi, choice.acceptingCredit);
+  };
+
+  const changeOrder = (nextOrder: RangeLoopOrder) => {
+    const choice = chooseRangeLoopTarget(
+      progress,
+      activeFamilyId,
+      noteSet,
+      nextOrder,
+      profile.baseline.midi,
+    );
+    setOrder(nextOrder);
+    prepareTarget(choice.targetMidi, choice.acceptingCredit);
+  };
+
+  const recheckExcludedNotes = () => {
+    if (parkedMidiCount(progress) === 0) return;
+    const nextProgress = recheckAllParkedMidis(progress);
+    setProgress(nextProgress);
+    if (!creditSession.getCurrent().acceptingCredit) {
+      const choice = chooseRangeLoopTarget(
+        nextProgress,
+        activeFamilyId,
+        noteSet,
+        order,
+        profile.baseline.midi,
+      );
+      prepareTarget(choice.targetMidi, choice.acceptingCredit);
+    }
   };
 
   return {
@@ -348,29 +336,53 @@ export function useRangeLoopSession(): RangeLoopSession {
     noteSet,
     order,
     phase: liveSession.state.phase,
-    holdSeconds,
     toleranceCents: activeToleranceCents,
     targetMidi,
     sequence,
     passedMidis,
-    followingMidi,
-    dwell,
+    parkedMidis,
+    followingMidi: nextChoice?.targetMidi ?? targetMidi,
+    earnedCount: passedMidis.size + Number(achievementReached && !passedMidis.has(targetMidi)),
+    credit,
+    practicePoints: Math.floor(credit.creditedSeconds * 1_000 + 1e-6),
     achievementReached,
+    acceptingCredit: credit.acceptingCredit,
     holding,
+    excludedNoteCount: parkedMidiCount(progress),
     hydrated,
     persistenceState,
     profileBaselineMidi: profile.baseline.midi,
     profileLowMidi: profileBounds.lowMidi,
     profileHighMidi: profileBounds.highMidi,
     referencePlayback,
-    start,
-    finish,
-    resetHold: () => replaceDwell(createDwell(targetMidi, activeToleranceCents, holdSeconds)),
-    advanceTarget,
+    start: () => liveSession.dispatch({ type: "start" }),
+    finish: () => {
+      creditSession.flushPresentation();
+      liveSession.dispatch({ type: "finish" });
+    },
+    advanceTarget: () => {
+      if (creditSession.getCurrent().achievementReached) applyDecision("passed");
+    },
+    markCurrentOutsideRange: () => {
+      const currentCredit = creditSession.getCurrent();
+      if (
+        liveSession.getCurrent().phase === "tracking"
+        && currentCredit.acceptingCredit
+        && !currentCredit.achievementReached
+      ) {
+        applyDecision("outside-range");
+      }
+    },
+    recheckExcludedNotes,
     changeFamily,
     changeNoteSet,
     changeOrder,
-    changeHold,
-    changeTolerance,
+    changeTolerance: (nextTolerance) => {
+      setToleranceCents(nextTolerance);
+      creditSession.dispatch({
+        type: "reconfigure-tolerance",
+        toleranceCents: nextTolerance,
+      });
+    },
   };
 }

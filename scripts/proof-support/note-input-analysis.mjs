@@ -157,6 +157,7 @@ export function analyzeImmediatePitchTransitions({
   renderedFrames,
   expectedMidis,
   labelForMidi,
+  confirmationFrames,
 }) {
   const diagnosticIndexByKey = new Map(
     diagnosticFrames.map((frame, index) => [canonicalFrameKey(frame), index]),
@@ -166,8 +167,27 @@ export function analyzeImmediatePitchTransitions({
   let previousAcceptedEndSample = null;
   return expectedMidis.map((midi) => {
     const label = labelForMidi(midi);
+    const acceptedOffset = diagnosticFrames.slice(diagnosticSearchIndex)
+      .findIndex((frame) => frame.voiced && frame.nearestMidi === midi);
+    const acceptedFrameIndex = acceptedOffset < 0
+      ? -1
+      : diagnosticSearchIndex + acceptedOffset;
+    const detectorFrame = acceptedFrameIndex < 0
+      ? null
+      : diagnosticFrames[acceptedFrameIndex];
+    const confirmationStartIndex = acceptedFrameIndex < 0
+      ? -1
+      : acceptedFrameIndex - confirmationFrames + 1;
+    const transitionFrames = confirmationStartIndex < diagnosticSearchIndex
+      ? []
+      : diagnosticFrames.slice(confirmationStartIndex, acceptedFrameIndex + 1);
+    const pendingFrameKeys = new Set(
+      transitionFrames.slice(0, -1).map(canonicalFrameKey),
+    );
     const candidateOffset = presentationClaims.slice(renderedSearchIndex)
-      .findIndex((observation) => observation.candidateMidi === midi);
+      .findIndex((observation) =>
+        observation.trackingDecision === "pending-transition"
+          && pendingFrameKeys.has(canonicalFrameKey(observation)));
     const candidateRenderedIndex = candidateOffset < 0
       ? -1
       : renderedSearchIndex + candidateOffset;
@@ -180,18 +200,6 @@ export function analyzeImmediatePitchTransitions({
     const candidateFrame = candidateFrameIndex < 0
       ? null
       : diagnosticFrames[candidateFrameIndex];
-    const acceptedOffset = diagnosticFrames.slice(
-      Math.max(diagnosticSearchIndex, candidateFrameIndex),
-    ).findIndex((frame) => frame.voiced && frame.nearestMidi === midi);
-    const acceptedFrameIndex = acceptedOffset < 0
-      ? -1
-      : Math.max(diagnosticSearchIndex, candidateFrameIndex) + acceptedOffset;
-    const detectorFrame = acceptedFrameIndex < 0
-      ? null
-      : diagnosticFrames[acceptedFrameIndex];
-    const previousDetectorFrame = acceptedFrameIndex <= 0
-      ? null
-      : diagnosticFrames[acceptedFrameIndex - 1];
     const rendered = detectorFrame === null
       ? null
       : renderedFrames.find((observation) =>
@@ -210,7 +218,7 @@ export function analyzeImmediatePitchTransitions({
       candidateFrame,
       candidateRendered,
       detectorFrame,
-      previousDetectorFrame,
+      transitionFrames,
       transitionGapSamples,
       rendered,
     };
@@ -219,7 +227,7 @@ export function analyzeImmediatePitchTransitions({
 
 export function immediatePitchTransitionFailures(
   proof,
-  { hopSamples, maximumSegmentSamples },
+  { confirmationFrames, hopSamples, maximumSegmentSamples },
 ) {
   const failures = [];
   for (const [index, transition] of proof.entries()) {
@@ -229,7 +237,7 @@ export function immediatePitchTransitionFailures(
       candidateFrame,
       candidateRendered,
       detectorFrame,
-      previousDetectorFrame,
+      transitionFrames,
       transitionGapSamples,
       rendered,
     } = transition;
@@ -242,37 +250,62 @@ export function immediatePitchTransitionFailures(
       && rendered?.observationKind === "voiced"
       && rendered?.inputState === "running";
     const candidateTelemetryMatches = candidateFrame !== null
+      && candidateFrame.observationKind === "uncertain"
+      && candidateFrame.voiced === false
+      && candidateFrame.nearestMidi === null
+      && candidateFrame.reason === "temporally-ambiguous"
+      && candidateFrame.pitchTrackingDecision === "pending-transition"
+      && candidateFrame.pitchCandidate?.voiced === true
+      && candidateFrame.pitchCandidate.reason === "detected"
       && candidateRendered?.endSample === candidateFrame.endSample
       && candidateRendered?.captureEpoch === candidateFrame.captureEpoch
-      && candidateRendered?.candidateMidi === midi
-      && nearestMidiForFrequency(candidateRendered?.candidateFrequencyHz) === midi
-      && nearestMidiForFrequency(candidateRendered?.candidateRawFrequencyHz) === midi
+      && candidateRendered?.continuityEpoch === candidateFrame.continuityEpoch
+      && candidateRendered?.graphGeneration === candidateFrame.graphGeneration
+      && candidateRendered?.candidateMidi === candidateFrame.pitchCandidate?.nearestMidi
+      && nearestMidiForFrequency(candidateRendered?.candidateFrequencyHz)
+        === candidateFrame.pitchCandidate?.nearestMidi
+      && Number.isFinite(candidateRendered?.candidateRawFrequencyHz)
       && candidateRendered?.inputState === "running";
     const segmentTimingMatches = index === 0
       || (transitionGapSamples !== null
         && transitionGapSamples > 0
         && transitionGapSamples <= maximumSegmentSamples);
-    const coldAttackMatches = index !== 0 || (
-      candidateFrame === detectorFrame
-      && candidateRendered?.endSample === rendered?.endSample
-      && candidateRendered?.displayedMidi === midi
-      && rendered?.trackingDecision === "accepted-cold-attack"
-    );
-    const remoteTransitionMatches = index === 0 || (
-      candidateFrame?.voiced === false
-      && candidateFrame.nearestMidi === null
-      && candidateFrame.reason === "temporally-ambiguous"
+    const consecutiveFrames = transitionFrames.length === confirmationFrames
+      && transitionFrames.every((frame, frameIndex) => {
+        const previous = transitionFrames[frameIndex - 1];
+        return frame.pitchCandidate?.voiced === true
+          && frame.pitchCandidate.reason === "detected"
+          && (!previous || (
+            frame.captureEpoch === previous.captureEpoch
+            && frame.continuityEpoch === previous.continuityEpoch
+            && frame.graphGeneration === previous.graphGeneration
+            && !frame.discontinuity
+            && frame.endSample - previous.endSample === hopSamples
+          ));
+      });
+    const pendingFrames = transitionFrames.slice(0, -1);
+    const remoteTransitionMatches = consecutiveFrames
+      && pendingFrames.length === confirmationFrames - 1
+      && pendingFrames.every((frame) =>
+        frame.observationKind === "uncertain"
+          && frame.voiced === false
+          && frame.nearestMidi === null
+          && frame.reason === "temporally-ambiguous"
+          && frame.pitchTrackingDecision === "pending-transition")
       && candidateRendered?.observationKind === "uncertain"
       && candidateRendered.trackingDecision === "pending-transition"
       && candidateRendered.displayedMidi === null
-      && previousDetectorFrame === candidateFrame
-      && detectorFrame.endSample - candidateFrame.endSample === hopSamples
-      && rendered?.trackingDecision === "accepted-confirmed-transition"
-    );
+      && candidateFrame.captureEpoch === transitionFrames[0]?.captureEpoch
+      && candidateFrame.continuityEpoch === transitionFrames[0]?.continuityEpoch
+      && candidateFrame.graphGeneration === transitionFrames[0]?.graphGeneration
+      && candidateFrame.endSample >= transitionFrames[0]?.endSample
+      && candidateFrame.endSample < detectorFrame?.endSample
+      && detectorFrame === transitionFrames.at(-1)
+      && detectorFrame?.pitchTrackingDecision === "accepted-confirmed-transition"
+      && rendered?.trackingDecision === "accepted-confirmed-transition";
     if (!commonAccepted
       || !candidateTelemetryMatches
       || !segmentTimingMatches
-      || !coldAttackMatches
       || !remoteTransitionMatches) {
       failures.push(`${label}: ${JSON.stringify(transition)}`);
     }
@@ -281,10 +314,8 @@ export function immediatePitchTransitionFailures(
 }
 
 export function formatImmediatePitchTransitions(proof) {
-  return proof.map(({ label, candidateFrame, detectorFrame }) =>
-    candidateFrame === detectorFrame
-      ? `${label} candidate/accepted@${detectorFrame?.endSample}`
-      : `${label} candidate@${candidateFrame?.endSample} uncertain -> accepted@${detectorFrame?.endSample}`)
+  return proof.map(({ label, candidateFrame, detectorFrame, transitionFrames }) =>
+    `${label} candidate@${candidateFrame?.endSample} uncertain ×${Math.max(0, transitionFrames.length - 1)} -> confirmed@${detectorFrame?.endSample}`)
     .join(", ");
 }
 

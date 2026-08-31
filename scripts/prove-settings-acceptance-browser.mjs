@@ -341,11 +341,12 @@ async function main() {
           && input?.getAttribute('data-detected-note') === '${TARGET_LABEL}'
           && lane?.classList.contains('searching')
           && error > ${TOLERANCE_CENTS}
-          && Number(input?.getAttribute('data-held-seconds')) === 0;
+          && Number(input?.getAttribute('data-held-seconds')) >= ${inside.heldSeconds};
       })()`,
       `real shared rejection of +${OUTSIDE_CENTS} cents outside ±${TOLERANCE_CENTS}`,
       8_000,
     );
+    const outsideCreditStart = await inspectRangeAcceptance(session);
     const outsideStart = await generatedMicrophoneSnapshot(session);
     await waitForGeneratedWindows(
       session,
@@ -357,9 +358,13 @@ async function main() {
     assert(outside.guidance?.includes("FIND THE TARGET LANE")
       && outside.laneClass?.includes("searching")
       && outside.errorCents > TOLERANCE_CENTS
-      && outside.heldSeconds === 0
+      && outside.heldSeconds === outsideCreditStart.heldSeconds
+      && outside.heldSeconds >= inside.heldSeconds
       && outside.result === null,
-    `Outside-boundary pitch was accepted or retained stale dwell: ${describe(outside)}.`);
+    `Outside-boundary pitch added credit or erased prior collective credit: ${describe({
+      before: outsideCreditStart,
+      after: outside,
+    })}.`);
 
     // Keep the same +11-cent oscillator running while changing the user-visible
     // global setting. This is the regression boundary: Range Loop must consume
@@ -421,7 +426,7 @@ async function main() {
       && liveAccepted.errorCents > TOLERANCE_CENTS
       && liveAccepted.errorCents <= UPDATED_TOLERANCE_CENTS
       && liveAccepted.heldSeconds > liveAcceptedStart.heldSeconds,
-    `Live tolerance update did not admit the same pitch and grow dwell: ${describe({
+    `Live tolerance update did not admit the same pitch and grow collective credit: ${describe({
       start: liveAcceptedStart,
       later: liveAccepted,
     })}.`);

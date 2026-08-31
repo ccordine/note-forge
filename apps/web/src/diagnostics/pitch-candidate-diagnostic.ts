@@ -23,7 +23,6 @@ export interface PitchCandidateDiagnostic {
   voiced: boolean;
   reason: YinPitchFrame["reason"];
   rawCandidate: RawPitchCandidateDiagnostic | null;
-  harmonicAmbiguity: number;
 }
 
 function roundedBounded(
@@ -107,12 +106,5 @@ export function serializePitchCandidate(
     voiced: candidate.voiced,
     reason: candidate.reason,
     rawCandidate: serializeRawCandidate(candidate.rawCandidate ?? null),
-    harmonicAmbiguity: roundedBounded(
-      candidate.harmonicAmbiguity,
-      "Candidate harmonic ambiguity",
-      0,
-      1,
-      4,
-    ),
   };
 }

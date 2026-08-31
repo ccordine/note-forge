@@ -10,6 +10,7 @@ export const NOISE_RMS_DBFS = -24;
 export const OLD_GATE_RMS_DBFS = -42;
 export const OLD_GATE_RMS_AMPLITUDE = 10 ** (OLD_GATE_RMS_DBFS / 20);
 export const IMMEDIATE_CHANGE_MIDIS = [48, 52, 55];
+export const PITCH_TRANSITION_CONFIRMATION_FRAMES = 4;
 
 const CHANNEL_COUNT = 1;
 const BITS_PER_SAMPLE = 16;
@@ -97,7 +98,10 @@ const STANDARD_MICROPHONE_SEGMENTS = Object.freeze([
 ]);
 
 export const SUSTAINED_NOTE_SECONDS = 8.5;
-export const SUSTAINED_FIXTURE_SECONDS = 38;
+/** Initial four-note survey used for detector/rendered sustain assertions. */
+export const SUSTAINED_SURVEY_SECONDS = 42;
+/** Survey plus six separated C3 attempts used by cumulative Range Loop. */
+export const SUSTAINED_FIXTURE_SECONDS = 88;
 export const SUSTAINED_NOTE_MIDIS = Object.freeze([
   LOWEST_SUPPORTED_MIDI,
   48,
@@ -107,7 +111,7 @@ export const SUSTAINED_NOTE_MIDIS = Object.freeze([
 
 export const NOISY_RANGE_C3_MIDI = 48;
 export const NOISY_RANGE_D3_MIDI = 50;
-export const NOISY_RANGE_D3_SECONDS = 6;
+export const NOISY_RANGE_D3_SECONDS = 34;
 
 const NOISY_RANGE_STAGE_DEFINITIONS = Object.freeze([
   {
@@ -162,7 +166,7 @@ const NOISY_RANGE_STAGE_DEFINITIONS = Object.freeze([
     durationSeconds: 2,
     changingNoise: true,
   },
-  { id: "clean-recovery", label: "clean C3 recovery", durationSeconds: 1.5 },
+  { id: "clean-recovery", label: "clean C3 recovery and collective-credit tail", durationSeconds: 18 },
 ]);
 
 let noisyRangeStageStartSample = 0;
@@ -193,6 +197,14 @@ const SUSTAINED_MICROPHONE_SEGMENTS = Object.freeze([
   { kind: "silence", durationSeconds: 0.5, rmsDbfs: Number.NEGATIVE_INFINITY },
   { midi: HIGHEST_SUPPORTED_MIDI, durationSeconds: SUSTAINED_NOTE_SECONDS, rmsDbfs: NORMAL_RMS_DBFS, voiceLike: true },
   { kind: "silence", durationSeconds: 2, rmsDbfs: Number.NEGATIVE_INFINITY },
+  // Range Loop begins during this tail. Six separate attempts prove that its
+  // 30-second goal is collective: each breath pauses, but never erases, credit.
+  ...Array.from({ length: 6 }, (_, index) => [
+    { midi: 48, durationSeconds: 8, rmsDbfs: QUIET_RMS_DBFS, dominantSecond: true, voiceLike: true },
+    ...(index < 5
+      ? [{ kind: "silence", durationSeconds: 0.4, rmsDbfs: Number.NEGATIVE_INFINITY }]
+      : []),
+  ]).flat(),
 ]);
 
 function encodeMicrophoneSegments(segments) {

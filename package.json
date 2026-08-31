@@ -9,6 +9,7 @@
   "description": "A local-first auditory-motor music laboratory.",
   "scripts": {
     "dev": "vite --config vite.config.ts",
+    "deploy:worknet": "sh scripts/deploy-worknet.sh",
     "build": "tsc -b && vite build --config vite.config.ts && node scripts/stamp-service-worker.mjs",
     "preview": "vite preview --config vite.config.ts",
     "audit:architecture": "node scripts/audit-architecture.mjs --enforce",

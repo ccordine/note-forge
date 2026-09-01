@@ -54,8 +54,8 @@ export interface ToneMapToneState {
 }
 
 export interface ToneMapCourseState {
-  readonly version: 1;
-  /** Persist this exact permutation; never regenerate it when restoring a course. */
+  readonly version: 2;
+  /** Persist this exact progressive order; never regenerate it when restoring a course. */
   readonly order: readonly number[];
   readonly currentLevel: number;
   readonly tones: Readonly<Record<number, ToneMapToneState>>;
@@ -98,6 +98,10 @@ export interface ToneMapLevelSummary {
 }
 
 const SKILLS = Object.freeze(["identification", "production"] as const);
+const TONE_MAP_REGISTER_BASES = Object.freeze([60, 48, 72, 36, 84, 24, 96] as const);
+const TONE_MAP_LANDMARK_OFFSETS = Object.freeze([0, 2, 4, 6, 8, 10] as const);
+const TONE_MAP_GAP_OFFSETS = Object.freeze([1, 3, 5, 7, 9, 11] as const);
+const TONE_MAP_EDGE_MIDIS = Object.freeze([21, 22, 23, 108] as const);
 const EMPTY_EVIDENCE: ToneMapSkillEvidence = Object.freeze({
   attempts: 0,
   correct: 0,
@@ -175,6 +179,27 @@ function pianoMidis(): number[] {
   return Array.from({ length: TONE_MAP_TONE_COUNT }, (_, index) => TONE_MAP_MIN_MIDI + index);
 }
 
+/**
+ * The map begins with coarse landmarks in C4-B4, fills the semitone gaps, and
+ * then repeats that landmark/gap relationship in neighboring registers while
+ * alternating outward. The four physical-piano edge keys form the final band.
+ */
+function progressiveLevelBands(): readonly (readonly number[])[] {
+  return Object.freeze([
+    ...TONE_MAP_REGISTER_BASES.flatMap((baseMidi) => [
+      Object.freeze(TONE_MAP_LANDMARK_OFFSETS.map((offset) => baseMidi + offset)),
+      Object.freeze(TONE_MAP_GAP_OFFSETS.map((offset) => baseMidi + offset)),
+    ]),
+    TONE_MAP_EDGE_MIDIS,
+  ]);
+}
+
+const TONE_MAP_LEVEL_BANDS = progressiveLevelBands();
+
+function hasSameMidis(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((midi) => right.includes(midi));
+}
+
 function emptyTones(): Record<number, ToneMapToneState> {
   return Object.fromEntries(pianoMidis().map((midi) => [midi, {
     identification: { ...EMPTY_EVIDENCE },
@@ -193,18 +218,22 @@ export function validateToneMapCourseOrder(candidate: unknown): readonly number[
     return value;
   });
   if (new Set(order).size !== TONE_MAP_TONE_COUNT) throw new RangeError("Course order cannot repeat a MIDI note.");
-  if (order.every((midi, index) => midi === TONE_MAP_MIN_MIDI + index)) {
-    throw new RangeError("Course order must be shuffled rather than fixed chromatic order.");
+  for (let levelIndex = 0; levelIndex < TONE_MAP_LEVEL_BANDS.length; levelIndex += 1) {
+    const start = levelIndex * TONE_MAP_LEVEL_SIZE;
+    const actual = order.slice(start, start + TONE_MAP_LEVEL_SIZE);
+    const expected = TONE_MAP_LEVEL_BANDS[levelIndex]!;
+    if (!hasSameMidis(actual, expected)) {
+      throw new RangeError("Course order must preserve progressive landmark and gap-fill levels.");
+    }
   }
   return order;
 }
 
 export function createToneMapCourse(seed: ToneMapSeed): ToneMapCourseState {
-  const order = shuffled(pianoMidis(), seed);
-  if (order.every((midi, index) => midi === TONE_MAP_MIN_MIDI + index)) {
-    [order[0], order[1]] = [order[1]!, order[0]!];
-  }
-  return { version: 1, order, currentLevel: 1, tones: emptyTones() };
+  const order = TONE_MAP_LEVEL_BANDS.flatMap((band, levelIndex) => (
+    shuffled(band, `${String(seed)}:level:${levelIndex + 1}`)
+  ));
+  return { version: 2, order, currentLevel: 1, tones: emptyTones() };
 }
 
 /** Strictly restores the persisted model without regenerating its course order. */
@@ -287,6 +316,7 @@ function updatedEvidence(
     && previous.guidedRecoveryRemaining === 0;
   const blindConfirmedAfterGuidance = wasCorrect && guidanceEstablished;
   const blindStreak = blindConfirmedAfterGuidance ? previous.blindStreak + 1 : 0;
+  const stable = blindStreak >= TONE_MAP_BLIND_CORRECT_REQUIRED && blindConfirmedAfterGuidance;
   return {
     ...common,
     blindAttempts: previous.blindAttempts + 1,
@@ -294,10 +324,10 @@ function updatedEvidence(
     blindStreak,
     bestBlindStreak: Math.max(previous.bestBlindStreak, blindStreak),
     blindConfirmedAfterGuidance,
-    stable: blindStreak >= TONE_MAP_BLIND_CORRECT_REQUIRED && blindConfirmedAfterGuidance,
+    stable,
     lapses: previous.lapses + (wasCorrect ? 0 : 1),
     guidedRecoveryRemaining: wasCorrect ? previous.guidedRecoveryRemaining : 1,
-    lastBlindConfirmedLevel: blindConfirmedAfterGuidance ? level : previous.lastBlindConfirmedLevel,
+    lastBlindConfirmedLevel: stable ? level : null,
   };
 }
 
@@ -338,16 +368,25 @@ export function setToneMapProductionEligibility(
   };
 }
 
-function taskWeakness(course: ToneMapCourseState, task: ToneMapTask): readonly number[] {
+/**
+ * Every active task advances through one cumulative randomized challenge. New
+ * tones spend their first two rounds building association while retained tones
+ * immediately supply blind evidence. Lowest-round selection makes every active
+ * task appear before any task advances again, so an added band cannot replace
+ * or starve the familiar pool.
+ */
+function taskSelectionRank(course: ToneMapCourseState, task: ToneMapTask): readonly number[] {
   const evidence = evidenceFor(course, task.midi, task.skill);
-  if (evidence.guidedRecoveryRemaining > 0) return [0, 0, -evidence.lapses];
-  if (evidence.guidedStreak < TONE_MAP_GUIDED_CORRECT_REQUIRED) return [1, evidence.guidedStreak, -evidence.lapses];
-  if (!evidence.stable) return [2, evidence.blindStreak, -evidence.lapses];
-  if (evidence.lastBlindConfirmedLevel !== course.currentLevel) return [3, 0, -evidence.lapses];
-  return [4, 0, -evidence.lapses];
+  if (evidence.guidedRecoveryRemaining > 0) return [-1, -evidence.lapses];
+  const introduced = toneMapLevelMidis(course).includes(task.midi);
+  const needsLevelGuidance = introduced || evidence.bestBlindStreak < TONE_MAP_BLIND_CORRECT_REQUIRED;
+  const guidanceProgress = needsLevelGuidance
+    ? Math.min(evidence.guidedStreak, TONE_MAP_GUIDED_CORRECT_REQUIRED)
+    : 0;
+  return [guidanceProgress + evidence.blindStreak, -evidence.lapses];
 }
 
-function compareWeakness(left: readonly number[], right: readonly number[]): number {
+function compareTaskRank(left: readonly number[], right: readonly number[]): number {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0);
     if (difference !== 0) return difference;
@@ -371,11 +410,11 @@ export function chooseToneMapTask(
     }
   }
   if (candidates.length === 0) return null;
-  candidates.sort((left, right) => compareWeakness(taskWeakness(course, left), taskWeakness(course, right)));
-  const weakest = taskWeakness(course, candidates[0]!);
-  let pool = candidates.filter((task) => compareWeakness(taskWeakness(course, task), weakest) === 0);
-  const withoutRepeat = pool.filter((task) => task.midi !== options.previousTask?.midi);
-  if (withoutRepeat.length > 0) pool = withoutRepeat;
+  const withoutRepeat = candidates.filter((task) => task.midi !== options.previousTask?.midi);
+  const eligible = withoutRepeat.length > 0 ? withoutRepeat : candidates;
+  eligible.sort((left, right) => compareTaskRank(taskSelectionRank(course, left), taskSelectionRank(course, right)));
+  const nextRank = taskSelectionRank(course, eligible[0]!);
+  const pool = eligible.filter((task) => compareTaskRank(taskSelectionRank(course, task), nextRank) === 0);
   const random = createSeededRandom(options.seed);
   return pool[Math.floor(random() * pool.length)]!;
 }
@@ -434,9 +473,27 @@ export function advanceToneMapLevel(
   course: ToneMapCourseState,
   requiredSkills: readonly ToneMapSkill[],
 ): ToneMapCourseState {
-  return summarizeToneMapLevel(course, requiredSkills).canAdvance
-    ? { ...course, currentLevel: course.currentLevel + 1 }
-    : course;
+  if (!summarizeToneMapLevel(course, requiredSkills).canAdvance) return course;
+  const tones = { ...course.tones };
+  for (const midi of toneMapActiveMidis(course)) {
+    const tone = tones[midi]!;
+    tones[midi] = {
+      ...tone,
+      identification: resetLevelStabilityProof(tone.identification),
+      production: resetLevelStabilityProof(tone.production),
+    };
+  }
+  return { ...course, currentLevel: course.currentLevel + 1, tones };
+}
+
+function resetLevelStabilityProof(evidence: ToneMapSkillEvidence): ToneMapSkillEvidence {
+  return {
+    ...evidence,
+    blindStreak: 0,
+    blindConfirmedAfterGuidance: false,
+    stable: false,
+    lastBlindConfirmedLevel: null,
+  };
 }
 
 export function createToneMapSimonSequence(

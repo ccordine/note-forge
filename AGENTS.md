@@ -464,30 +464,48 @@ The canonical tone-map activity trains commitment before feedback. A learner
 hears a prompt and answers from memory; the requested note, its keyboard marker,
 the detected vocal note, frequency, cents, and correctness remain absent from
 the visible answer surface until the learner explicitly commits an answer.
-Guided trials may deliberately show the note label while first establishing an
-association, but guided correctness never counts as blind mastery.
+Guided trials distinguish association-building evidence from later blind
+mastery, but the prompt never names its target; static key labels provide the
+learner's answer context.
 
 - Recognition spans the physical 88-key piano, MIDI 21 through 108. The piano
-  is one shared component inside its own horizontally scrolling viewport. At
-  phone widths only the keyboard scrolls horizontally; the document and the
-  prompt/progress controls remain width-contained and stationary.
+  is one shared component inside its own horizontally scrolling viewport. Its
+  static note labels are always visible so an unfamiliar keyboard supplies
+  context without identifying the current target. At phone widths only the
+  keyboard scrolls horizontally; the document and the prompt/progress controls
+  remain width-contained and stationary.
 - A hidden target may not choose the keyboard scroll position, focus a key,
   alter pre-answer styling, add a marker, or otherwise leak its location.
-  Labels and answer/target markers appear only in committed-answer review.
-- Curriculum levels introduce six new MIDI tones. The active pool is cumulative:
-  level N schedules all tones from levels 1 through N. Trial order is randomized
-  from persisted curriculum order and current evidence, avoids immediate
-  repeats, and may emphasize weak/confused tones; it may never expose a fixed
-  pattern the learner can memorize instead of the sound mapping.
+  Answer and target markers appear only in committed-answer review; static key
+  labels never change with the target.
+- Curriculum levels introduce six new MIDI tones. The first level is six
+  evenly-spaced landmarks inside the middle C4-B4 register; the next level fills
+  the six semitone gaps. Later level pairs repeat landmarks then gap-fill in the
+  neighboring registers, alternating outward from the familiar middle, with the
+  four physical edge keys last. Randomization occurs only inside those persisted
+  level bands and during evidence-aware task selection, never by shuffling 88
+  unrelated pitches into early levels. The active pool is cumulative: level N
+  schedules all tones from levels 1 through N. Each ordinary evidence round is
+  randomized across that entire cumulative pool; every active task appears once
+  before any task advances into the next round. A newly introduced band may
+  never replace, dominate, or starve retained tones. Targeted lapse recovery may
+  interrupt a round, but immediate-MIDI exclusion still interleaves another
+  active tone first. Trial order may never expose a fixed pattern the learner
+  can memorize instead of the sound mapping. At the final level, all 88 keys
+  remain in these randomized rounds indefinitely; stability is an achievement,
+  never a terminal state.
 - Keyboard identification and vocal production are independent evidence for
   every MIDI. Each retains lifetime attempts/correct answers, recent stability,
   current blind streak, and best streak. A miss resets and revokes only the
   contradicted note/skill's current blind gate, retains history, and reopens a
   bounded guided recovery. It never erases unrelated notes or the whole level.
-- Early guided correctness establishes the sound/label association; later
-  blind answers establish recall. A tone becomes stable only through consecutive
-  blind evidence after its scaffold is hidden. All required evidence in the
-  cumulative active pool plus a fresh current-level confirmation is required
+- Early guided correctness establishes the sound/label association without
+  naming the target in the prompt; the always-labeled answer keys supply the
+  learner's note context. Later blind answers establish recall. A tone becomes
+  stable only through three consecutive blind answers. Every explicit level
+  advance begins a fresh three-answer blind stability proof for every retained
+  tone and skill while preserving lifetime totals and bests. All required
+  evidence in the cumulative active pool must complete that current-level proof
   before the user may explicitly advance. Advancement is never automatic.
 - Vocal answering consumes the shared target-independent `LiveNote`/observation
   authority. It never displays the detected answer before commitment, never
@@ -818,9 +836,22 @@ latency, which requires external loopback measurement.
 ear-to-note curriculum. At 320x568 and 390x844 it must prove that the page owns
 no horizontal overflow, only the complete 88-key keyboard scrolls sideways,
 all keys remain hit-testable, hidden targets cannot alter markup or scroll
-position, the isolated prompt remains On across answer and Next until explicit
-Stop, guided evidence actually becomes blind, and a blind miss reopens the
-same tone's visible recovery without changing the level. Its Simon leg must
+position, all 88 static labels remain visible without naming the prompt target,
+and the isolated prompt remains On across answer and Next until explicit Stop.
+Its first random pool must resolve to exactly the six C4-B4 landmarks; guided
+evidence must actually become blind, and a blind miss must make the same tone's
+recovery pending without changing the level. Even when that tone is uniquely
+weak, another active MIDI must appear before recovery and another must follow
+it; previous-MIDI exclusion happens before weakness ranking whenever at least
+two eligible notes exist. One or two correct blind answers may not count as
+stability. All six tones must complete their three-
+  answer streaks—18 blind commitments—before explicit widening produces 12
+  active tones at zero fresh stability. The first level-two evidence round must
+  contain each of MIDI 60 through 71 exactly once, proving the six added gaps
+  joined rather than replaced the six retained landmarks, and a true reload
+  must preserve that level and evidence. A pure session proof must exercise
+  repeated complete 88-key rounds after final stability without a terminal
+  transition. Its Simon leg must
 lock input before/during complete authored playback, leave the full response
 untimed, reveal only after every position is committed, and require explicit
 Next. Its voice leg must enter generated PCM only through the visible global
@@ -1023,6 +1054,48 @@ or non-Chromium browser; those require the same live counters and device evidenc
 Because every production detector call completed within its 20 ms hop and the
 stream accumulated no detector backlog, WASM is not justified by current
 measurements. Re-profile before changing that decision.
+
+## Tone Map progressive stability evidence — 2026-09-01
+
+- The model proof generated 128 independently seeded courses and kept every
+  random permutation inside the same 15 progressive level bands. A complete
+  level-one-through-level-fifteen simulation retained every earlier MIDI,
+  rejected stability after the first and second blind answers, required the
+  third consecutive answer for every active tone, and ended with all 88 piano
+  notes active. The session scheduler then completed eight consecutive
+  randomized 88-tone rounds—704 answers total, including three full rounds
+  after final stability—with every MIDI present once per round, no adjacent
+  repeat, a live next task, and no terminal transition.
+- The built `/#/practice/note-recognition/map` workflow passed independently at
+  320x568 and 390x844. Both runs exposed all 88 static key labels but no target
+  marker, target attribute, guided target name, or target-driven scroll. Every
+  first-level prompt resolved to exactly MIDI 60, 62, 64, 66, 68, and 70.
+- After twelve association-building answers, each run produced a real blind
+  miss on MIDI 62, interleaved MIDI 64/66, returned 62 through target-hidden
+  recovery, then interleaved MIDI 60/70 while keeping level one intact. This
+  reproduces the uniquely-weak-note case and proves weakness ranking cannot
+  produce consecutive duplicate prompts. One subsequent blind answer visibly
+  reported `1/3` without an advance control. The advance control appeared only
+  after exactly 18 correct blind commitments—three for each of six tones—and
+  only its explicit click widened the pool to 12 tones at `0/12 stable`. The
+  next 12 audible prompts contained every MIDI from 60 through 71 exactly once
+  at both viewports, proving the new six joined the retained six rather than
+  replacing them.
+- A true production-page reload at each viewport restored level two, all 12
+  active tones, `0/12 stable`, and an Off prompt. The Simon leg retained 88
+  static labels without naming any sequence target outside the keyboard, locked
+  early input, remained untimed, and revealed targets only after the complete
+  answer.
+- The generated-microphone leg published 134 exact overlapping worklet windows
+  through one 48 kHz stream/track/source/worklet and eight semantic status
+  transitions. Prompt-era, post-Stop, and cross-trial held pitch could not arm
+  the answer; fresh release and 250 ms sample-authoritative dwell did. There
+  were zero track writes and zero stops.
+- The final frontend suite passed 1,200/1,200 tests across 129 files. Typecheck
+  and the production build passed across 332 transformed modules; service
+  worker `0593e85281fb` precaches 74 resources. The architecture audit scanned
+  449 source files and 157 JSX components, reached all 247 application modules,
+  and reported zero violations and zero unreachable application files.
 
 ## Tone Map release evidence — 2026-08-25
 

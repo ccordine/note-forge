@@ -86,17 +86,23 @@ function stabilizeAll(
 }
 
 describe("tone-map course order and levels", () => {
-  it("creates one deterministic shuffled permutation of the physical piano", () => {
+  it("creates deterministic randomized bands in a progressive middle-out map", () => {
     const first = createToneMapCourse("learner-42");
     const second = createToneMapCourse("learner-42");
+    const different = createToneMapCourse("learner-43");
     const chromatic = Array.from({ length: 88 }, (_, index) => 21 + index);
 
     expect(first.order).toEqual(second.order);
-    expect(first.order).not.toEqual(chromatic);
+    expect(first.order).not.toEqual(different.order);
     expect(first.order).toHaveLength(TONE_MAP_TONE_COUNT);
     expect([...first.order].sort((left, right) => left - right)).toEqual(chromatic);
     expect(Math.min(...first.order)).toBe(TONE_MAP_MIN_MIDI);
     expect(Math.max(...first.order)).toBe(TONE_MAP_MAX_MIDI);
+    expect(new Set(first.order.slice(0, 6))).toEqual(new Set([60, 62, 64, 66, 68, 70]));
+    expect(new Set(first.order.slice(6, 12))).toEqual(new Set([61, 63, 65, 67, 69, 71]));
+    expect(new Set(first.order.slice(12, 18))).toEqual(new Set([48, 50, 52, 54, 56, 58]));
+    expect(new Set(first.order.slice(18, 24))).toEqual(new Set([49, 51, 53, 55, 57, 59]));
+    expect(new Set(first.order.slice(84))).toEqual(new Set([21, 22, 23, 108]));
   });
 
   it("strictly restores the persisted order instead of reshuffling it", () => {
@@ -109,22 +115,27 @@ describe("tone-map course order and levels", () => {
     expect(validateToneMapCourseOrder(restored.order)).toEqual(original.order);
   });
 
-  it("rejects incomplete, duplicate, out-of-range, and fixed course orders", () => {
+  it("rejects incomplete, duplicate, out-of-range, and non-progressive course orders", () => {
     const chromatic = Array.from({ length: TONE_MAP_TONE_COUNT }, (_, index) => TONE_MAP_MIN_MIDI + index);
     const duplicate = [...createToneMapCourse("duplicate").order];
     duplicate[1] = duplicate[0]!;
     const outOfRange = [...createToneMapCourse("range").order];
     outOfRange[0] = 109;
+    const crossedBands = [...createToneMapCourse("crossed-bands").order];
+    [crossedBands[0], crossedBands[6]] = [crossedBands[6]!, crossedBands[0]!];
 
     expect(() => validateToneMapCourseOrder(chromatic.slice(1))).toThrow();
     expect(() => validateToneMapCourseOrder(duplicate)).toThrow(/repeat/i);
     expect(() => validateToneMapCourseOrder(outOfRange)).toThrow(/MIDI/i);
-    expect(() => validateToneMapCourseOrder(chromatic)).toThrow(/shuffled/i);
+    expect(() => validateToneMapCourseOrder(chromatic)).toThrow(/progressive/i);
+    expect(() => validateToneMapCourseOrder(crossedBands)).toThrow(/landmark|gap-fill/i);
   });
 
-  it("chunks six new tones per level and keeps a cumulative active pool", () => {
+  it("fills middle-register gaps, widens by adjacent octaves, and keeps a cumulative pool", () => {
     const course = createToneMapCourse("levels");
     const levelTwo = { ...course, currentLevel: 2 };
+    const levelThree = { ...course, currentLevel: 3 };
+    const levelFive = { ...course, currentLevel: 5 };
     const final = { ...course, currentLevel: TONE_MAP_LEVEL_COUNT };
 
     expect(TONE_MAP_LEVEL_SIZE).toBe(6);
@@ -132,8 +143,31 @@ describe("tone-map course order and levels", () => {
     expect(toneMapLevelMidis(course)).toEqual(course.order.slice(0, 6));
     expect(toneMapLevelMidis(levelTwo)).toEqual(course.order.slice(6, 12));
     expect(toneMapActiveMidis(levelTwo)).toEqual(course.order.slice(0, 12));
+    expect(new Set(toneMapActiveMidis(levelTwo))).toEqual(
+      new Set(Array.from({ length: 12 }, (_, index) => 60 + index)),
+    );
+    expect(new Set(toneMapLevelMidis(levelThree))).toEqual(new Set([48, 50, 52, 54, 56, 58]));
+    expect(Math.min(...toneMapActiveMidis(levelThree))).toBe(48);
+    expect(Math.max(...toneMapActiveMidis(levelThree))).toBe(71);
+    expect(new Set(toneMapLevelMidis(levelFive))).toEqual(new Set([72, 74, 76, 78, 80, 82]));
+    expect(Math.min(...toneMapActiveMidis(levelFive))).toBe(48);
+    expect(Math.max(...toneMapActiveMidis(levelFive))).toBe(82);
     expect(toneMapLevelMidis(final)).toEqual(course.order.slice(84, 88));
     expect(toneMapActiveMidis(final)).toHaveLength(88);
+  });
+
+  it("keeps 128 randomized courses inside the same progressive bands", () => {
+    const bands = [60, 48, 72, 36, 84, 24, 96].flatMap((base) => [
+      [0, 2, 4, 6, 8, 10].map((offset) => base + offset),
+      [1, 3, 5, 7, 9, 11].map((offset) => base + offset),
+    ]);
+    bands.push([21, 22, 23, 108]);
+    for (let seed = 0; seed < 128; seed += 1) {
+      const course = createToneMapCourse(`band-matrix-${seed}`);
+      for (let index = 0; index < bands.length; index += 1) {
+        expect(new Set(course.order.slice(index * 6, index * 6 + 6))).toEqual(new Set(bands[index]!));
+      }
+    }
   });
 });
 
@@ -345,6 +379,19 @@ describe("weakest-first randomized scheduling", () => {
     expect(imitation).toMatchObject({ skill: "production", challengeKind: "voice-imitation" });
   });
 
+  it("interleaves another active MIDI even when the previous note is uniquely weakest", () => {
+    let course = createToneMapCourse("unique-weakness-repeat");
+    const [weakestMidi, ...others] = toneMapActiveMidis(course);
+    for (const midi of others) course = answer(course, midi, "identification", "guided", "correct");
+
+    const next = chooseToneMapTask(course, {
+      requiredSkills: TONE_MAP_KEYBOARD_SKILLS,
+      seed: "interleave",
+      previousTask: { midi: weakestMidi!, skill: "identification" },
+    });
+    expect(next?.midi).not.toBe(weakestMidi);
+  });
+
   it("schedules both independent skills in mixed mode", () => {
     const course = createToneMapCourse("mixed-scheduler");
     const skills = new Set(Array.from({ length: 40 }, (_, seed) => (
@@ -378,6 +425,14 @@ describe("cumulative level gates", () => {
     course = advanceToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
     expect(course.currentLevel).toBe(2);
     expect(toneMapActiveMidis(course)).toHaveLength(12);
+    for (const midi of firstLevel) {
+      expect(course.tones[midi]!.identification).toMatchObject({
+        stable: false,
+        blindStreak: 0,
+        bestBlindStreak: 3,
+        lastBlindConfirmedLevel: null,
+      });
+    }
     expect(summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS).canAdvance).toBe(false);
     course = stabilizeAll(course, toneMapLevelMidis(course), "identification");
     course = answer(course, firstLevel[0]!, "identification", "blind", "incorrect");
@@ -401,6 +456,33 @@ describe("cumulative level gates", () => {
       active.filter((midi) => !isToneMapProductionMidiSupported(midi) || midi === excluded),
     );
     expect(summary.production.stableMidis).not.toContain(excluded);
+  });
+
+  it("re-proves every retained tone before each widening across the complete course", () => {
+    let course = createToneMapCourse("complete-stability-journey");
+    let retained = new Set<number>();
+    for (let level = 1; level <= TONE_MAP_LEVEL_COUNT; level += 1) {
+      const active = toneMapActiveMidis(course);
+      expect([...retained].every((midi) => active.includes(midi))).toBe(true);
+      for (const midi of active) {
+        while (course.tones[midi]!.identification.guidedStreak < TONE_MAP_GUIDED_CORRECT_REQUIRED) {
+          course = answer(course, midi, "identification", "guided", "correct");
+        }
+        course = answer(course, midi, "identification", "blind", "correct");
+        course = answer(course, midi, "identification", "blind", "correct");
+        expect(course.tones[midi]!.identification.stable).toBe(false);
+        course = answer(course, midi, "identification", "blind", "correct");
+      }
+      const summary = summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
+      expect(summary.identification.stableMidis).toHaveLength(active.length);
+      expect(level === TONE_MAP_LEVEL_COUNT ? summary.courseComplete : summary.canAdvance).toBe(true);
+      if (level === TONE_MAP_LEVEL_COUNT) break;
+      retained = new Set(active);
+      course = advanceToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
+      expect(course.currentLevel).toBe(level + 1);
+      expect(active.every((midi) => !course.tones[midi]!.identification.stable)).toBe(true);
+    }
+    expect(toneMapActiveMidis(course)).toHaveLength(TONE_MAP_TONE_COUNT);
   });
 });
 

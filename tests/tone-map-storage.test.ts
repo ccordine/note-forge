@@ -7,7 +7,7 @@ import {
 
 function stored(overrides: Record<string, unknown> = {}) {
   return {
-    version: 1,
+    version: 2,
     course: createToneMapCourse("stored-course"),
     responseMode: "keyboard",
     challengeMode: "single",
@@ -20,10 +20,12 @@ describe("tone-map stored-state authority", () => {
   it("distinguishes a missing value from invalid data and never writes over invalid data", () => {
     const missing = classifyStoredToneMap(undefined);
     const corrupt = classifyStoredToneMap(null);
-    const unsupported = classifyStoredToneMap(stored({ version: 2 }));
+    const retiredRandomCurriculum = classifyStoredToneMap(stored({ version: 1 }));
+    const unsupported = classifyStoredToneMap(stored({ version: 3 }));
 
     expect(missing).toEqual({ kind: "missing" });
     expect(corrupt).toMatchObject({ kind: "invalid" });
+    expect(retiredRandomCurriculum).toMatchObject({ kind: "invalid" });
     expect(unsupported).toMatchObject({ kind: "invalid" });
     expect(mayWriteToneMapStorage(true, missing)).toBe(true);
     expect(mayWriteToneMapStorage(true, corrupt)).toBe(false);

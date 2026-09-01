@@ -125,7 +125,7 @@ export function createToneMapCourseRestorer(
 ): (candidate: unknown) => ToneMapCourseState {
   return (candidate) => {
     const record = requireRecord(candidate, "Tone-map course");
-    if (record.version !== 1) throw new RangeError("Unsupported tone-map course version.");
+    if (record.version !== 2) throw new RangeError("Unsupported tone-map course version.");
     const order = config.validateOrder(record.order);
     const currentLevel = record.currentLevel;
     if (typeof currentLevel !== "number") throw new TypeError("Stored level must be numeric.");
@@ -144,6 +144,6 @@ export function createToneMapCourseRestorer(
       validateRestoredToneMapTone(midi, tone, currentLevel, active.has(midi));
       tones[midi] = tone;
     }
-    return { version: 1, order, currentLevel, tones };
+    return { version: 2, order, currentLevel, tones };
   };
 }

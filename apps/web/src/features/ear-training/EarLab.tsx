@@ -34,7 +34,7 @@ function introductionFor(mode: EarMode): EarIntroduction {
     return {
       eyebrow: "Ear → note mapping",
       title: "Hear it. Find it. Produce it.",
-      detail: "Learn six tones at a time, then keep them stable as each level expands the sound map.",
+      detail: "Start with middle-register landmarks, fill the gaps, then widen the map while every familiar tone stays in rotation.",
     };
   }
   if (mode === "letters") {

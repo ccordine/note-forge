@@ -41,6 +41,15 @@ export function ToneMapTrainer({ timbre }: ToneMapTrainerProps) {
   const summary = summarizeToneMapLevel(session.course, requiredSkills);
   const evidence = taskEvidence(session);
   const settingsLocked = session.answer !== null;
+  const persistenceIssue = controller.storageResetAvailable
+    ? {
+        title: "Stored Tone Map progress is incompatible or invalid.",
+        detail: "It was not overwritten. Start a new progressive course to save the landmark-and-gap curriculum in this browser.",
+      }
+    : {
+        title: "Local progress could not be saved.",
+        detail: "You can keep practicing; this browser may not retain the new evidence.",
+      };
 
   const changeChallenge = (mode: ToneMapChallengeMode) => {
     if (controller.promptPlayback.playing || settingsLocked) return;
@@ -63,11 +72,11 @@ export function ToneMapTrainer({ timbre }: ToneMapTrainerProps) {
     <div className="tone-map" data-tone-map-root data-persistence-state={controller.persistenceState}>
       {controller.persistenceState === "error" && (
         <div className="error-banner" role="status">
-          <strong>Local progress could not be saved.</strong>
-          <span>You can keep practicing; this browser may not retain the new evidence.</span>
+          <strong>{persistenceIssue.title}</strong>
+          <span>{persistenceIssue.detail}</span>
           {controller.storageResetAvailable && (
             <ActionButton onClick={controller.resetStoredCourse}>
-              Reset invalid local course
+              Start progressive course
             </ActionButton>
           )}
         </div>
@@ -77,7 +86,11 @@ export function ToneMapTrainer({ timbre }: ToneMapTrainerProps) {
         <div>
           <Eyebrow>Ear → note curriculum</Eyebrow>
           <h2>Commit first. See the answer second.</h2>
-          <p>Six new tones per level; every earlier tone stays in randomized rotation.</p>
+          <p>
+            Begin with six middle-octave landmarks, fill the notes between them,
+            then widen into neighboring octaves. Each addition joins the full cumulative mix,
+            until every randomized round challenges you across all 88 keys.
+          </p>
         </div>
         <div className="tone-map-controls__selectors">
           <Segmented<ToneMapResponseMode>

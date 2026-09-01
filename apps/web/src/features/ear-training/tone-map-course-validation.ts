@@ -27,6 +27,9 @@ export function validateRestoredToneMapTone(
     if (evidence.lastBlindConfirmedLevel !== null && evidence.lastBlindConfirmedLevel > currentLevel) {
       throw new RangeError(`Stored MIDI ${midi} contains a future-level confirmation.`);
     }
+    if (evidence.stable !== (evidence.lastBlindConfirmedLevel === currentLevel)) {
+      throw new RangeError(`Stored MIDI ${midi} stability must come from a completed current-level blind proof.`);
+    }
     if (!active && containsLearningEvidence(evidence)) {
       throw new RangeError(`Stored MIDI ${midi} contains evidence before its course level.`);
     }

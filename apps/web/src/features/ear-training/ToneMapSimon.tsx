@@ -140,7 +140,7 @@ export function ToneMapSimon({
         <div>
           <Eyebrow>Sequence memory</Eyebrow>
           <h2>Hear the whole pattern. Map it back in order.</h2>
-          <p>No note names or locations appear until every position is committed.</p>
+          <p>Key names stay visible for context. Sequence locations appear only after every position is committed.</p>
         </div>
         <Select
           label="Pattern length"
@@ -175,7 +175,7 @@ export function ToneMapSimon({
       <PianoKeyboardViewport
         startMidi={21}
         endMidi={108}
-        showLabels={reviewed}
+        showLabels
         onKeyPress={answer}
         disabled={!acceptingAnswers}
         viewportAriaLabel="Full-range Simon answer keyboard"

@@ -143,17 +143,17 @@ export function ToneMapSingleTrial({
     >
       <div className="tone-map-trial__instruction">
         <Eyebrow>
-          {task.cueVisibility === "guided" ? "Guided association" : "Blind recall"}
+          {task.cueVisibility === "guided" ? "Build the association" : "Stability check"}
         </Eyebrow>
         {task.cueVisibility === "guided" ? (
-          <div className="tone-map-trial__guided" data-tone-map-guided-label>
-            <strong>{noteLabel(task.midi)}</strong>
-            <span>Build this sound-to-note association.</span>
+          <div className="tone-map-trial__guided">
+            <strong>HEAR</strong>
+            <span>Use the labeled keys to connect this sound to its place.</span>
           </div>
         ) : (
           <div className="tone-map-trial__blind">
             <strong>?</strong>
-            <span>No note identity is shown until you commit.</span>
+            <span>The target stays hidden until you commit; key names remain visible for context.</span>
           </div>
         )}
         <h2>
@@ -163,7 +163,7 @@ export function ToneMapSingleTrial({
         </h2>
         <p>
           {task.skill === "identification"
-            ? "The complete piano is available. On phones, drag only the keyboard sideways."
+            ? "Every key keeps its note name. On phones, drag only the keyboard sideways."
             : "The detector remains hidden until commitment. Headphones prevent the prompt from becoming your sung answer."}
         </p>
         <NotePlaybackToggle label="prompt" playback={playback} />

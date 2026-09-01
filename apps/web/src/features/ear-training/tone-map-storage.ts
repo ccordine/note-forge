@@ -9,7 +9,7 @@ import {
 import type { ToneMapResponseMode } from "./tone-map-session";
 
 export interface StoredToneMapState {
-  readonly version: 1;
+  readonly version: 2;
   readonly course: ToneMapCourseState;
   readonly responseMode: ToneMapResponseMode;
   readonly challengeMode: ToneMapChallengeMode;
@@ -44,14 +44,14 @@ function requireChallengeMode(candidate: unknown): ToneMapChallengeMode {
 
 function restoreStoredToneMap(candidate: unknown): StoredToneMapState {
   const record = requireRecord(candidate);
-  if (record.version !== 1) throw new RangeError("Unsupported stored tone-map version.");
+  if (record.version !== 2) throw new RangeError("Unsupported stored tone-map version.");
   const responseMode = requireResponseMode(record.responseMode);
   const challengeMode = requireChallengeMode(record.challengeMode);
   if (challengeMode === "simon" && responseMode !== "keyboard") {
     throw new RangeError("Simon sequence requires keyboard response mode.");
   }
   return {
-    version: 1,
+    version: 2,
     course: restoreToneMapCourse(record.course),
     responseMode,
     challengeMode,

@@ -49,11 +49,16 @@ describe("tone-map cumulative progress copy", () => {
     expect(markup).not.toContain("Add the next 6 tones");
   });
 
-  it("shows the fresh-confirmation work instead of hiding a level gate behind stable totals", () => {
+  it("shows the repeated stability proof instead of treating one answer as enough", () => {
     let course = createToneMapCourse("visible-requalification");
     for (const midi of toneMapActiveMidis(course)) course = stabilizeIdentification(course, midi);
     course = advanceToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
     for (const midi of toneMapLevelMidis(course)) course = stabilizeIdentification(course, midi);
+    for (const midi of toneMapActiveMidis(course).slice(0, 6)) {
+      course = recordToneMapTaskResult(course, {
+        midi, skill: "identification", challengeKind: "keyboard-identification", cueVisibility: "blind",
+      }, "correct");
+    }
     const summary = summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
     const markup = renderToStaticMarkup(createElement(ToneMapProgress, {
       course,
@@ -62,11 +67,12 @@ describe("tone-map cumulative progress copy", () => {
       onAdvance: () => undefined,
     }));
 
-    expect(summary.identification.stableMidis).toHaveLength(12);
+    expect(summary.identification.stableMidis).toHaveLength(6);
     expect(summary.identification.blindConfirmedMidis).toHaveLength(6);
     expect(summary.canAdvance).toBe(false);
-    expect(markup).toContain("12/12 stable");
-    expect(markup).toContain("6/12 confirmed this level");
-    expect(markup).toContain("fresh blind confirmation this level");
+    expect(markup).toContain("6/12 stable");
+    expect(markup).toContain("6/12 proved this level");
+    expect(markup).toContain("same cumulative randomized challenge");
+    expect(markup).toContain("fresh three-answer blind streak");
   });
 });

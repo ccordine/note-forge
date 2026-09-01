@@ -26,7 +26,8 @@ function reviewMarkers(targetMidi: number, answerMidi: number): PianoKeyMarker[]
 
 /**
  * A model-independent answer surface. Until an answer exists, every target
- * renders the same unlabeled full-range keyboard with the same scroll origin.
+ * renders the same labeled full-range keyboard with the same scroll origin.
+ * Static key names provide musical context without identifying the target.
  */
 export function ToneMapKeyboard({
   targetMidi,
@@ -41,7 +42,7 @@ export function ToneMapKeyboard({
       <PianoKeyboardViewport
         startMidi={PHYSICAL_PIANO_FIRST_MIDI}
         endMidi={PHYSICAL_PIANO_LAST_MIDI}
-        showLabels={reviewed}
+        showLabels
         markers={markers}
         onKeyPress={onAnswer}
         disabled={disabled || reviewed}

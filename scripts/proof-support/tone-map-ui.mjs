@@ -191,27 +191,39 @@ export async function inspectHiddenAnswer(session) {
 
 export function assertHiddenAnswer(hidden, description) {
   assert(hidden.keys === 88, `${description}: expected 88 physical piano keys: ${describe(hidden)}`);
-  assert(hidden.labels === 0 && hidden.markers === 0 && hidden.targetAttributes === 0,
+  assert(hidden.labels === 88 && hidden.markers === 0 && hidden.targetAttributes === 0,
     `${description}: a target identity leaked into the answer keyboard: ${describe(hidden)}`);
+  assert(hidden.guidedLabel === null,
+    `${description}: the prompt named its hidden target: ${describe(hidden)}`);
   assert(hidden.review === 0, `${description}: review rendered before commitment: ${describe(hidden)}`);
   assert(hidden.skill === "identification", `${description}: expected keyboard identification: ${describe(hidden)}`);
 }
 
-export async function guidedMidi(session) {
-  return evaluate(session, `(() => {
-    const label = document.querySelector('[data-tone-map-guided-label] strong')?.textContent?.trim();
-    if (!label) return null;
-    const key = [...document.querySelectorAll(${JSON.stringify(`${KEYBOARD_VIEWPORT} [data-midi]`)})]
-      .find((candidate) => candidate.getAttribute('aria-label')?.split(';')[0] === label);
-    return key ? { label, midi: Number(key.getAttribute('data-midi')) } : null;
+export async function promptMidi(session) {
+  const prompt = await evaluate(session, `(() => {
+    const proof = window.__noteforgeToneMapVoiceProof?.snapshot();
+    const events = proof?.productionOscillatorEvents ?? [];
+    const event = events.at(-1) ?? null;
+    return {
+      pressed: document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed'),
+      frequencyHz: event?.frequencyHz ?? proof?.productionOscillatorFrequencies?.at(-1) ?? null,
+      eventOrdinal: events.length,
+    };
   })()`);
+  const midiFloat = prompt.frequencyHz === null
+    ? null
+    : 69 + 12 * Math.log2(prompt.frequencyHz / 440);
+  const midi = midiFloat === null ? null : Math.round(midiFloat);
+  assert(prompt.pressed === "true" && Number.isInteger(midi)
+    && Math.abs(midiFloat - midi) < 0.001 && midi >= 21 && midi <= 108,
+  `The audible prompt did not resolve to one piano MIDI: ${describe({ ...prompt, midiFloat, midi })}`);
+  return { ...prompt, midi };
 }
 
-export async function answerGuided(session) {
-  const guided = await guidedMidi(session);
-  assert(guided && Number.isInteger(guided.midi), `Guided note did not map to an actual piano key: ${describe(guided)}`);
-  await clickMidi(session, guided.midi);
-  await waitForBrowser(session, "Boolean(document.querySelector('[data-tone-map-review]'))", "guided answer review");
+export async function answerAudiblePrompt(session) {
+  const prompt = await promptMidi(session);
+  await clickMidi(session, prompt.midi);
+  await waitForBrowser(session, "Boolean(document.querySelector('[data-tone-map-review]'))", "prompt answer review");
   const review = await evaluate(session, `(() => {
     const root = document.querySelector('[data-tone-map-review]');
     return {
@@ -222,14 +234,15 @@ export async function answerGuided(session) {
         .map((marker) => marker.getAttribute('data-marker-role')),
     };
   })()`);
-  assert(review.correct && review.target === guided.midi,
-    `Guided answer did not commit the displayed note through its actual key: ${describe({ guided, review })}`);
+  assert(review.correct && review.target === prompt.midi,
+    `The audible prompt did not commit through its matching labeled key: ${describe({ prompt, review })}`);
   assert(review.labels === 88 && review.roles.includes("guess") && review.roles.includes("target"),
-    `Correct review did not reveal the complete keyboard and answer/target evidence: ${describe(review)}`);
-  return { ...guided, review };
+    `Correct review omitted labeled-key or answer/target evidence: ${describe(review)}`);
+  return { ...prompt, review };
 }
 
 export async function nextTrial(session) {
   await clickSelector(session, "[data-tone-map-review] .action-button", "Next randomized tone");
   await waitForBrowser(session, "!document.querySelector('[data-tone-map-review]')", "next randomized tone");
+  await evaluate(session, "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))", true);
 }

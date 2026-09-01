@@ -10,6 +10,7 @@ import {
   clickSelector,
   describe,
   nextTrial,
+  promptMidi,
 } from "./tone-map-ui.mjs";
 
 const VOICE_CONTROL = "[data-voice-answer-control]";
@@ -28,6 +29,7 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
     workletNodes: 0,
     workletModuleUrls: [],
     workletSampleEvents: [],
+    productionOscillatorEvents: [],
     trackInitialStates: [],
     trackConstraintApplications: [],
     trackEnabledWrites: [],
@@ -38,6 +40,9 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
   };
   const knownStreams = new WeakSet();
   const knownTracks = new WeakSet();
+  const productionContexts = new WeakSet();
+  const productionFrequencyParams = new WeakSet();
+  const productionOscillators = [];
   const NativeAudioContext = window.AudioContext;
   let generator = null;
   let uuidOrdinal = 0;
@@ -93,6 +98,9 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
 
   const snapshot = () => JSON.parse(JSON.stringify({
     ...proof,
+    productionOscillatorFrequencies: productionOscillators.map(
+      (oscillator) => oscillator.frequency.value,
+    ),
     generator: generator ? {
       contextState: generator.context.state,
       frequencyHz: generator.oscillator.frequency.value,
@@ -145,6 +153,7 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
   } else {
     try {
       const nativeCreateMediaStreamSource = NativeAudioContext.prototype.createMediaStreamSource;
+      const nativeCreateOscillator = NativeAudioContext.prototype.createOscillator;
       Object.defineProperty(NativeAudioContext.prototype, 'createMediaStreamSource', {
         configurable: true,
         writable: true,
@@ -157,10 +166,42 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
           return Reflect.apply(nativeCreateMediaStreamSource, this, [stream]);
         },
       });
+      Object.defineProperty(NativeAudioContext.prototype, 'createOscillator', {
+        configurable: true,
+        writable: true,
+        value(...args) {
+          const oscillator = Reflect.apply(nativeCreateOscillator, this, args);
+          if (productionContexts.has(this)) {
+            productionFrequencyParams.add(oscillator.frequency);
+            productionOscillators.push(oscillator);
+          }
+          return oscillator;
+        },
+      });
+      for (const method of ['setValueAtTime', 'linearRampToValueAtTime', 'exponentialRampToValueAtTime']) {
+        const nativeMethod = window.AudioParam.prototype[method];
+        Object.defineProperty(window.AudioParam.prototype, method, {
+          configurable: true,
+          writable: true,
+          value(value, audioTime) {
+            if (productionFrequencyParams.has(this)) {
+              proof.productionOscillatorEvents.push({
+                method,
+                frequencyHz: Number(value),
+                audioTime: Number(audioTime),
+                at: performance.now(),
+              });
+            }
+            return Reflect.apply(nativeMethod, this, [value, audioTime]);
+          },
+        });
+      }
       window.AudioContext = new Proxy(NativeAudioContext, {
         construct(target, args) {
           proof.productionAudioContexts += 1;
-          return Reflect.construct(target, args, target);
+          const context = Reflect.construct(target, args, target);
+          productionContexts.add(context);
+          return context;
         },
       });
     } catch (error) {
@@ -324,14 +365,6 @@ export const TONE_MAP_VOICE_INSTRUMENTATION_SOURCE = `(() => {
   }
 })();`;
 
-function noteLabelToMidi(label) {
-  const match = /^([A-G])([♯♭]?)(-?\d+)$/u.exec(label);
-  assert(match, `Could not parse guided production label ${JSON.stringify(label)}.`);
-  const natural = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[match[1]];
-  const accidental = match[2] === "♯" ? 1 : match[2] === "♭" ? -1 : 0;
-  return (Number(match[3]) + 1) * 12 + natural + accidental;
-}
-
 function readVoiceControl(session) {
   return evaluate(session, `(() => {
     const root = document.querySelector(${JSON.stringify(VOICE_CONTROL)});
@@ -388,13 +421,14 @@ export async function proveToneMapVoicePath(session, origin, route) {
 
   await clickRadio(session, "Answer path", "Sing it");
   await waitForBrowser(session, `Boolean(document.querySelector(${JSON.stringify(VOICE_CONTROL)}))`, "canonical voice answer control");
-  const label = await evaluate(session, "document.querySelector('[data-tone-map-guided-label] strong')?.textContent?.trim() ?? null");
-  assert(typeof label === "string" && label.length > 0, "Fresh voice mode did not provide its guided association label.");
-  const targetMidi = noteLabelToMidi(label);
-  assert(targetMidi >= 30 && targetMidi <= 86, `Voice task escaped detector range: ${describe({ label, targetMidi })}`);
-
   await clickSelector(session, TOGGLE, "Play voice prompt");
   await waitForBrowser(session, `document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed') === 'true'`, "voice prompt playing");
+  const audiblePrompt = await promptMidi(session);
+  const targetMidi = audiblePrompt.midi;
+  const exposedTarget = await evaluate(session,
+    "document.querySelector('[data-tone-map-guided-label]')?.textContent?.trim() ?? null");
+  assert(exposedTarget === null && targetMidi >= 30 && targetMidi <= 86,
+    `Voice prompt leaked its target or escaped detector range: ${describe({ exposedTarget, audiblePrompt })}`);
   await clickSelector(session, "[data-global-mic-enable]", "Enable voice once");
   await waitForBrowser(session, `document.querySelector(${JSON.stringify(VOICE_CONTROL)})?.getAttribute('data-transport-state') === 'running'`, "generated microphone running", 12_000);
   await generatedMicrophone(session, "setMidi", targetMidi, 0, 0.16);
@@ -491,7 +525,7 @@ export async function proveToneMapVoicePath(session, origin, route) {
     workletWindows: finalProof.workletSampleEvents.length,
   })}`);
   return {
-    target: { label, midi: targetMidi, cents: 10 },
+    target: { midi: targetMidi, cents: 10 },
     workletWindows: finalProof.workletSampleEvents.length,
     semanticStatusPublications: finalProof.statusSnapshots.length,
     releaseAuthority: released,

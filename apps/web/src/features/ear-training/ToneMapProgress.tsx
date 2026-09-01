@@ -29,7 +29,7 @@ function SkillProgress({
     <span>
       <small>{label}</small>
       <b>{stable}/{eligible} stable</b>
-      <em>{confirmed}/{eligible} confirmed this level</em>
+      <em>{confirmed}/{eligible} proved this level</em>
       {excluded > 0 && <em>{excluded} outside vocal range</em>}
     </span>
   );
@@ -62,7 +62,8 @@ export function ToneMapProgress({
         <h2>Level {summary.currentLevel} of {summary.totalLevels}</h2>
         <p>
           {summary.introducedMidis.length} new tones · {summary.activeMidis.length} active.
-          Every earlier tone remains in rotation and earns a fresh blind confirmation this level.
+          Every new tone joins the same cumulative randomized challenge immediately.
+          Every earlier tone stays in each round and must earn a fresh three-answer blind streak.
         </p>
       </div>
       <div className="tone-map-progress__skills">
@@ -105,8 +106,8 @@ export function ToneMapProgress({
       )}
       {summary.courseComplete && (
         <div className="tone-map-progress__complete" role="status">
-          <b>Full piano map stable.</b>
-          <span>Keep answering to retain it; this course never locks itself or ends for you.</span>
+          <b>Full 88-key challenge stable.</b>
+          <span>All 88 tones remain in randomized rounds; this challenge never ends for you.</span>
         </div>
       )}
     </Panel>

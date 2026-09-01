@@ -40,7 +40,7 @@ function viewportElement(
 }
 
 describe("ToneMapKeyboard", () => {
-  it("renders the identical unlabeled 88-key answer surface for every hidden target", () => {
+  it("renders the identical labeled 88-key answer surface for every hidden target", () => {
     const baseProps = {
       answerMidi: null,
       onAnswer: () => undefined,
@@ -54,7 +54,10 @@ describe("ToneMapKeyboard", () => {
 
     expect(lowTarget).toBe(highTarget);
     expect(lowTarget.match(/data-midi=/gu)).toHaveLength(88);
-    expect(lowTarget).not.toContain("piano-keyboard__label");
+    expect(lowTarget.match(/piano-keyboard__label/gu)).toHaveLength(88);
+    expect(lowTarget).toContain("A0");
+    expect(lowTarget).toContain("C4");
+    expect(lowTarget).toContain("C8");
     expect(lowTarget).not.toContain("data-marker-role");
     expect(lowTarget).not.toContain("tone-map-keyboard__legend");
     expect(lowTarget).not.toMatch(/data-target|target-midi/iu);
@@ -75,7 +78,7 @@ describe("ToneMapKeyboard", () => {
     expect(onAnswer.mock.calls).toEqual([[21], [61], [108]]);
     expect(viewport.props.startMidi).toBe(21);
     expect(viewport.props.endMidi).toBe(108);
-    expect(viewport.props.showLabels).toBe(false);
+    expect(viewport.props.showLabels).toBe(true);
     expect(viewport.props.markers).toEqual([]);
   });
 

@@ -90,7 +90,17 @@ describe("tone-map strict course validation", () => {
     expect(() => restoreToneMapCourse(candidate)).toThrow(/future-level confirmation/i);
   });
 
-  it("requires fresh current-level blind confirmation for every retained active tone", () => {
+  it("rejects a stable flag without a completed current-level blind proof", () => {
+    let course = createToneMapCourse("unproved-stability");
+    const midi = course.order[0]!;
+    course = stabilize(course, [midi]);
+    const candidate = JSON.parse(JSON.stringify(course));
+    candidate.tones[midi].identification.lastBlindConfirmedLevel = null;
+
+    expect(() => restoreToneMapCourse(candidate)).toThrow(/completed current-level blind proof/i);
+  });
+
+  it("requires a fresh three-answer blind proof for every retained active tone", () => {
     let course = createToneMapCourse("retention-gate");
     const firstLevel = toneMapActiveMidis(course);
     course = stabilize(course, firstLevel);
@@ -99,11 +109,19 @@ describe("tone-map strict course validation", () => {
 
     course = stabilize(course, toneMapLevelMidis(course));
     const beforeRetention = summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
-    expect(beforeRetention.identification.allStable).toBe(true);
+    expect(beforeRetention.identification.allStable).toBe(false);
+    expect(beforeRetention.identification.stableMidis).toHaveLength(6);
     expect(beforeRetention.identification.blindConfirmedMidis).toHaveLength(6);
     expect(beforeRetention.identification.hasCurrentLevelBlindConfirmation).toBe(false);
     expect(beforeRetention.canAdvance).toBe(false);
 
+    for (const midi of firstLevel) course = answer(course, midi, "blind");
+    const afterOneCorrect = summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
+    expect(afterOneCorrect.identification.stableMidis).toHaveLength(6);
+    expect(afterOneCorrect.identification.blindConfirmedMidis).toHaveLength(6);
+    expect(afterOneCorrect.canAdvance).toBe(false);
+
+    for (const midi of firstLevel) course = answer(course, midi, "blind");
     for (const midi of firstLevel) course = answer(course, midi, "blind");
     const retained = summarizeToneMapLevel(course, TONE_MAP_KEYBOARD_SKILLS);
     expect(retained.identification.blindConfirmedMidis).toHaveLength(12);

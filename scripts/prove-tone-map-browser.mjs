@@ -20,16 +20,16 @@ import {
   ROOT,
   TOGGLE,
   TRIAL,
-  answerGuided,
+  answerAudiblePrompt,
   assertHiddenAnswer,
   clickMidi,
   clickRadio,
   clickSelector,
   describe,
-  guidedMidi,
   inspectHiddenAnswer,
   inspectLayout,
   nextTrial,
+  promptMidi,
   proveKeyboardScrolling,
 } from "./proof-support/tone-map-ui.mjs";
 import {
@@ -55,7 +55,7 @@ async function provePlaybackLifetime(session) {
   })()`);
   assert(sustained.pressed === "true" && /^Stop\s+prompt$/u.test(sustained.text),
     `The prompt automatically cut off: ${describe(sustained)}`);
-  const answered = await answerGuided(session);
+  const answered = await answerAudiblePrompt(session);
   const scrollBeforeNext = await evaluate(session, `document.querySelector(${JSON.stringify(KEYBOARD_VIEWPORT)})?.scrollLeft`);
   assert(await evaluate(session, `document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed') === 'true'`),
     "Answering stopped the user-owned prompt.");
@@ -78,17 +78,23 @@ async function provePlaybackLifetime(session) {
 }
 
 async function reachBlindTrial(session) {
+  await clickSelector(session, TOGGLE, "Play prompt for curriculum evidence");
+  await waitForBrowser(session,
+    `document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed') === 'true'`,
+    "curriculum prompt playing");
   let guidedAnswers = 1;
+  const promptedMidis = [];
   for (; guidedAnswers <= 24; guidedAnswers += 1) {
     const hidden = await inspectHiddenAnswer(session);
     assertHiddenAnswer(hidden, `curriculum trial ${guidedAnswers + 1}`);
-    if (hidden.cue === "blind") return guidedAnswers;
-    assert(hidden.cue === "guided" && hidden.guidedLabel,
+    if (hidden.cue === "blind") return { guidedAnswers, promptedMidis };
+    assert(hidden.cue === "guided" && hidden.guidedLabel === null,
       `Expected guided or blind task, received: ${describe(hidden)}`);
-    await answerGuided(session);
+    const answered = await answerAudiblePrompt(session);
+    promptedMidis.push(answered.midi);
     await nextTrial(session);
   }
-  throw new Error("The six-tone guided curriculum never yielded a blind trial.");
+  throw new Error("The six-tone association curriculum never yielded a blind stability trial.");
 }
 
 async function createBlindLapseAndRecovery(session) {
@@ -123,13 +129,101 @@ async function createBlindLapseAndRecovery(session) {
   assert(misses === 1 && Number.isInteger(missedTarget), "Could not produce a genuine blind miss without reading its hidden target.");
   const levelBefore = await evaluate(session, "document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level')");
   await nextTrial(session);
+  await waitForBrowser(session, "document.querySelector('[data-tone-map-trial]')?.getAttribute('data-cue-visibility') === 'blind'", "interleaved blind trial");
+  const interleaved = await promptMidi(session);
+  assert(interleaved.midi !== missedTarget,
+    `The uniquely weak note repeated instead of interleaving another active tone: ${describe({ missedTarget, interleaved })}`);
+  await answerAudiblePrompt(session);
+  await nextTrial(session);
   await waitForBrowser(session, "document.querySelector('[data-tone-map-trial]')?.getAttribute('data-cue-visibility') === 'guided'", "guided lapse recovery");
-  const recovery = await guidedMidi(session);
+  const recovery = await promptMidi(session);
   const levelAfter = await evaluate(session, "document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level')");
-  assert(recovery?.midi === missedTarget,
+  assert(recovery.midi === missedTarget,
     `The missed tone did not return through guided recovery: ${describe({ missedTarget, recovery })}`);
   assert(levelAfter === levelBefore, `A blind miss reset or changed the unrelated course level: ${levelBefore} -> ${levelAfter}`);
-  return { missedTarget, recovery, level: levelAfter };
+  await answerAudiblePrompt(session);
+  await nextTrial(session);
+  const afterRecovery = await promptMidi(session);
+  assert(afterRecovery.midi !== missedTarget,
+    `Guided recovery immediately repeated the same note: ${describe({ missedTarget, afterRecovery })}`);
+  return { missedTarget, interleaved, recovery, afterRecovery, blindAnswers: 1, level: levelAfter };
+}
+
+async function proveLevelStability(session, previousBlindAnswers) {
+  let blindAnswers = previousBlindAnswers;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const hidden = await inspectHiddenAnswer(session);
+    assertHiddenAnswer(hidden, `blind stability answer ${blindAnswers + 1}`);
+    assert(hidden.cue === "blind", `Stability proof unexpectedly exposed another scaffold: ${describe(hidden)}`);
+    await answerAudiblePrompt(session);
+    const review = await evaluate(session, `(() => ({
+      evidence: document.querySelector('[data-tone-map-review] small')?.textContent?.trim() ?? '',
+      mayAdvance: Boolean(document.querySelector('.tone-map-progress .action-button')),
+      level: document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level'),
+    }))()`);
+    blindAnswers += 1;
+    if (attempt === 0) {
+      assert(review.evidence.includes("Blind streak: 1/3") && !review.mayAdvance,
+        `One correct answer was treated as stability: ${describe(review)}`);
+    }
+    if (review.mayAdvance) {
+      assert(blindAnswers === 18 && review.level === "1",
+        `The six active tones did not each require a three-answer blind proof: ${describe({ blindAnswers, review })}`);
+      await clickSelector(session, ".tone-map-progress .action-button", "Add the next six gap tones");
+      await waitForBrowser(session,
+        "document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level') === '2'",
+        "explicit progressive level advance");
+      const advanced = await evaluate(session, `(() => ({
+        progress: document.querySelector('.tone-map-progress')?.textContent ?? '',
+        promptPressed: document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed'),
+      }))()`);
+      assert(advanced.progress.includes("12 active") && advanced.progress.includes("0/12 stable")
+        && advanced.promptPressed === "true",
+      `Level two did not retain the pool and begin fresh stability proof: ${describe(advanced)}`);
+      const cumulativeRoundMidis = [];
+      for (let index = 0; index < 12; index += 1) {
+        const hidden = await inspectHiddenAnswer(session);
+        assertHiddenAnswer(hidden, `level-two cumulative round ${index + 1}`);
+        const answered = await answerAudiblePrompt(session);
+        cumulativeRoundMidis.push(answered.midi);
+        if (index < 11) await nextTrial(session);
+      }
+      const expected = Array.from({ length: 12 }, (_, index) => 60 + index);
+      assert(new Set(cumulativeRoundMidis).size === 12
+        && expected.every((midi) => cumulativeRoundMidis.includes(midi)),
+      `Level two replaced rather than widened the challenge: ${describe(cumulativeRoundMidis)}`);
+      await clickSelector(session, TOGGLE, "Stop prompt after stability proof");
+      await waitForBrowser(session,
+        `document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed') === 'false'`,
+        "explicit prompt stop after stability proof");
+      return { blindAnswers, advancedLevel: 2, cumulativeRoundMidis };
+    }
+    await nextTrial(session);
+  }
+  throw new Error("The first six-tone map did not reach its explicit stability gate.");
+}
+
+async function proveReloadedStability(session, viewportLabel) {
+  await waitForBrowser(session,
+    "document.querySelector('[data-tone-map-root]')?.getAttribute('data-persistence-state') === 'saved'",
+    `${viewportLabel} saved progressive course`);
+  await session.send("Page.reload", { ignoreCache: true });
+  await waitForBrowser(session,
+    `Boolean(document.querySelector(${JSON.stringify(ROOT)}))
+      && document.querySelector('[data-tone-map-root]')?.getAttribute('data-persistence-state') === 'saved'
+      && document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level') === '2'`,
+    `${viewportLabel} restored progressive course`, 15_000);
+  const hidden = await inspectHiddenAnswer(session);
+  assertHiddenAnswer(hidden, `${viewportLabel} restored level-two trial`);
+  const restored = await evaluate(session, `(() => ({
+    level: document.querySelector('[data-tone-map-level]')?.getAttribute('data-tone-map-level'),
+    progress: document.querySelector('.tone-map-progress')?.textContent ?? '',
+    promptPressed: document.querySelector(${JSON.stringify(TOGGLE)})?.getAttribute('aria-pressed'),
+  }))()`);
+  assert(restored.level === "2" && restored.progress.includes("12 active")
+    && restored.progress.includes("0/12 stable") && restored.promptPressed === "false",
+  `${viewportLabel}: reload did not preserve the widened pool and fresh proof: ${describe(restored)}`);
+  return restored;
 }
 
 async function proveSimon(session) {
@@ -138,6 +232,8 @@ async function proveSimon(session) {
   const hidden = await evaluate(session, `(() => {
     const root = document.querySelector('[data-tone-map-challenge=simon]');
     const keyboard = root?.querySelector(${JSON.stringify(KEYBOARD_VIEWPORT)});
+    const textWithoutKeyboard = root?.cloneNode(true);
+    textWithoutKeyboard?.querySelector(${JSON.stringify(KEYBOARD_VIEWPORT)})?.remove();
     const position = root?.querySelector('.tone-map-simon__position span')?.textContent?.trim() ?? '';
     const match = position.match(/^(\\d+)\\/(\\d+) entered$/u);
     return {
@@ -146,12 +242,12 @@ async function proveSimon(session) {
       markers: keyboard?.querySelectorAll('[data-marker-role]').length ?? 0,
       targetAttributes: root?.querySelectorAll('[data-target-midi],[data-tone-map-target-midi]').length ?? 0,
       review: root?.querySelectorAll('.tone-map-simon__review').length ?? 0,
-      visibleText: root?.textContent ?? '',
+      nonKeyboardText: textWithoutKeyboard?.textContent ?? '',
       entered: match ? Number(match[1]) : null,
       total: match ? Number(match[2]) : null,
     };
   })()`);
-  assert(hidden.keys === 88 && hidden.labels === 0 && hidden.markers === 0
+  assert(hidden.keys === 88 && hidden.labels === 88 && hidden.markers === 0
     && hidden.targetAttributes === 0 && hidden.review === 0 && hidden.entered === 0,
   `Simon exposed sequence identities before the complete answer: ${describe(hidden)}`);
   assert(Number.isInteger(hidden.total) && hidden.total >= 2,
@@ -239,8 +335,8 @@ async function proveSimon(session) {
   })`);
   assert(review.positions === hidden.total && review.labels === 88 && review.next,
     `Completed Simon answer did not reveal one review per position: ${describe(review)}`);
-  assert(review.targets.every((target) => target && !hidden.visibleText.includes(target)),
-    `A Simon target identity was visible before the full answer: ${describe({ hidden: hidden.visibleText, targets: review.targets })}`);
+  assert(review.targets.every((target) => target && !hidden.nonKeyboardText.includes(target)),
+    `A Simon target was missing from review or named outside the pre-answer keyboard: ${describe({ hidden, review })}`);
   await clickSelector(session, ".tone-map-simon > .action-button", "Next sequence");
   await waitForBrowser(session, "!document.querySelector('.tone-map-simon__review')", "explicit next Simon sequence");
   return { length: hidden.total, waitedWithoutDeadlineMilliseconds: 1_600 };
@@ -285,8 +381,8 @@ async function proveViewport(session, origin, viewport) {
 
   const initialHidden = await inspectHiddenAnswer(session);
   assertHiddenAnswer(initialHidden, `${viewport.label} fresh guided trial`);
-  assert(initialHidden.cue === "guided" && initialHidden.guidedLabel,
-    `${viewport.label}: a fresh course did not begin with guided association: ${describe(initialHidden)}`);
+  assert(initialHidden.cue === "guided" && initialHidden.guidedLabel === null,
+    `${viewport.label}: a fresh course named its hidden association target: ${describe(initialHidden)}`);
   const scrolling = await proveKeyboardScrolling(session);
   assert(!scrolling.error && scrolling.maximum > 0 && scrolling.restored === 0,
     `${viewport.label}: keyboard did not traverse its local range: ${describe(scrolling)}`);
@@ -297,8 +393,14 @@ async function proveViewport(session, origin, viewport) {
   `${viewport.label}: keyboard did not move from x=0 through its maximum: ${describe(scrolling)}`);
 
   const playback = await provePlaybackLifetime(session);
-  const guidedAnswers = await reachBlindTrial(session);
+  const guided = await reachBlindTrial(session);
+  const firstBand = new Set([playback.displayedMidi, ...guided.promptedMidis]);
+  assert(firstBand.size === 6 && [...firstBand].every((midi) => (
+    midi >= 60 && midi <= 70 && midi % 2 === 0
+  )), `${viewport.label}: initial random prompts escaped the narrow landmark band: ${describe([...firstBand])}`);
   const recovery = await createBlindLapseAndRecovery(session);
+  const stability = await proveLevelStability(session, recovery.blindAnswers);
+  const restored = await proveReloadedStability(session, viewport.label);
   const simon = await proveSimon(session);
   return {
     viewport: viewport.label,
@@ -306,8 +408,11 @@ async function proveViewport(session, origin, viewport) {
     keyboard: layout.keyboard,
     keyboardProbes: scrolling.results.map(({ midi, actual, hit }) => ({ midi, scrollLeft: actual, hit })),
     playback,
-    guidedAnswersBeforeBlind: guidedAnswers,
+    guidedAnswersBeforeBlind: guided.guidedAnswers,
+    initialLandmarkMidis: [...firstBand].sort((left, right) => left - right),
     recovery,
+    stability,
+    restored,
     simon,
   };
 }

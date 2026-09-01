@@ -87,21 +87,24 @@ describe("tone-map commitment presentation", () => {
     const high = renderTrial(101, "blind");
 
     expect(low).toBe(high);
-    expect(low).toContain("No note identity is shown until you commit.");
+    expect(low).toContain("The target stays hidden until you commit");
     expect(low).toContain("Play prompt");
     expect(low.match(/data-midi=/gu)).toHaveLength(88);
     expect(low).not.toContain("data-tone-map-target-midi");
     expect(low).not.toContain("data-marker-role");
-    expect(low).not.toContain("piano-keyboard__label");
+    expect(low.match(/piano-keyboard__label/gu)).toHaveLength(88);
   });
 
-  it("shows the intentional guided label before commitment and review only afterward", () => {
-    const guided = renderTrial(61, "guided");
+  it("keeps guided targets hidden while labeled keys provide context and review follows commitment", () => {
+    const guidedLow = renderTrial(24, "guided");
+    const guidedHigh = renderTrial(101, "guided");
     const reviewed = renderTrial(61, "blind", 60);
 
-    expect(guided).toContain("data-tone-map-guided-label");
-    expect(guided).toContain("C♯4");
-    expect(guided).not.toContain("data-tone-map-review");
+    expect(guidedLow).toBe(guidedHigh);
+    expect(guidedLow).toContain("Use the labeled keys");
+    expect(guidedLow.match(/piano-keyboard__label/gu)).toHaveLength(88);
+    expect(guidedLow).not.toContain("data-tone-map-guided-label");
+    expect(guidedLow).not.toContain("data-tone-map-review");
     expect(reviewed).toContain("data-tone-map-review");
     expect(reviewed).toContain('data-tone-map-target-midi="61"');
     expect(reviewed).toContain('data-marker-role="wrong"');

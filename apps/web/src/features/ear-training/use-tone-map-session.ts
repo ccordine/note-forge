@@ -128,7 +128,7 @@ export function useToneMapSession(timbre: Timbre): ToneMapSessionController {
       profileCandidateRef.current = storedSettings.values[VOCAL_PROFILE_STORAGE_KEY];
       const stored = classifyStoredToneMap(storedSettings.values[TONE_MAP_STORAGE_KEY]);
       const base = stored.kind === "valid" ? stored.state : {
-        version: 1 as const,
+        version: 2 as const,
         course: createToneMapCourse(newSeed("course")),
         responseMode: "keyboard" as const,
         challengeMode: "single" as const,
@@ -164,7 +164,7 @@ export function useToneMapSession(timbre: Timbre): ToneMapSessionController {
   useEffect(() => {
     if (!hydrated || !storageReady) return;
     const stored: StoredToneMapState = {
-      version: 1,
+      version: 2,
       course: session.course,
       responseMode: session.responseMode,
       challengeMode,
